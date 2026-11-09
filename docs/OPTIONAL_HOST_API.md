@@ -114,7 +114,7 @@ Location hierarchy is inferred from the first parseable value in browser order: 
 
 Custom Inventory fields follow browser `normalizeDevice()` validation: only `custom_<UUID>` keys with scalar, non-empty values are retained. `customFieldSources` is retained only for a value that survived the same normalization, so arbitrary keys and orphan provenance are ignored before an additive write.
 
-Inventory source labels follow browser `normalize.unique(..., text)`: whitespace and empty markers are normalized, labels deduplicate case-insensitively while preserving first-seen order, and the current `source` is included in the merged `sources` list.
+Inventory source labels follow browser normalization: string, finite-number, and boolean labels are converted to text, whitespace and empty markers are normalized, labels deduplicate case-insensitively while preserving first-seen order, and the current `source` is included in the merged `sources` list. A legacy scalar `sources` value is treated as one label; nested objects, arrays, and non-finite numbers are discarded before the host copy.
 
 When an empty manufacturer or model is filled, the host refreshes its corresponding confidence and provenance as browser `mergeDevice()` does. Finite confidence values are clamped to 0–1, including a valid zero; stale confidence or source metadata does not outlive the newly assigned field value.
 

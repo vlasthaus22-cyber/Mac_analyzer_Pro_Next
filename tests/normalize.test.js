@@ -229,6 +229,16 @@ test("device normalization drops malformed conflict entries before optional-host
   assert.equal(device.conflictsTruncated, false);
 });
 
+test("device normalization keeps REST-compatible scalar sources and treats a legacy scalar as one label", () => {
+  const listed = normalizeDevice({
+    id: "inventory-sources",
+    sources: ["Main", { source: "invalid" }, ["nested"], 7, true, null, " main "],
+  });
+  const scalar = normalizeDevice({ id: "inventory-scalar-source", sources: "Legacy import" });
+  assert.deepEqual(listed.sources, ["Main", "7", "true"]);
+  assert.deepEqual(scalar.sources, ["Legacy import"]);
+});
+
 test("device normalization skips placeholder aliases in favor of later valid values", () => {
   const device = normalizeDevice({
     mac: "not found", macAddress: "00:11:22:33:44:55",

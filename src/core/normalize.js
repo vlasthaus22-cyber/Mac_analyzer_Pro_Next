@@ -368,6 +368,8 @@ export function normalizeDevice(input = {}, source = "") {
     if (normalized) fieldSources[key] = normalized;
   }
   const sourceName = text(source || input.source) || "Импорт";
+  const sourceCandidates = Array.isArray(input.sources) ? input.sources
+    : input.sources === null || input.sources === undefined ? [] : [input.sources];
   const vendorConfidence = normalizedConfidence(input.vendorConfidence, input.vendor_confidence);
   const modelConfidence = normalizedConfidence(input.modelConfidence, input.model_confidence);
   const vendorSource = firstKnown(input.vendorSource, input.vendor_source);
@@ -431,7 +433,11 @@ export function normalizeDevice(input = {}, source = "") {
     authenticationTime: [input.authenticationTime, input.receiptTime].map(normalizeDate).find(Boolean) || "",
     possibleIps: possibleIpResult.values,
     possibleIpsTruncated: Boolean(input.possibleIpsTruncated || possibleIpResult.truncated),
-    sources: unique([...(input.sources || []), source || input.source]),
+    sources: unique([
+      ...sourceCandidates.filter((value) => ["string", "number", "boolean"].includes(typeof value)
+        && (typeof value !== "number" || Number.isFinite(value))),
+      source || input.source,
+    ], normalizedSourceText),
     fieldSources,
     ...(vendorConfidence === undefined ? {} : { vendorConfidence }),
     ...(modelConfidence === undefined ? {} : { modelConfidence }),
