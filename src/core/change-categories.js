@@ -112,3 +112,18 @@ export function pageComparisonChanges(comparison = {}, category = "all", { offse
   }, selectedCategory);
   return { category: selectedCategory, offset: start, limit: pageSize, total, rows, hasMore: start + rows.length < total };
 }
+
+export function pageComparisonModificationEvents(comparison = {}, { offset = 0, limit = 100, criticalOnly = false } = {}) {
+  const start = Math.max(0, Math.floor(Number(offset) || 0));
+  const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+  const events = [];
+  let total = 0;
+  for (const row of comparison.modified || []) {
+    for (const change of row.changes || []) {
+      if (criticalOnly && !isCriticalHistoryChange("modified", change.field, change.oldValue, change.newValue)) continue;
+      if (total >= start && events.length < pageSize) events.push({ type: "modified", device: row.after, before: row.before, change });
+      total += 1;
+    }
+  }
+  return { events, total, offset: start, limit: pageSize, hasPrevious: start > 0, hasNext: start + events.length < total };
+}

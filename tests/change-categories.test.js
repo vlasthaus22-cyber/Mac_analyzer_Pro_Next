@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isCriticalHistoryChange, normalizeChangeField, normalizeChangeType, pageComparisonChanges, summarizeChangeCategories } from "../src/core/change-categories.js";
+import { isCriticalHistoryChange, normalizeChangeField, normalizeChangeType, pageComparisonChanges, pageComparisonModificationEvents, summarizeChangeCategories } from "../src/core/change-categories.js";
 
 test("history aliases normalize Russian labels and legacy removed events consistently", () => {
   assert.equal(normalizeChangeType("removed"), "absent");
@@ -51,6 +51,26 @@ test("change category paging scans complete nested results and returns only the 
   assert.equal(page.rows.length, 100);
   assert.equal(page.rows[0].device.id, "device-50");
   assert.equal(page.hasMore, true);
+});
+
+test("modified comparison event paging does not materialize full large event lists", () => {
+  const comparison = { modified: Array.from({ length: 2_500 }, (_, index) => ({
+    before: { id: `device-${index}` },
+    after: { id: `device-${index}` },
+    changes: [
+      { field: "model", oldValue: "A", newValue: "B" },
+      { field: "ip", oldValue: "10.0.0.1", newValue: "10.0.0.2" },
+    ],
+  })) };
+  const page = pageComparisonModificationEvents(comparison, { offset: 4_990, limit: 7 });
+  assert.equal(page.total, 5_000);
+  assert.equal(page.events.length, 7);
+  assert.equal(page.events[0].device.id, "device-2495");
+  assert.equal(page.events[0].change.field, "model");
+  assert.equal(page.hasNext, true);
+  assert.deepEqual(pageComparisonModificationEvents(comparison, { offset: 1_249, limit: 3, criticalOnly: true }).events.map(({ device, change }) => [device.id, change.field]), [
+    ["device-1249", "ip"], ["device-1250", "ip"], ["device-1251", "ip"],
+  ]);
 });
 
 test("change categories retain exact absence counts while detail rows are loaded by page", () => {

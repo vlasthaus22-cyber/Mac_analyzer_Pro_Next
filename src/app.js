@@ -33,7 +33,7 @@ import { prepareOriginalSourceRecovery } from "./core/source-file-recovery.js";
 import { inspectWorkspaceSourceHandle, requestWorkspaceSourcePermission, workspaceSourceFileMatchesRecord, WORKSPACE_SOURCE_ROLES } from "./core/workspace-source-handles.js";
 import { BATCH_DIRECTORY_ROLES, inspectBatchDirectoryHandle, listBatchDirectoryFiles, requestBatchDirectoryPermission } from "./core/batch-directory-handles.js";
 import { assertBrowserHeapCapacity, assertFilePairCapacity, assertSourceFileCapacity } from "./core/import-limits.js";
-import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, summarizeChangeCategories } from "./core/change-categories.js";
+import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, pageComparisonModificationEvents, summarizeChangeCategories } from "./core/change-categories.js";
 import { compactComparisonDevice, trimComparisonBaseline, trimComparisonDeviceInPlace, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
 import { enrich } from "./core/enrichment.js";
 import { stageFinalHistoryPlan } from "./core/history-plan.js";
@@ -6108,10 +6108,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
     const start = Math.max(0, Math.floor(Number(offset) || 0));
     const size = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
     if (kind === "modified") {
-      const events = (analytics.comparison.modified || []).flatMap((row) => (row.changes || []).map((change) => ({ type: "modified", device: row.after, before: row.before, change })))
-        .filter((event) => !options.criticalOnly || isCriticalHistoryChange("modified", event.change.field, event.change.oldValue, event.change.newValue));
-      const selected = events.slice(start, start + size);
-      return cachePage({ events: selected, total: events.length, offset: start, limit: size, hasPrevious: start > 0, hasNext: start + selected.length < events.length });
+      return cachePage(pageComparisonModificationEvents(analytics.comparison, { offset: start, limit: size, criticalOnly: options.criticalOnly }));
     }
     if (kind === "modifiedGroups") {
       const groups = [];
