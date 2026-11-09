@@ -804,7 +804,10 @@ test("legacy XLS reads selected sheets and bounds preview and streamed batches",
       const workbook = sheetJs.read(bytes, options);
       if (!options.bookSheets) parsedWorkbooks.push(workbook);
       if (options.bookSheets) assert.deepEqual(Object.keys(workbook.Sheets || {}), [], "sheet listing must not materialize worksheet cells");
-      if (options.dense) assert.ok(workbook.Sheets?.["Устройства"]?.["!data"], "XLS data reads should use SheetJS's lower-overhead dense cell storage");
+      if (options.dense) {
+        assert.ok(workbook.Sheets?.["Устройства"]?.["!data"], "XLS data reads should use SheetJS's lower-overhead dense cell storage");
+        assert.equal(options.cellText, false, "XLS reads should not retain formatted text that the row reader never consumes");
+      }
       if (options.sheetRows) {
         const sheet = workbook.Sheets?.["Устройства"];
         assert.notEqual(sheet?.["!ref"], sheet?.["!fullref"], "XLS previews should stop parsing after the requested rows");

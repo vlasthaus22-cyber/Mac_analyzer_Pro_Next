@@ -1964,7 +1964,9 @@ async function parseLegacyXlsWorkbook(file, memoryInfo = globalThis.performance?
     : IMPORT_LIMITS.rowCount + 1;
   const workbook = library.read(bytes, {
     type: "array", dense: true, cellFormula: false, cellHTML: false,
-    cellNF: false, cellStyles: false, cellText: true, cellDates: false,
+    // The row reader consumes raw cell.v values; formatted cell.w strings are
+    // never used and would retain a second string per populated BIFF cell.
+    cellNF: false, cellStyles: false, cellText: false, cellDates: false,
     ...(sheetRows ? { sheetRows } : {}),
   });
   if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
