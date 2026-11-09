@@ -5,6 +5,9 @@ import { MAX_DEVICE_ALTERNATIVES } from "../core/normalize.js";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost"]);
 export const MAX_OPTIONAL_HOST_DATABASE_RESTORE_BYTES = 512 * 1024 * 1024;
 export const MAX_OPTIONAL_HOST_SNAPSHOT_UPLOAD_BYTES = 256 * 1024 * 1024;
+const OPTIONAL_HOST_DEVICE_DATE_FIELDS = Object.freeze([
+  "authenticationTime", "receiptTime", "firstSeen", "lastSeen", "lastMissing",
+]);
 export const MAX_OPTIONAL_HOST_APP_BACKUP_BYTES = 512 * 1024;
 const MAX_OPTIONAL_HOST_HISTORY_BATCH_EVENTS = 500;
 const MAX_OPTIONAL_HOST_HISTORY_REQUEST_BYTES = 900 * 1024;
@@ -17,6 +20,18 @@ const MAX_OPTIONAL_HOST_DIAGNOSTICS_RESPONSE_BYTES = 1024 * 1024;
 const MAX_OPTIONAL_HOST_DATABASE_SEARCH_RESPONSE_BYTES = 1024 * 1024;
 const MAX_OPTIONAL_HOST_DIAGNOSTIC_CHECKS = 100;
 const SQLITE_HEADER = new globalThis.TextEncoder().encode("SQLite format 3\0");
+
+function normalizeOptionalHostDeviceDates(device) {
+  if (!device || typeof device !== "object" || Array.isArray(device)) return device;
+  let normalized = null;
+  for (const field of OPTIONAL_HOST_DEVICE_DATE_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(device, field)) continue;
+    const value = normalizeDate(device[field]);
+    if (value === device[field]) continue;
+    (normalized ||= { ...device })[field] = value;
+  }
+  return normalized || device;
+}
 
 async function readBoundedResponseText(response, maximumBytes, limitLabel = "1 МиБ") {
   const reader = response?.body?.getReader?.();
@@ -768,8 +783,9 @@ export async function uploadFinalSnapshotToOptionalHost(metadata, devices, {
       frameBytes = 0;
       return frame;
     };
-    for await (const device of devices) {
+    for await (const sourceDevice of devices) {
       if (sent >= deviceCount) throw new Error("Поток Final содержит больше устройств, чем указано в метаданных");
+      const device = normalizeOptionalHostDeviceDates(sourceDevice);
       let line;
       try { line = JSON.stringify(device); }
       catch { throw new Error("Устройство Final не сериализуется в JSON"); }

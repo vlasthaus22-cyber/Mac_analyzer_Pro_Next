@@ -845,6 +845,34 @@ test("active Final uploads as a bounded NDJSON stream only to the same-origin lo
   ]);
 });
 
+test("Final host copy canonicalizes legacy device timestamps without mutating the stored row", async () => {
+  const metadata = { id: "legacy-date-final", name: "Legacy Date Final", createdAt: "2026-10-21T10:00:00.000Z", deviceCount: 1 };
+  const source = {
+    internalDeviceId: "legacy-date-device",
+    authenticationTime: "0099/04/01",
+    receiptTime: "1999/03/28",
+    firstSeen: "1999.03.28",
+    lastSeen: "1999/10/31",
+    lastMissing: "not a date",
+  };
+  async function* devices() { yield source; }
+  let uploaded;
+  await uploadFinalSnapshotToOptionalHost(metadata, devices(), {
+    locationLike: { protocol: "http:", hostname: "localhost", port: "61234" },
+    fetchImpl: async (_url, options) => {
+      const rows = (await new globalThis.Response(options.body).text()).trim().split("\n").map((line) => JSON.parse(line));
+      uploaded = rows[1];
+      return { ok: true, status: 201, json: async () => ({ snapshotId: metadata.id, deviceCount: 1, signature: "d".repeat(64) }) };
+    },
+  });
+
+  for (const field of ["authenticationTime", "receiptTime", "firstSeen", "lastSeen"]) {
+    assert.equal(uploaded[field], normalizeDate(source[field]), field);
+  }
+  assert.equal(uploaded.lastMissing, "");
+  assert.equal(source.authenticationTime, "0099/04/01");
+});
+
 test("active Final upload rejects non-loopback origins and mismatched device counts", async () => {
   let requestCount = 0;
   const fetchImpl = async (_url, options) => {
