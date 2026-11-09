@@ -346,6 +346,26 @@ test("topology switch, port and room buckets stay per-input-batch when topology 
   assert.equal(dataset.topology.nodes.length, 0);
 });
 
+test("analytics without topology device details does not rebuild per-row topology records", () => {
+  const reads = { ip: 0, address: 0 };
+  const device = {
+    manufacturer: "Acme", model: "Panel", room: "101", switchIp: "10.0.0.1", switchPort: "1",
+    get ip() { reads.ip += 1; return "10.0.0.2"; },
+    get address() { reads.address += 1; return "Office"; },
+  };
+  const collector = createCollector({
+    includeClusters: false,
+    includeRankings: false,
+    includeTopologyDevices: false,
+    includeTopologySummary: false,
+  });
+  collector.accept([device]);
+  const dataset = collector.finish();
+  assert.equal(dataset.summary.withIp, 1);
+  assert.equal(dataset.summary.withAddress, 1);
+  assert.deepEqual(reads, { ip: 1, address: 1 }, "only coverage should read these values when topology details are disabled");
+});
+
 test("analytics and topology bucket materialization preserves every high-cardinality value", () => {
   const devices = Array.from({ length: 1_205 }, (_, index) => ({
     manufacturer: `Vendor ${index}`,

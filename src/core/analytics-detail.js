@@ -515,6 +515,8 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
         const switchPortValue = text(device.switchPort || device.switch_port);
         const switchPort = switchPortValue || "Не указан";
         const mac = normalizeMac(firstMac(device.mac, device.macFormatted, device.mac_formatted));
+        const ip = text(device.ip);
+        const address = text(device.address);
         devices += 1;
         if (includeRankings) {
           tally(vendors, vendor);
@@ -525,9 +527,9 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
           if (switchIp && !unknownValues.has(switchIp.toLowerCase())) tally(switchCounts, switchIp);
         }
         if (!unknownVendors.has(vendor.toLowerCase())) knownVendors += 1;
-        if (text(device.ip) && !unknownValues.has(text(device.ip).toLowerCase())) withIp += 1;
+        if (ip && !unknownValues.has(ip.toLowerCase())) withIp += 1;
         if (room && !unknownValues.has(room.toLowerCase())) withRoom += 1;
-        if (text(device.address) && !unknownValues.has(text(device.address).toLowerCase())) withAddress += 1;
+        if (address && !unknownValues.has(address.toLowerCase())) withAddress += 1;
         if (switchIp && !unknownValues.has(switchIp.toLowerCase())) withSwitch += 1;
         if (switchPortValue && !unknownValues.has(switchPortValue.toLowerCase())) withSwitchPort += 1;
         if (!unknownModels.has(model.toLowerCase())) withModel += 1;
@@ -555,17 +557,16 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
           cluster.count += 1;
         }
 
-        const topologyDevice = {
-          mac,
-          vendor,
-          model,
-          ip: text(device.ip),
-          room,
-          address: text(device.address),
-          port: switchPort,
-        };
         if (!switchIp || unknownValues.has(switchIp.toLowerCase())) {
-          if (includeTopologyDevices) topologyUnassigned.push(topologyDevice);
+          if (includeTopologyDevices) topologyUnassigned.push({
+            mac,
+            vendor,
+            model,
+            ip,
+            room,
+            address,
+            port: switchPort,
+          });
           continue;
         }
         if (!includeTopologySummary) continue;
@@ -582,7 +583,15 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
           port = { port: switchPort, deviceCount: 0, sampleMacs: [], devices: includeTopologyDevices ? [] : undefined };
           switchNode.ports.set(switchPort, port);
         }
-        if (includeTopologyDevices) port.devices.push(topologyDevice);
+        if (includeTopologyDevices) port.devices.push({
+          mac,
+          vendor,
+          model,
+          ip,
+          room,
+          address,
+          port: switchPort,
+        });
         if (port) {
           port.deviceCount += 1;
           if (mac && port.sampleMacs.length < 8) port.sampleMacs.push(mac);
