@@ -1,12 +1,28 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
-import { carryForwardRoomDeviceFields, compactRoomHistoryDevice, compactRoomHistoryDevices, createRoomHistoryCarryForwardStream, roomHistoryFallbackKey } from "../src/core/room-history.js";
+import { carryForwardRoomDeviceFields, compactRoomHistoryChunkInPlace, compactRoomHistoryDevice, compactRoomHistoryDevices, createRoomHistoryCarryForwardStream, roomHistoryFallbackKey } from "../src/core/room-history.js";
 
 test("room history fallback key normalizes all location levels into a stable key", () => {
   assert.equal(roomHistoryFallbackKey({ businessUnit: "HQ", city: "Moscow", site: "A", floor: 2, room: "  101 ", address: "Main St" }), "fallback:hq|moscow|a|2|101|main st");
   assert.equal(roomHistoryFallbackKey({ city: "Moscow", room: "101" }), "fallback:|moscow|||101|");
   assert.equal(roomHistoryFallbackKey({ city: "Moscow" }), "");
+});
+
+test("room history compacts disposable database batches in place and drops unselected rows", () => {
+  const rows = [
+    { id: "keep-1", mac: "00:11:22:33:44:51", room: "A", largePayload: "x".repeat(100_000) },
+    { id: "drop", mac: "00:11:22:33:44:52", room: "B", largePayload: "y".repeat(100_000) },
+    { id: "keep-2", mac: "00:11:22:33:44:53", room: "A", largePayload: "z".repeat(100_000) },
+  ];
+  const result = compactRoomHistoryChunkInPlace(rows, ({ room }) => room === "A");
+
+  assert.equal(result, rows, "reuse the IndexedDB page array instead of allocating a second array");
+  assert.deepEqual(result.map(({ id }) => id), ["keep-1", "keep-2"]);
+  assert.equal(result.length, 2, "release nonmatching decoded rows from the disposable page");
+  assert.deepEqual(result.map((device) => Object.hasOwn(device, "largePayload")), [false, false]);
+  assert.throws(() => compactRoomHistoryChunkInPlace({}, () => true), /массив строк/);
+  assert.throws(() => compactRoomHistoryChunkInPlace([], null), /фильтр помещения/);
 });
 
 test("room history carries known fields through empty observations without mutating Final rows", () => {

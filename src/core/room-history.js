@@ -41,6 +41,23 @@ export function compactRoomHistoryDevices(devices = []) {
   return devices.map(compactRoomHistoryDevice);
 }
 
+/** Compact a disposable database page in place to avoid retaining both the
+ * decoded rows and a second full array of projected room-history rows.
+ */
+export function compactRoomHistoryChunkInPlace(devices, matches = () => true) {
+  if (!Array.isArray(devices)) throw new TypeError("Для проекции хронологии нужен массив строк");
+  if (typeof matches !== "function") throw new TypeError("Для проекции хронологии нужен фильтр помещения");
+  let write = 0;
+  for (let read = 0; read < devices.length; read += 1) {
+    const device = devices[read];
+    if (!matches(device)) continue;
+    devices[write] = compactRoomHistoryDevice(device);
+    write += 1;
+  }
+  devices.length = write;
+  return devices;
+}
+
 export function roomHistoryFallbackKey(device = {}) {
   if (!text(device.room)) return "";
   return `fallback:${keyText(device.businessUnit)}|${keyText(device.city)}|${keyText(device.site)}|${keyText(device.floor)}|${keyText(device.room)}|${keyText(device.address)}`;

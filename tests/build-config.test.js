@@ -2959,7 +2959,7 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   assert.match(app, /function roomTimelineComparisonPage\(counts, rows, previousName, pages = \{\}\)/);
   assert.match(app, /function roomPairComparisonPage\(counts, rows, requestedPage = 1\)/);
   assert.doesNotMatch(app, /function comparisonEventPage\(/);
-  assert.match(app, /for \(const device of chunk\) if \(roomTimelineMatch\(device, key, room\)\) devices\.push\(compactRoomHistoryDevice\(device\)\)/);
+  assert.match(app, /compactRoomHistoryChunkInPlace\(chunk, \(device\) => roomTimelineMatch\(device, key, room\)\)/);
   assert.match(app, /data-room-pair-page/);
   assert.match(readFileSync("src/ui/render.js", "utf8"), /comparisonContent\(\{ \.\.\.comparison, absent: \[\], absentCount: 0 \}, \{ offset: changesStart, limit: 20, viewId: `room-\$\{snapshotId\}`, showMore: false \}\)/);
   assert.match(readFileSync("src/ui/render.js", "utf8"), /const pageSize = 20;/);

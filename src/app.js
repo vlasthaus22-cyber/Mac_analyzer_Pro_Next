@@ -58,7 +58,7 @@ import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptional
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
 import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterCascadeOptions, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
-import { createRoomHistoryCarryForwardStream, compactRoomHistoryDevice, roomHistoryFallbackKey } from "./core/room-history.js";
+import { createRoomHistoryCarryForwardStream, compactRoomHistoryChunkInPlace, roomHistoryFallbackKey } from "./core/room-history.js";
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
 import { matchesDeviceSearch, searchResultDoubleClickTarget, searchSavedFinalSnapshots } from "./core/search.js";
@@ -7601,8 +7601,7 @@ async function forEachRoomDeviceBatch(snapshotId, key, room, visit, shouldContin
   let completed = true;
   await database.forEachSnapshotRoomChunk(snapshotId, key, room, async (chunk, chunkIndex) => {
     if (!shouldContinue()) { completed = false; return false; }
-    const devices = [];
-    for (const device of chunk) if (roomTimelineMatch(device, key, room)) devices.push(compactRoomHistoryDevice(device));
+    const devices = compactRoomHistoryChunkInPlace(chunk, (device) => roomTimelineMatch(device, key, room));
     if (devices.length && await visit(devices, chunkIndex) === false) { completed = false; return false; }
     return shouldContinue();
   });
