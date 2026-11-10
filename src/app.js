@@ -1996,6 +1996,12 @@ async function loadInventoryColumnConfig() {
     }
   }
   state.inventoryColumnConfig = normalizeInventoryColumnConfig(saved);
+  const savedPhysicalAddress = saved?.columns?.find(({ key }) => key === "physicalAddress");
+  if (!restoredLegacyPreferences && savedPhysicalAddress && !savedPhysicalAddress.visible
+    && ["Адрес из источника", "Физический адрес"].includes(savedPhysicalAddress.label)) {
+    state.inventoryColumnConfig = updateInventoryColumn(state.inventoryColumnConfig, "physicalAddress", { label: "Физический адрес", visible: true });
+    await database.setSetting("inventoryColumnConfig", state.inventoryColumnConfig);
+  }
   state.inventoryColumnConfigLoaded = true;
   renderInventoryColumnManager();
   if (restoredLegacyPreferences) $("#inventoryColumnStatus").textContent = "Настройки столбцов восстановлены из импортированной базы.";
@@ -2147,6 +2153,7 @@ async function renderDeviceTable() {
   const sortableColumnKeys = new Set(TABLE_COLUMNS.map(([key]) => key));
   $("#searchCount").textContent = `Всего найдено: ${result.total.toLocaleString("ru-RU")} устройств`;
   $("#pageLabel").textContent = paginationSummary(result);
+  $("#deviceTable").scrollTop = 0;
   $("#deviceTable").innerHTML = `<table class="data-table inventory-data-table" data-virtual-scroll="true"><colgroup><col style="width:44px">${columns.map(({ width }) => `<col style="width:${width}px">`).join("")}</colgroup><thead><tr><th><input class="row-select" type="checkbox" data-select-page aria-label="Выбрать все строки этой страницы" title="Выбрать строки этой страницы"></th>${columns.map(({ key, label, width }, index) => `<th>${sortableColumnKeys.has(key) ? `<button class="table-sort" type="button" data-sort="${escapeHtml(key)}">${escapeHtml(label)}${state.sort.field === key ? (state.sort.direction > 0 ? " ↑" : " ↓") : ""}</button>` : escapeHtml(label)}<span class="column-resize-handle" role="separator" aria-orientation="vertical" aria-valuemin="70" aria-valuemax="600" aria-valuenow="${width}" tabindex="0" aria-label="Изменить ширину столбца ${escapeHtml(label)}" title="Изменить ширину столбца" data-inventory-column-resize="${escapeHtml(key)}" data-column-index="${index + 1}"></span></th>`).join("")}</tr></thead><tbody>${result.items.map((device, rowIndex) => { const rowNumber = (result.page - 1) * state.pageSize + rowIndex + 1; return `<tr data-device-id="${escapeHtml(device.id)}" tabindex="0" aria-selected="${state.selectedDevices.has(device.id)}" class="${state.selectedDevices.has(device.id) ? "is-selected" : ""}"><td><input class="row-select" type="checkbox" data-select-device="${escapeHtml(device.id)}" aria-label="Выбрать ${escapeHtml(device.mac || device.hostname || device.id)}" ${state.selectedDevices.has(device.id) ? "checked" : ""}></td>${columns.map(({ key, label, custom }) => { const value = inventoryCellText(device, key, rowNumber); return custom && isEngineerActive() ? `<td><input class="inventory-custom-cell" type="text" maxlength="4000" data-inventory-custom-field="${escapeHtml(key)}" aria-label="${escapeHtml(label)} для ${escapeHtml(device.mac || device.hostname || device.id)}" value="${escapeHtml(value)}"></td>` : `<td title="${escapeHtml(value)}">${escapeHtml(value || "—")}</td>`; }).join("")}</tr>`; }).join("")}</tbody></table>`;
   $("#deviceTable").querySelectorAll("[data-sort]").forEach((button) => button.addEventListener("click", () => {
     state.sort = state.sort.field === button.dataset.sort ? { field: button.dataset.sort, direction: -state.sort.direction } : { field: button.dataset.sort, direction: 1 };
@@ -2950,7 +2957,7 @@ function renderSingleAnalysis(result) {
     ["С производителем", summary.withManufacturer], ["С моделью", summary.withModel], ["С помещением", summary.withRoom], ["С адресом", summary.withAddress],
   ];
   const ranking = (title, rows) => `<section><h3>${title}</h3>${rows.length ? `<ol>${rows.map((item) => `<li>${escapeHtml(item.label)} — ${item.value.toLocaleString("ru-RU")}</li>`).join("")}</ol>` : '<p class="muted">Нет данных</p>'}</section>`;
-  const columns = [["mac", "MAC"], ["manufacturer", "Производитель"], ["model", "Модель"], ["ip", "IP"], ["switchIp", "IP коммутатора"], ["room", "Помещение"], ["address", "Адрес"], ["sourceRows", "Строки"]];
+  const columns = [["mac", "MAC"], ["manufacturer", "Производитель"], ["model", "Модель"], ["ip", "IP"], ["switchIp", "IP коммутатора"], ["room", "Помещение"], ["address", "Адрес"], ["physicalAddress", "Физический адрес"], ["sourceRows", "Строки"]];
   const shown = result.preview.map((device) => ({ ...device, sourceRows: formatSingleFileSourceRows(device) }));
   const invalid = result.invalidPreview;
   const invalidMacs = result.invalidMacPreview || [];
@@ -2993,7 +3000,7 @@ async function renderSingleAnalysisDevices(result, requestedPage = 1) {
   if (request !== state.singleAnalysisDevicePageRequest || !host.isConnected) return;
   state.singleAnalysisDevicePage = page.page;
   heading.textContent = `Распознанные устройства · показано ${Math.min(page.offset + page.rows.length, page.total).toLocaleString("ru-RU")} из ${page.total.toLocaleString("ru-RU")}`;
-  const columns = [["mac", "MAC"], ["manufacturer", "Производитель"], ["model", "Модель"], ["ip", "IP"], ["switchIp", "IP коммутатора"], ["room", "Помещение"], ["address", "Адрес"], ["sourceRows", "Строки"]];
+  const columns = [["mac", "MAC"], ["manufacturer", "Производитель"], ["model", "Модель"], ["ip", "IP"], ["switchIp", "IP коммутатора"], ["room", "Помещение"], ["address", "Адрес"], ["physicalAddress", "Физический адрес"], ["sourceRows", "Строки"]];
   const rows = page.rows.map((device) => ({ ...device, sourceRows: formatSingleFileSourceRows(device) }));
   const pager = page.pageCount > 1
     ? `<div class="action-row"><span class="muted">Страница ${page.page.toLocaleString("ru-RU")} из ${page.pageCount.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-single-analysis-device-page="${page.page - 1}" ${page.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-single-analysis-device-page="${page.page + 1}" ${page.hasNext ? "" : "disabled"}>Дальше</button></div>`

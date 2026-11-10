@@ -5,18 +5,18 @@ const DEFAULT_FIELDS = Object.freeze([
   ["rowNumber", "№"],
   ["mac", "MAC"], ["ip", "IP-адрес"], ["switchIp", "IP коммутатора"], ["switchPort", "Порт подключения"],
   ["manufacturer", "Производитель"], ["model", "Модель"], ["deviceType", "Тип"], ["hostname", "Hostname"],
-  ["serial", "Serial"], ["smartroomId", "Smartroom ID"], ["room", "Помещение"], ["address", "Физический адрес"],
+  ["serial", "Serial"], ["smartroomId", "Smartroom ID"], ["room", "Помещение"], ["address", "Адрес"],
   ["authenticationTime", "Время аутентификации"],
 ]);
 const OPTIONAL_FIELDS = Object.freeze([
   ["macFormatted", "MAC (форматированный)"],
   ["oui3", "OUI (3 байта)"], ["oui4", "OUI (4 байта)"], ["oui5", "OUI (5 байт)"], ["oui6", "OUI (6 байт)"],
-  ["deviceId", "Device ID"], ["deviceName", "Название устройства"], ["physicalAddress", "Адрес из источника"],
+  ["deviceId", "Device ID"], ["deviceName", "Название устройства"], ["physicalAddress", "Физический адрес"],
   ["businessUnit", "ТБ"], ["city", "Город"], ["site", "Площадка"], ["floor", "Этаж"],
   ["matchDetails", "Примечание"], ["addedAt", "Дата добавления"], ["source", "Источник"],
 ]);
 const DEFAULT_VISIBLE_ORDER = Object.freeze([
-  "rowNumber", "mac", "manufacturer", "model", "ip", "address", "room", "switchIp", "switchPort", "authenticationTime", "matchDetails",
+  "rowNumber", "mac", "manufacturer", "model", "ip", "address", "physicalAddress", "room", "switchIp", "switchPort", "authenticationTime", "matchDetails",
 ]);
 const DEFAULT_VISIBLE_KEYS = new Set(DEFAULT_VISIBLE_ORDER);
 const LEGACY_COLUMN_KEYS = Object.freeze({
@@ -133,7 +133,7 @@ export function normalizeInventoryColumnConfig(value = {}) {
     const custom = Boolean(item?.custom) && CUSTOM_COLUMN_KEY.test(key);
     if ((!descriptor && !custom) || seen.has(key)) continue;
     const defaultLabel = descriptor?.label || "Пользовательское поле";
-    const legacyDefaultLabel = key === "physicalAddress" ? "Физический адрес" : "";
+    const legacyDefaultLabel = key === "address" ? "Физический адрес" : key === "physicalAddress" ? "Адрес из источника" : "";
     const incomingLabel = String(item.label ?? defaultLabel).trim().slice(0, 60);
     const requestedLabel = !incomingLabel || incomingLabel === legacyDefaultLabel ? defaultLabel : incomingLabel;
     const label = uniqueColumnLabel(requestedLabel, usedLabels);

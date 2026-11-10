@@ -12,7 +12,7 @@ export function virtualTableWindow(totalRows, scrollTop, rowHeight = fixedRowHei
 }
 
 function wrapperFor(tbody) {
-  return tbody.closest(".table-scroll, .table-wrap") || tbody.parentElement;
+  return tbody.closest(".table-scroll, .table-wrap, .table-host") || tbody.parentElement;
 }
 
 function makeSpacer(height, columns) {

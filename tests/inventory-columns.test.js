@@ -61,11 +61,20 @@ test("address and source-address columns have distinct labels and migrate the ol
   const address = config.columns.find(({ key }) => key === "address");
   const sourceAddress = config.columns.find(({ key }) => key === "physicalAddress");
 
-  assert.equal(address.label, "Физический адрес");
-  assert.equal(sourceAddress.label, "Адрес из источника");
+  assert.equal(address.label, "Адрес");
+  assert.equal(sourceAddress.label, "Физический адрес");
   assert.equal(new Set(config.columns.map(({ label }) => label)).size, config.columns.length);
   assert.equal(inventoryCellText({ address: "Офис 1", physicalAddress: "Корпус А" }, "address"), "Офис 1");
   assert.equal(inventoryCellText({ address: "Офис 1", physicalAddress: "Корпус А" }, "physicalAddress"), "Корпус А");
+  const defaults = defaultInventoryColumnConfig();
+  assert.ok(visibleInventoryColumns(defaults).some(({ key, label }) => key === "physicalAddress" && label === "Физический адрес"));
+
+  const migrated = normalizeInventoryColumnConfig({ columns: [
+    { key: "address", label: "Физический адрес", visible: true },
+    { key: "physicalAddress", label: "Адрес из источника", visible: false },
+  ] });
+  assert.equal(migrated.columns.find(({ key }) => key === "address").label, "Адрес");
+  assert.equal(migrated.columns.find(({ key }) => key === "physicalAddress").visible, false);
 
   const customized = normalizeInventoryColumnConfig({ columns: [
     { key: "physicalAddress", label: "Адрес площадки", visible: true },
@@ -186,10 +195,10 @@ test("inventory columns can be reordered and optional supported fields enabled",
 test("new Inventory configuration starts with the same visible columns and order as PyQt", () => {
   const config = defaultInventoryColumnConfig();
   assert.deepEqual(visibleInventoryColumns(config).map(({ key }) => key), [
-    "rowNumber", "mac", "manufacturer", "model", "ip", "address", "room", "switchIp", "switchPort", "authenticationTime", "matchDetails",
+    "rowNumber", "mac", "manufacturer", "model", "ip", "address", "physicalAddress", "room", "switchIp", "switchPort", "authenticationTime", "matchDetails",
   ]);
   assert.deepEqual(visibleInventoryColumns(config).map(({ label }) => label), [
-    "№", "MAC", "Производитель", "Модель", "IP-адрес", "Физический адрес", "Помещение", "IP коммутатора", "Порт подключения", "Время аутентификации", "Примечание",
+    "№", "MAC", "Производитель", "Модель", "IP-адрес", "Адрес", "Физический адрес", "Помещение", "IP коммутатора", "Порт подключения", "Время аутентификации", "Примечание",
   ]);
   assert.equal(config.columns.find(({ key }) => key === "deviceType").visible, false);
   assert.equal(config.columns.find(({ key }) => key === "hostname").visible, false);

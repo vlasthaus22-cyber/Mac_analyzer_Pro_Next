@@ -63,11 +63,13 @@ test("large history, analytics and inventory tables use a 20-row virtual window"
   const css = read("styles.css");
   assert.match(source, /VIRTUAL_TABLE_THRESHOLD = 50/);
   assert.match(source, /VIRTUAL_TABLE_VISIBLE_ROWS = 20/);
+  assert.match(source, /tbody\.closest\("\.table-scroll, \.table-wrap, \.table-host"\)/);
   assert.match(source, /function render\(tbody\)/);
   assert.match(source, /wrapper\.addEventListener\("scroll"/);
   assert.match(source, /tbody\.replaceChildren\(\.\.\.rows\)/);
   assert.match(source, /export function virtualTableRows/);
   assert.match(app, /data-virtual-scroll="true"/);
+  assert.match(app, /async function renderDeviceTable\(\)[\s\S]*?\$\("#deviceTable"\)\.scrollTop = 0/);
   assert.match(render, /history-log-group[\s\S]*?data-virtual-scroll="true"/);
   assert.match(render, /legacyObservationLogContent[\s\S]*?data-virtual-scroll="true"/);
   assert.match(render, /dashboardFleetDialogContent[\s\S]*?data-virtual-scroll="true"/);
@@ -122,7 +124,7 @@ test("virtual rendering retains all row nodes and scrolls by 20-row windows", ()
     setAttribute(name, value) { this.attributes[name] = value; }
     closest(selector) {
       if (selector === "table") return this.table;
-      if (selector === ".table-scroll, .table-wrap") return this.wrapper;
+      if (selector === ".table-scroll, .table-wrap, .table-host") return this.wrapper;
       return null;
     }
     getBoundingClientRect() { return { height: 44 }; }

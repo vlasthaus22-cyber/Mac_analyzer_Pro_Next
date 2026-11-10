@@ -7007,6 +7007,27 @@ if (largeInventoryTotal !== 10005 || !largeInventoryPageText.includes("Стра�
   throw new Error(`Большая Inventory не разделяет полный итог и страницу из 50 строк: ${JSON.stringify(largeInventoryPage)}`);
 }
 console.log("browser smoke: large Inventory shows 10,005 matches and exactly 50 rows on page 1");
+await evaluate(`document.querySelector('#pageSizeSelect').value='100';document.querySelector('#pageSizeSelect').dispatchEvent(new Event('change',{bubbles:true}))`);
+let virtualInventoryPage = null;
+for (let attempt = 0; attempt < 60; attempt += 1) {
+  await wait(100);
+  virtualInventoryPage = await evaluate(`({page:document.querySelector('#pageLabel').textContent.replace(/\s+/g,' ').trim(),rows:document.querySelectorAll('#deviceTable tbody tr:not([data-virtual-spacer])').length,first:document.querySelector('#deviceTable tbody tr[data-device-id]')?.dataset.deviceId||''})`);
+  if (virtualInventoryPage.page.includes('на странице 100') && virtualInventoryPage.rows === 20) break;
+}
+if (!virtualInventoryPage?.page.includes('на странице 100') || virtualInventoryPage.rows !== 20 || !virtualInventoryPage.first) throw new Error(`100-row Inventory page did not initialize its virtual window: ${JSON.stringify(virtualInventoryPage)}`);
+await evaluate(`(()=>{const host=document.querySelector('#deviceTable');host.scrollTop=44*80;host.dispatchEvent(new Event('scroll'));return true})()`);
+await wait(100);
+const virtualInventoryScrolled = await evaluate(`({rows:document.querySelectorAll('#deviceTable tbody tr:not([data-virtual-spacer])').length,first:document.querySelector('#deviceTable tbody tr[data-device-id]')?.dataset.deviceId||'',scrollTop:document.querySelector('#deviceTable').scrollTop})`);
+if (virtualInventoryScrolled.rows !== 20 || virtualInventoryScrolled.first === virtualInventoryPage.first || virtualInventoryScrolled.scrollTop < 44*20) throw new Error(`Inventory virtual scroll did not advance beyond its first 20 rows: ${JSON.stringify({virtualInventoryPage,virtualInventoryScrolled})}`);
+console.log("browser smoke: 100-row Inventory scroll advances virtual rows beyond the first 20 using the table host");
+await evaluate(`document.querySelector('#pageSizeSelect').value='50';document.querySelector('#pageSizeSelect').dispatchEvent(new Event('change',{bubbles:true}))`);
+let restoredInventorySize = null;
+for (let attempt = 0; attempt < 60; attempt += 1) {
+  await wait(100);
+  restoredInventorySize = await evaluate(`({page:document.querySelector('#pageLabel').textContent.replace(/\s+/g,' ').trim(),rows:document.querySelectorAll('#deviceTable tbody tr').length})`);
+  if (restoredInventorySize.page.includes('на странице 50') && restoredInventorySize.rows === 50) break;
+}
+if (!restoredInventorySize?.page.includes('на странице 50') || restoredInventorySize.rows !== 50) throw new Error(`Inventory did not return to the complete 50-row page: ${JSON.stringify(restoredInventorySize)}`);
 await evaluate(`(()=>{const input=document.querySelector('#globalSearch');input.value='00:11:22:33:44:51';input.dispatchEvent(new Event('input',{bubbles:true}));return true})()`);
 let accumulatedMacSearch = null;
 for (let attempt = 0; attempt < 60; attempt += 1) {

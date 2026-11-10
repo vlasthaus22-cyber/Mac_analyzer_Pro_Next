@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.3.4 — 2026-11-10
+
+- Inventory virtualization now listens on the actual scrollable table host, so pages larger than 50 rows can scroll past the first 20 rendered rows.
+- Inventory separates `address` (Адрес) and `physicalAddress` (Физический адрес); physical address is visible by default and appears in single-file analysis results.
+- Existing default column settings migrate to show the physical-address column while explicitly renamed/hidden custom columns keep their choices.
+- Verification: full release checks and Chrome browser smoke.
+
 ## v2.3.3 — 2026-11-10
 
 - Enrichment repairs duplicate internal IDs deterministically and retains conflicting source IDs for diagnostics instead of aborting the Final.
