@@ -1302,7 +1302,22 @@ function clearError() {
 }
 
 function cancelActiveProcess() {
-  return abortActiveControllers([state.controller, state.singleFileController, state.fileCompare.controller, state.ouiImportController]);
+  const aborted = abortActiveControllers([
+    state.controller,
+    state.singleFileController,
+    state.fileCompare.controller,
+    state.ouiImportController,
+    state.tableController,
+    savedFinalSearchController,
+    pyqtClusteringController,
+  ]);
+  if (aborted) {
+    const button = $("#cancelProcessButton");
+    if (button) button.disabled = true;
+    const detail = $("#progressDetail");
+    if (detail && !$("#progressPanel")?.hidden) detail.textContent = "Отмена… ожидаю безопасного завершения текущего шага";
+  }
+  return aborted;
 }
 
 function handleAppPageHide(event) {
@@ -1351,6 +1366,7 @@ function progress(value, detail, title = "Обработка", percentLabel = ""
 
 function finishProgress(detail = "Готово") {
   progress(100, detail);
+  $("#cancelProcessButton").disabled = false;
   const finishedGeneration = progressGeneration;
   progressHideTimer = setTimeout(() => {
     if (finishedGeneration !== progressGeneration) return;
@@ -4629,16 +4645,29 @@ async function runEnrichment() {
     state.switchIpChangePageRequest += 1;
     await database.clearAnalyticsAggregateQuery(previousQueryId).catch(showError);
   }
-  state.controller = new AbortController();
+  const controller = new AbortController();
+  state.controller = controller;
   const strategy = $("input[name='strategy']:checked").value;
-  const result = await executeEnrichment({
-    tables: state.sourceTables,
-    mappings: state.mappings,
-    files: state.sourceFiles,
-    name: `Final ${state.sourceFiles.main.name}`,
-    strategy,
-    includeSwitchIpReport: true,
-  });
+  let result;
+  try {
+    result = await executeEnrichment({
+      tables: state.sourceTables,
+      mappings: state.mappings,
+      files: state.sourceFiles,
+      name: `Final ${state.sourceFiles.main.name}`,
+      strategy,
+      includeSwitchIpReport: true,
+    });
+  } catch (error) {
+    if (controller.signal.aborted && error?.name === "AbortError") {
+      finishProgress("Объединение отменено");
+      return;
+    }
+    throw error;
+  } finally {
+    if (state.controller === controller) state.controller = null;
+    $("#cancelProcessButton").disabled = false;
+  }
   state.switchIpChangeQueryId = result.historicalSwitchChangeQueryId || "";
   state.switchIpChangeTotal = result.historicalSwitchChangeTotal || 0;
   state.switchIpChangesOffset = 0;
@@ -4650,12 +4679,18 @@ async function runEnrichment() {
   }
   $("#enrichmentSummary").classList.remove("empty");
   const { historicalAddressSummary, appliedSmartroomSummary } = result.presentation;
+  const detectedVendors = (result.diagnostics.counts.vendorFromOui || 0)
+    + (result.diagnostics.counts.vendorFromSimilarDevices || 0)
+    + (result.diagnostics.counts.vendorFromText || 0);
+  const detectedModels = (result.diagnostics.counts.modelFromKnownMac || 0)
+    + (result.diagnostics.counts.modelFromMac5 || 0)
+    + (result.diagnostics.counts.modelFromSimilarDevices || 0);
   const historicalAddressCandidates = historicalAddressSummary.candidateIps;
   const appliedHistoricalAddressIps = historicalAddressSummary.appliedCount;
   let historicalAddressPage = null;
   try { historicalAddressPage = await loadHistoricalAddressDetailsPage(historicalAddressCandidates); }
   catch (error) { showError(error); }
-  $("#enrichmentSummary").innerHTML = `<h3>${result.metadata.reused ? "Этот набор файлов уже объединён" : "Final успешно сохранён"}</h3><p>Main raw: <strong>${result.diagnostics.counts.mainRaw}</strong> · Main unique: <strong>${result.diagnostics.counts.mainUnique}</strong> · после SmartRoom: <strong>${result.diagnostics.counts.afterSmartroom}</strong> · DDIO IP: <strong>${result.diagnostics.counts.ddioMatchedIp}</strong> · адрес из истории: <strong>${result.diagnostics.counts.historicalAddressFilled}</strong> · помещение по Smartroom ID из истории: <strong>${result.diagnostics.counts.historicalSmartroomRoomFilled}</strong> · Final: <strong>${result.diagnostics.counts.finalUnique}</strong></p><p>Несопоставленных: ${result.diagnostics.counts.unmatchedTotal ?? result.diagnostics.unmatched.length} (примеры ${result.diagnostics.unmatched.length}, пропущено ${result.diagnostics.counts.unmatchedTruncated || 0}) · конфликтов: ${result.diagnostics.counts.conflictsTotal ?? result.diagnostics.conflicts.length} (примеры ${result.diagnostics.conflicts.length}, пропущено ${result.diagnostics.counts.conflictsTruncated || 0}) · некорректных: ${result.diagnostics.counts.invalidTotal ?? result.diagnostics.invalid.length} (примеры ${result.diagnostics.invalid.length}, пропущено ${result.diagnostics.counts.invalidTruncated || 0})</p>${identityConflictDetails(result.diagnostics.conflicts, result.diagnostics.counts.identityConflictsTotal)}${finalHistoryComparisonDetails(result.diagnostics.historyComparison)}<div data-switch-ip-change-container>${historicalSwitchChangeDetails(switchIpChangePage)}</div>${historicalAddressDetails(appliedHistoricalAddressIps, historicalAddressPage)}${historicalSmartroomDetails(result.historicalRoomIndex, appliedSmartroomSummary.historicalCount)}${importedSmartroomDetails(result.importedSmartroomRoomIndex, appliedSmartroomSummary.importedCount)}`;
+  $("#enrichmentSummary").innerHTML = `<h3>${result.metadata.reused ? "Этот набор файлов уже объединён" : "Final успешно сохранён"}</h3><p>Main raw: <strong>${result.diagnostics.counts.mainRaw}</strong> · Main unique: <strong>${result.diagnostics.counts.mainUnique}</strong> · после SmartRoom: <strong>${result.diagnostics.counts.afterSmartroom}</strong> · DDIO IP: <strong>${result.diagnostics.counts.ddioMatchedIp}</strong> · адрес из истории: <strong>${result.diagnostics.counts.historicalAddressFilled}</strong> · помещение по Smartroom ID из истории: <strong>${result.diagnostics.counts.historicalSmartroomRoomFilled}</strong> · Final: <strong>${result.diagnostics.counts.finalUnique}</strong></p><p>Автоопределение: производитель заполнен у <strong>${detectedVendors}</strong> устройств (OUI, текст или похожие MAC); модель — у <strong>${detectedModels}</strong> (локальная база, MAC5 или похожие MAC). Определение модели ограничено доступными локальными правилами и данными Final.</p><p>Несопоставленных: ${result.diagnostics.counts.unmatchedTotal ?? result.diagnostics.unmatched.length} (примеры ${result.diagnostics.unmatched.length}, пропущено ${result.diagnostics.counts.unmatchedTruncated || 0}) · конфликтов: ${result.diagnostics.counts.conflictsTotal ?? result.diagnostics.conflicts.length} (примеры ${result.diagnostics.conflicts.length}, пропущено ${result.diagnostics.counts.conflictsTruncated || 0}) · некорректных: ${result.diagnostics.counts.invalidTotal ?? result.diagnostics.invalid.length} (примеры ${result.diagnostics.invalid.length}, пропущено ${result.diagnostics.counts.invalidTruncated || 0})</p>${identityConflictDetails(result.diagnostics.conflicts, result.diagnostics.counts.identityConflictsTotal)}${finalHistoryComparisonDetails(result.diagnostics.historyComparison)}<div data-switch-ip-change-container>${historicalSwitchChangeDetails(switchIpChangePage)}</div>${historicalAddressDetails(appliedHistoricalAddressIps, historicalAddressPage)}${historicalSmartroomDetails(result.historicalRoomIndex, appliedSmartroomSummary.historicalCount)}${importedSmartroomDetails(result.importedSmartroomRoomIndex, appliedSmartroomSummary.importedCount)}`;
   bindHistoricalAddressPager($("#enrichmentSummary [data-historical-address-details]"), appliedHistoricalAddressIps, historicalAddressCandidates);
   bindMappingIndexPager(
     $("#enrichmentSummary [data-historical-smartroom-details]"),
@@ -9291,7 +9326,7 @@ function renderSavedFinalSearchResults(rows) {
     const date = new Date(value || "");
     return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("ru-RU");
   };
-  container.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>MAC / ID</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Помещение / адрес</th><th>Final</th><th>Дата</th></tr></thead><tbody>${rows.map((row) => `<tr><td><button class="link-button" type="button" data-saved-final-snapshot="${escapeHtml(row.snapshotId)}" data-saved-final-index="${row.deviceIndex}">${escapeHtml(row.macFormatted)}</button></td><td>${escapeHtml(row.manufacturer || "—")}</td><td>${escapeHtml(row.model || "—")}</td><td>${escapeHtml(row.ip || "—")}</td><td>${escapeHtml(row.room || "—")}</td><td>${escapeHtml(row.snapshotName)}</td><td>${escapeHtml(dateText(row.snapshotCreatedAt))}</td></tr>`).join("")}</tbody></table></div>`;
+  container.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>MAC / ID</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Помещение</th><th>Адрес</th><th>Физический адрес</th><th>Final</th><th>Дата</th></tr></thead><tbody>${rows.map((row) => `<tr><td><button class="link-button" type="button" data-saved-final-snapshot="${escapeHtml(row.snapshotId)}" data-saved-final-index="${row.deviceIndex}">${escapeHtml(row.macFormatted)}</button></td><td>${escapeHtml(row.manufacturer || "—")}</td><td>${escapeHtml(row.model || "—")}</td><td>${escapeHtml(row.ip || "—")}</td><td>${escapeHtml(row.room || "—")}</td><td>${escapeHtml(row.address || "—")}</td><td>${escapeHtml(row.physicalAddress || "—")}</td><td>${escapeHtml(row.snapshotName)}</td><td>${escapeHtml(dateText(row.snapshotCreatedAt))}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 async function runSavedFinalSearch() {

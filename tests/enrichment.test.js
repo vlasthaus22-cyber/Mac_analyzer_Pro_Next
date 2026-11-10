@@ -1079,11 +1079,11 @@ test("Main can establish strong identity from a mapped alternate MAC column", as
   assert.deepEqual(result.devices[0].alternateMacs, ["AA:BB:CC:DD:EE:FF"]);
 });
 
-test("Main mapping carries vendor, model, room, address, and switch port into Final", async () => {
+test("Main mapping carries vendor, model, room, address, physical address, and switch port separately into Final", async () => {
   const result = await enrich({
-    mainRows: [["00:11:22:33:44:55", "Acme", "Board X", "Meeting Room 1", "Example Street 1", "Gi1/0/8"]],
+    mainRows: [["00:11:22:33:44:55", "Acme", "Board X", "Meeting Room 1", "Example Street 1", "Rack 2, Unit 4", "Gi1/0/8"]],
     mappings: {
-      main: { mac: 0, manufacturer: 1, model: 2, room: 3, address: 4, switchPort: 5 },
+      main: { mac: 0, manufacturer: 1, model: 2, room: 3, address: 4, physicalAddress: 5, switchPort: 6 },
       smartroom: {},
       ddio: {},
     },
@@ -1095,6 +1095,7 @@ test("Main mapping carries vendor, model, room, address, and switch port into Fi
     model: result.devices[0].model,
     room: result.devices[0].room,
     address: result.devices[0].address,
+    physicalAddress: result.devices[0].physicalAddress,
     switchPort: result.devices[0].switchPort,
   }, {
     mac: "00:11:22:33:44:55",
@@ -1102,6 +1103,7 @@ test("Main mapping carries vendor, model, room, address, and switch port into Fi
     model: "Board X",
     room: "Meeting Room 1",
     address: "Example Street 1",
+    physicalAddress: "Rack 2, Unit 4",
     switchPort: "Gi1/0/8",
   });
 });

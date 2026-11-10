@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.3.1 — 2026-11-10
+
+- The global Cancel button now interrupts more active tasks, and cancelling enrichment completes cleanly without leaving an error banner or partial Final data.
+- Saved-Final search now displays room, address, and physical address in separate columns. It no longer presents one field as a fallback for another.
+- Enrichment results report how many manufacturers and models were filled by local OUI, known-model/MAC5, text, or similar-device detection. Model inference remains evidence-based and does not invent a model when local rules and Final history have no unique match.
+- Regressions cover cancellation through the visible progress button, separate address fields, and the full local vendor/model pipeline.
+- Full `pnpm check`, browser smoke, release-readiness, and release archive verification passed.
+
 ## v2.3.0 — 2026-11-10
 
 - Analytics charts and KPI cards use a more compact layout to reduce scrolling.

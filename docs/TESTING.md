@@ -223,3 +223,5 @@ Smoke выбирает файл через CDP по локальному пут�
 
 Для реального UI roundtrip файлового кэша optional host (#462, #547) запустите актуальный HTML через изолированный loopback host с disposable каталогом данных, headless Chrome/Edge и уникальной IndexedDB, затем выполните
 `node tools/browser-smoke.mjs <devtools-port> <app-url> --workspace-cache-ui-only`. Smoke импортирует синтетический Main, сохраняет бинарную копию с token/SHA-256, перезагружает страницу, повторно входит в инженерский режим, восстанавливает исходник через интерфейс, сверяет digest/mapping и удаляет запись; пользовательские файлы не используются.
+
+Для v2.3.1 используйте две короткие browser smoke проверки с отдельным Edge-профилем и disposable IndexedDB. Для отмены активного enrichment запустите `node tools/browser-smoke.mjs 9333 $appUrl?smoke=escape-cancel`; сценарий нажимает кнопку прогресса «Отменить» и проверяет отсутствие частичной записи. Для поиска по сохранённому Final используйте `node tools/browser-smoke.mjs 9333 $appUrl?smoke=saved-final-fields`; он создаёт один синтетический Final и проверяет три отдельные колонки и значения: помещение, адрес и физический адрес.

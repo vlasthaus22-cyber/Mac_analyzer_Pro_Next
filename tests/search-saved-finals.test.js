@@ -59,6 +59,25 @@ test("saved Final search matches the same supported fields and bounds results", 
   assert.equal(truncated.scanned, 2);
 });
 
+test("saved Final search keeps room, postal address, and physical address as separate values", async () => {
+  const result = await searchSavedFinalSnapshots("10.20.30.40", {
+    snapshots: [{ id: "mapped", name: "Mapped Final" }],
+    iterateSnapshotDevices: async function* () {
+      yield {
+        mac: "00:11:22:33:44:88",
+        room: "Office 14",
+        address: "Building B, Example Street 10",
+        physicalAddress: "Rack 2, Unit 4",
+        ip: "10.20.30.40",
+      };
+    },
+  });
+  assert.deepEqual(
+    [result.rows[0].room, result.rows[0].address, result.rows[0].physicalAddress],
+    ["Office 14", "Building B, Example Street 10", "Rack 2, Unit 4"],
+  );
+});
+
 test("saved Final search finds a device by its user-defined custom field", async () => {
   const result = await searchSavedFinalSnapshots("North closet", {
     snapshots: [{ id: "custom", name: "Custom fields" }],

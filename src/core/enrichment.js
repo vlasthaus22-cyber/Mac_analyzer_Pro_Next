@@ -838,6 +838,7 @@ async function applyLocalVendorModelKnowledgeBatches(devices, {
   knownModels,
   loadKnownModels,
   loadMac5Models,
+  counts = {},
   signal,
 }) {
   await forEachDevicePage(devices, async (rows) => {
@@ -848,7 +849,11 @@ async function applyLocalVendorModelKnowledgeBatches(devices, {
       const lookup = typeof loadOuiIndex === "function" ? await loadOuiIndex(missingVendorMacs) : ouiIndex;
       assertBrowserHeapReserve();
       throwIfAborted(signal);
-      for (const device of rows) if (applyOuiKnowledge(device, lookup, detectorSettings, inferenceProfile)) changed = true;
+      for (const device of rows) {
+        if (!applyOuiKnowledge(device, lookup, detectorSettings, inferenceProfile)) continue;
+        changed = true;
+        counts.vendorFromOui = (counts.vendorFromOui || 0) + 1;
+      }
     }
 
     const missingModelMacs = [];
@@ -857,7 +862,11 @@ async function applyLocalVendorModelKnowledgeBatches(devices, {
       const lookup = typeof loadKnownModels === "function" ? await loadKnownModels(missingModelMacs) : knownModels;
       assertBrowserHeapReserve();
       throwIfAborted(signal);
-      for (const device of rows) if (applyModelKnowledge(device, lookup, null, detectorSettings, false)) changed = true;
+      for (const device of rows) {
+        if (!applyModelKnowledge(device, lookup, null, detectorSettings, false)) continue;
+        changed = true;
+        counts.modelFromKnownMac = (counts.modelFromKnownMac || 0) + 1;
+      }
     }
 
     if (detectorSettings.enabled && detectorSettings.useMac5) {
@@ -870,7 +879,11 @@ async function applyLocalVendorModelKnowledgeBatches(devices, {
         );
         assertBrowserHeapReserve();
         throwIfAborted(signal);
-        for (const device of rows) if (applyModelKnowledge(device, null, rules, detectorSettings)) changed = true;
+        for (const device of rows) {
+          if (!applyModelKnowledge(device, null, rules, detectorSettings)) continue;
+          changed = true;
+          counts.modelFromMac5 = (counts.modelFromMac5 || 0) + 1;
+        }
       }
     }
     return { changed };
@@ -1323,6 +1336,7 @@ export async function enrich(options = {}) {
   if (useWebHistoryPrecedence) await applyHistoricalVendorModelSuggestions();
 
   await progress(82, "Производители и модели");
+  const localDetectionCounts = diagnostics.counts;
   await applyLocalVendorModelKnowledgeBatches(devices, {
     detectorSettings,
     inferenceProfile: historySettings.precedenceProfile,
@@ -1331,6 +1345,7 @@ export async function enrich(options = {}) {
     knownModels,
     loadKnownModels,
     loadMac5Models: typeof loadMac5Models === "function" ? loadMac5Models : () => mac5Models,
+    counts: localDetectionCounts,
     signal,
   });
   const detectionCounts = await applyVendorDetectionAsync(devices, {

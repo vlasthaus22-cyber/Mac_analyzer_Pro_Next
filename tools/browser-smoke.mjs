@@ -4586,19 +4586,17 @@ if (requestedSmokeUrl?.searchParams.get("smoke") === "escape-cancel") {
   if (!mainMapping.some(([field, value]) => field === "mac" && value === "0")) throw new Error(`Main source did not retain a strong MAC identity mapping: ${JSON.stringify(mainMapping)}`);
   await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
   await waitForActiveProgress("Обогащение", "Чтение MAIN:");
-  const enrichmentEscapePrevented = await pressEscape();
-  if (!enrichmentEscapePrevented) throw new Error("Escape was not consumed while enrichment was active");
+  await evaluate(`document.querySelector('#cancelProcessButton').click()`);
   let enrichmentState = null;
   for (let attempt = 0; attempt < 500; attempt += 1) {
     await wait(20);
-    enrichmentState = await evaluate(`(()=>({error:!document.querySelector('#errorBanner').hidden,errorText:document.querySelector('#errorBanner span').textContent}))()`);
-    if (enrichmentState.error) break;
+    enrichmentState = await evaluate(`(()=>({error:!document.querySelector('#errorBanner').hidden,errorText:document.querySelector('#errorBanner span').textContent,detail:document.querySelector('#progressDetail').textContent,buttonDisabled:document.querySelector('#cancelProcessButton').disabled}))()`);
+    if (enrichmentState.detail.includes("Объединение отменено") && !enrichmentState.buttonDisabled) break;
   }
-  if (!enrichmentState?.error || !/abort|cancel|отмен/i.test(enrichmentState.errorText)) throw new Error(`Live enrichment did not report its abort after Escape: ${JSON.stringify(enrichmentState)}`);
+  if (!enrichmentState || enrichmentState.error || !enrichmentState.detail.includes("Объединение отменено")) throw new Error(`The progress-panel cancel button did not stop enrichment cleanly: ${JSON.stringify(enrichmentState)}`);
   const persistedFinals = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['snapshots','inventory'],'readonly');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();tx.oncomplete=()=>{db.close();resolve({snapshots:snapshots.result,inventory:inventory.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   if (persistedFinals.snapshots || persistedFinals.inventory) throw new Error(`Cancelled enrichment wrote partial user data: ${JSON.stringify(persistedFinals)}`);
-  const cancellationErrorDismissed = await pressEscape();
-  if (!cancellationErrorDismissed || !(await evaluate(`document.querySelector('#errorBanner').hidden`))) throw new Error("Escape did not dismiss the cancellation error banner before the context-menu/dialog checks");
+  if (!(await evaluate(`document.querySelector('#errorBanner').hidden`))) throw new Error("Clean cancellation unexpectedly left an error banner visible");
 
   const menuEscape = await evaluate(`(()=>{const menu=document.querySelector('#deviceContextMenu');menu.hidden=false;const event=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});document.dispatchEvent(event);return{hidden:menu.hidden,prevented:event.defaultPrevented}})()`);
   if (!menuEscape.hidden || !menuEscape.prevented) throw new Error(`Escape did not dismiss the context menu first: ${JSON.stringify(menuEscape)}`);
@@ -4616,7 +4614,43 @@ if (requestedSmokeUrl?.searchParams.get("smoke") === "escape-cancel") {
   const nativeEscapeWasNotIntercepted = nativeDialogState.events.length > 0 && nativeDialogState.events.every((event) => !event.defaultPrevented);
   if (!nativeEscapeWasNotIntercepted) throw new Error(`Application intercepted native-dialog Escape: ${JSON.stringify(nativeDialogState)}`);
   if (nativeDialogState.open) await evaluate(`document.querySelector('#detailsDialog').close()`);
-  console.log(`browser smoke: Escape cancelled live single-file analysis, two-file comparison, and enrichment without partial writes; context menu closed; native-dialog Escape was not intercepted${nativeDialogState.open ? " (CDP did not invoke browser default close)" : " and closed the dialog"}`);
+  console.log(`browser smoke: Escape cancelled live single-file analysis and two-file comparison; progress-panel Cancel stopped enrichment without partial writes or an error banner; context menu closed; native-dialog Escape was not intercepted${nativeDialogState.open ? " (CDP did not invoke browser default close)" : " and closed the dialog"}`);
+  await command("Browser.close"); socket.close(); process.exit(0);
+}
+
+if (requestedSmokeUrl?.searchParams.get("smoke") === "saved-final-fields") {
+  await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
+  const csv = "MAC;Помещение;Адрес;Физический адрес\n00:11:22:33:44:99;Smoke Room 99;Building B 99;Rack 2 Unit 99\n";
+  const assignment = await evaluate(`(()=>{const input=document.querySelector('#mainFileInput');const transfer=new DataTransfer();transfer.items.add(new File([${JSON.stringify(csv)}],'saved-search-fields.csv',{type:'text/csv'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+  if (!assignment) throw new Error("Saved-search field smoke could not assign its synthetic CSV");
+  let mappingReady = false;
+  for (let attempt = 0; attempt < 250; attempt += 1) {
+    await wait(20);
+    mappingReady = await evaluate(`Boolean(document.querySelector('#mainMapping [data-mapping-field="mac"]'))`);
+    if (mappingReady) break;
+  }
+  if (!mappingReady) throw new Error("Saved-search field smoke did not receive the Main mapping controls");
+  await evaluate(`(()=>{const assignments={mac:0,room:1,address:2,physicalAddress:3};for(const [field,index] of Object.entries(assignments)){const select=document.querySelector('#mainMapping [data-mapping-field="'+field+'"]');if(!select)throw new Error('Missing field mapping '+field);select.value=String(index);select.dispatchEvent(new Event('change',{bubbles:true}))}document.querySelector('#runEnrichmentButton').click();return true})()`);
+  let saved = null;
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    await wait(20);
+    saved = await evaluate(`(()=>({title:document.querySelector('#enrichmentSummary h3')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,progress:!document.querySelector('#progressPanel').hidden}))()`);
+    if (saved.title.includes('Final успешно сохранён') || saved.error) break;
+  }
+  if (!saved?.title.includes('Final успешно сохранён') || saved.error) throw new Error(`Synthetic Final for saved-search field smoke did not complete: ${JSON.stringify(saved)}`);
+  await evaluate(`document.querySelector('[data-view="search"]').click();const input=document.querySelector('#globalSearch');input.value='00:11:22:33:44:99';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#searchSavedFinalsButton').click()`);
+  let result = null;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(20);
+    result = await evaluate(`(()=>({status:document.querySelector('#savedFinalSearchStatus').textContent,headers:[...document.querySelectorAll('#savedFinalSearchResults thead th')].slice(4,7).map((node)=>node.textContent.replace(/[↕↑↓]/g,'').trim()),values:[...document.querySelectorAll('#savedFinalSearchResults tbody tr:first-child td')].slice(4,7).map((node)=>node.textContent.trim()),rows:document.querySelectorAll('#savedFinalSearchResults tbody tr').length,error:!document.querySelector('#errorBanner').hidden}))()`);
+    if (result.status.includes('Найдено уникальных MAC:') || result.error) break;
+  }
+  if (result?.error || result.rows !== 1
+    || JSON.stringify(result.headers) !== JSON.stringify(['Помещение','Адрес','Физический адрес'])
+    || JSON.stringify(result.values) !== JSON.stringify(['Smoke Room 99','Building B 99','Rack 2 Unit 99'])) {
+    throw new Error(`Saved-Final search merged or lost distinct address fields: ${JSON.stringify(result)}`);
+  }
+  console.log('browser smoke: saved-Final search displays exact room, address, and physical-address values in separate columns');
   await command("Browser.close"); socket.close(); process.exit(0);
 }
 
@@ -6108,7 +6142,27 @@ if (process.env.BROWSER_SMOKE_SAVED_FINAL_SEARCH_ONLY === "1" || process.argv.in
       const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readwrite');
       const setting=tx.objectStore('settings').get('activeSnapshotId');
       let baseId='';let metadata=null;const chunks=[];let clonedIds=[];
-      setting.onsuccess=()=>{baseId=setting.result?.value||'';if(!baseId){tx.abort();reject(new Error('No active Final to clone'));return}const request=tx.objectStore('snapshots').get(baseId);request.onsuccess=()=>{metadata=request.result;if(!metadata){tx.abort();reject(new Error('Active Final metadata is missing'));return}const cursorRequest=tx.objectStore('snapshotChunks').openCursor();cursorRequest.onsuccess=()=>{const cursor=cursorRequest.result;if(cursor){if(cursor.value.snapshotId===baseId)chunks.push(cursor.value);cursor.continue();return}if(chunks.length!==metadata.chunkCount){tx.abort();reject(new Error('Active Final chunks are incomplete'));return}for(let copy=1;copy<=2;copy+=1){const id='saved-final-search-copy-'+copy;clonedIds.push(id);tx.objectStore('snapshots').put({...metadata,id,name:'Saved search copy '+copy,createdAt:new Date(Date.parse(metadata.createdAt)+copy*1000).toISOString(),sourceKey:'saved-final-search-copy:'+copy});for(const chunk of chunks)tx.objectStore('snapshotChunks').put({...chunk,snapshotId:id})}}}};
+      setting.onsuccess=()=>{
+        baseId=setting.result?.value||'';
+        if(!baseId){tx.abort();reject(new Error('No active Final to clone'));return}
+        const request=tx.objectStore('snapshots').get(baseId);
+        request.onsuccess=()=>{
+          metadata=request.result;
+          if(!metadata){tx.abort();reject(new Error('Active Final metadata is missing'));return}
+          const cursorRequest=tx.objectStore('snapshotChunks').openCursor();
+          cursorRequest.onsuccess=()=>{
+            const cursor=cursorRequest.result;
+            if(cursor){if(cursor.value.snapshotId===baseId)chunks.push(cursor.value);cursor.continue();return}
+            if(chunks.length!==metadata.chunkCount){tx.abort();reject(new Error('Active Final chunks are incomplete'));return}
+            for(let copy=1;copy<=2;copy+=1){
+              const id='saved-final-search-copy-'+copy;
+              clonedIds.push(id);
+              tx.objectStore('snapshots').put({...metadata,id,name:'Saved search copy '+copy,createdAt:new Date(Date.parse(metadata.createdAt)+copy*1000).toISOString(),sourceKey:'saved-final-search-copy:'+copy});
+              for(const chunk of chunks) tx.objectStore('snapshotChunks').put({...chunk,snapshotId:id});
+            }
+          };
+        };
+      };
       tx.oncomplete=()=>{db.close();resolve({baseId,clonedIds,chunkCount:chunks.length})};
       tx.onerror=()=>{db.close();reject(tx.error)};tx.onabort=()=>{db.close();reject(tx.error||new Error('Could not seed duplicate Final records'))};
     };

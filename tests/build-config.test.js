@@ -956,6 +956,9 @@ test("saved Final search is reachable and renders a bounded, cancellable histori
   assert.ok(app.includes("iterateSnapshotDevices: (snapshotId) => database.iterateSnapshotDevices(snapshotId),"));
   assert.ok(app.includes("data-saved-final-snapshot"));
   assert.ok(app.includes("savedFinalSearchController?.abort()"));
+  assert.match(app, /state\.tableController,\s*savedFinalSearchController,\s*pyqtClusteringController/);
+  assert.ok(app.includes("<th>Адрес</th>"));
+  assert.ok(app.includes("<th>Физический адрес</th>"));
   assert.ok(app.includes('"ctrl+shift+f": () => { activateView("search"); runSavedFinalSearch().catch(showError); },'));
   assert.ok(search.includes("for (let snapshotIndex = snapshots.length - 1; snapshotIndex >= 0; snapshotIndex -= 1)"));
   assert.ok(search.includes("seenIdentities.has(identityKey)"));
@@ -2858,7 +2861,7 @@ test("streamed OUI imports commit each normalized row batch without retaining th
   assert.match(importBody, /const records = ouiRecords\(\{ headers: table\.headers, rows \}, columns\);[\s\S]*?await database\.importOui\(records\);[\s\S]*?imported \+= records\.length/);
   assert.match(importBody, /error\?\.name !== "AbortError"/);
   assert.match(importBody, /сохранено \$\{imported\.toLocaleString\("ru-RU"\)\} префиксов/);
-  assert.match(app, /function cancelActiveProcess\(\)\s*\{\s*return abortActiveControllers\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller, state\.ouiImportController\]\)/);
+  assert.match(app, /function cancelActiveProcess\(\)\s*\{\s*const aborted = abortActiveControllers\(/);
   assert.doesNotMatch(importBody, /records\.push\(\.\.\.ouiRecords/);
 });
 
@@ -3232,10 +3235,11 @@ test("multi-file comparison accepts JSON and streams it through the shared row-b
   assert.match(multiCompareCsvExport, /downloadReadableStream\(filename, stream, "text\/csv;charset=utf-8"/);
   assert.match(app, /async function runMultiCompareCancellable\(title, action\)[\s\S]*?state\.controller = controller;[\s\S]*?controller\.signal\.aborted/);
   assert.match(app, /readTableRowBatches\(entry\.file, \{\s*batchSize: 500,\s*signal,/);
-  assert.match(app, /function cancelActiveProcess\(\)\s*\{\s*return abortActiveControllers\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller, state\.ouiImportController\]\)/);
+  assert.match(app, /function cancelActiveProcess\(\)\s*\{\s*const aborted = abortActiveControllers\(/);
   assert.match(app, /escape: \(\) => \{[\s\S]*?escapeActionTarget\([\s\S]*?errorVisible: !\$\("#errorBanner"\)\.hidden[\s\S]*?target === "error"\) dismissErrorBanner/);
   assert.match(app, /if \(shortcut === "escape"\) \{\s*if \(action\(\)\) event\.preventDefault\(\);\s*return;/);
-  assert.match(app, /return abortActiveControllers\(\[state\.controller, state\.singleFileController, state\.fileCompare\.controller, state\.ouiImportController\]\)/);
+  assert.match(app, /function cancelActiveProcess\(\)[\s\S]*?state\.tableController,[\s\S]*?savedFinalSearchController,[\s\S]*?pyqtClusteringController/);
+  assert.match(app, /Объединение отменено/);
   assert.match(app, /cancelProcessButton"\)\.addEventListener\("click", cancelActiveProcess\)/);
   assert.match(app, /async function runSingleFileAnalysis\(\)[\s\S]*?runSingleFileAnalysisTask\([\s\S]*?finally\s*\{[\s\S]*?runSingleAnalysisButton/);
   assert.match(app, /async function runFileCompare\(\)[\s\S]*?finally\s*\{[\s\S]*?runFileCompareButton/);
