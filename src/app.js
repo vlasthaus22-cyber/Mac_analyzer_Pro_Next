@@ -318,6 +318,9 @@ const state = {
   scheduledBatches: new Map(),
   legacyTaskSchedulers: new Map(),
   singleFile: { file: null, table: null, mapping: {}, mappingReviewed: false, result: null, sheets: [], sheetName: "" },
+  singleAnalysisDevicePage: 1,
+  singleAnalysisDevicePageSize: 100,
+  singleAnalysisDevicePageRequest: 0,
   singleAnalysisHistory: { query: "", page: 1, result: null },
   singleFileRevision: 0,
   singleFileController: null,
@@ -2939,6 +2942,7 @@ function singleAnalysisJsonPayload(result) {
 }
 
 function renderSingleAnalysis(result) {
+  Promise.resolve().then(() => renderSingleAnalysisDevices(result, 1)).catch(showError);
   const { summary } = result;
   const counts = [
     ["Строк", summary.rows], ["Уникальных устройств", summary.valid], ["Уникальных MAC", summary.uniqueMacs],
@@ -2962,6 +2966,44 @@ function renderSingleAnalysis(result) {
     : '<p class="muted">Конфликтующих соответствий нет.</p>';
   $("#singleAnalysisResult").classList.remove("empty");
   $("#singleAnalysisResult").innerHTML = `<div class="kpi-grid">${counts.map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number(value).toLocaleString("ru-RU")}</strong></article>`).join("")}</div><div class="analytics-grid">${ranking("Производители", summary.manufacturers)}${ranking("Модели", summary.models)}${ranking("Помещения", summary.rooms)}</div><h3>Распознанные устройства · показаны первые ${shown.length} из ${summary.valid}</h3>${shown.length ? `<div class="table-scroll"><table class="data-table"><thead><tr>${columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${shown.map((device) => `<tr>${columns.map(([field]) => `<td>${escapeHtml(Array.isArray(device[field]) ? device[field].join(", ") : device[field] || "—")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : '<p class="empty">Устройства с сильным идентификатором не найдены.</p>'}<h3>Строки без сильного идентификатора · показаны первые ${invalid.length} из ${summary.invalid}</h3>${invalid.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Строка</th><th>Исходный MAC</th><th>Причина</th><th>Рекомендация</th><th>Данные</th></tr></thead><tbody>${invalid.map((item) => `<tr><td>${item.row}</td><td>${escapeHtml(item.rawMac || "—")}</td><td>${escapeHtml(item.reason)}</td><td>${escapeHtml(item.recommendation)}</td><td>${escapeHtml(item.values.join(" · "))}</td></tr>`).join("")}</tbody></table></div>` : '<p class="muted">Ошибок идентификации нет.</p>'}${invalidMacs.length ? `<h3>Некорректные MAC · первые ${invalidMacs.length} из ${summary.invalidMacs}</h3><div class="table-scroll"><table class="data-table"><thead><tr><th>Строка</th><th>Исходное значение</th><th>Причина</th><th>Рекомендация</th></tr></thead><tbody>${invalidMacs.map((item) => `<tr><td>${item.row}</td><td>${escapeHtml(item.value)}</td><td>${escapeHtml(item.reason)}</td><td>${escapeHtml(item.recommendation)}</td></tr>`).join("")}</tbody></table></div>` : ""}${ambiguousHtml}${identityConflictHtml}`;
+}
+
+async function renderSingleAnalysisDevices(result, requestedPage = 1) {
+  const hostRoot = $("#singleAnalysisResult");
+  if (!hostRoot || !result) return;
+  const heading = [...hostRoot.querySelectorAll("h3")].find((item) => item.textContent.startsWith("Распознанные устройства"));
+  if (!heading) return;
+  const oldContent = heading.nextElementSibling;
+  const host = document.createElement("div");
+  host.id = "singleAnalysisDevicesPage";
+  if (oldContent) oldContent.replaceWith(host);
+  else heading.after(host);
+  const request = ++state.singleAnalysisDevicePageRequest;
+  const pageSize = state.singleAnalysisDevicePageSize;
+  let page;
+  if (result.singleAnalysisId) {
+    page = await database.singleAnalysisDevicesPage(result.singleAnalysisId, { offset: (requestedPage - 1) * pageSize, limit: pageSize });
+  } else {
+    const devices = Array.isArray(result.devices) ? result.devices : [];
+    const pageCount = Math.max(1, Math.ceil(devices.length / pageSize));
+    const pageNumber = Math.min(pageCount, Math.max(1, Math.floor(Number(requestedPage) || 1)));
+    const offset = (pageNumber - 1) * pageSize;
+    page = { rows: devices.slice(offset, offset + pageSize), total: result.summary.valid, offset, limit: pageSize, page: pageNumber, pageCount, hasPrevious: pageNumber > 1, hasNext: pageNumber < pageCount };
+  }
+  if (request !== state.singleAnalysisDevicePageRequest || !host.isConnected) return;
+  state.singleAnalysisDevicePage = page.page;
+  heading.textContent = `Распознанные устройства · показано ${Math.min(page.offset + page.rows.length, page.total).toLocaleString("ru-RU")} из ${page.total.toLocaleString("ru-RU")}`;
+  const columns = [["mac", "MAC"], ["manufacturer", "Производитель"], ["model", "Модель"], ["ip", "IP"], ["switchIp", "IP коммутатора"], ["room", "Помещение"], ["address", "Адрес"], ["sourceRows", "Строки"]];
+  const rows = page.rows.map((device) => ({ ...device, sourceRows: formatSingleFileSourceRows(device) }));
+  const pager = page.pageCount > 1
+    ? `<div class="action-row"><span class="muted">Страница ${page.page.toLocaleString("ru-RU")} из ${page.pageCount.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-single-analysis-device-page="${page.page - 1}" ${page.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-single-analysis-device-page="${page.page + 1}" ${page.hasNext ? "" : "disabled"}>Дальше</button></div>`
+    : "";
+  host.innerHTML = rows.length
+    ? `<div class="table-scroll"><table class="data-table"><thead><tr>${columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${rows.map((device) => `<tr>${columns.map(([field]) => `<td>${escapeHtml(Array.isArray(device[field]) ? device[field].join(", ") : device[field] || "—")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${pager}`
+    : '<p class="empty">Устройства с сильным идентификатором не найдены.</p>';
+  host.querySelectorAll("[data-single-analysis-device-page]").forEach((button) => button.addEventListener("click", () => {
+    renderSingleAnalysisDevices(result, Number(button.dataset.singleAnalysisDevicePage)).catch(showError);
+  }));
 }
 
 async function renderSingleAnalysisHistory() {
@@ -3255,6 +3297,7 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
     if (stagedDeviceStore?.count) await database.clearAnalyticsAggregateQuery(stagedDeviceStore.queryId);
     await database.attachSingleAnalysisSnapshot(savedAnalysis.id, finalSnapshot.id);
     state.singleFile.result = result;
+    renderSingleAnalysis(result);
     $("#singleAnalysisPersistenceStatus").textContent = `Снимок одиночного анализа сохранён в локальную историю: ${finalSnapshot.name}${finalSnapshot.reused ? " · набор уже был сохранён" : ""}.`;
     recordLocalNotification("analysis", "Анализ одного файла завершён", `Обработано устройств: ${finalSnapshot.deviceCount.toLocaleString("ru-RU")}.`, "success", { snapshotId: finalSnapshot.id, fileName: file.name, deviceCount: finalSnapshot.deviceCount, processingTimeMs: Math.max(0, Math.round(performance.now() - startedAt)) }).catch(showError);
     state.analytics = null;
@@ -3269,6 +3312,7 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
     if (savedAnalysisRecord) {
       result.singleAnalysisId = savedAnalysisRecord.id;
       state.singleFile.result = result;
+      renderSingleAnalysis(result);
       $("#exportSingleCsvButton").disabled = false;
       $("#exportSingleJsonButton").disabled = false;
       const context = savedFinalSnapshot
@@ -4440,6 +4484,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
       consumeDevices: true,
       sourceFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, name: file.name, size: file.size, lastModified: file.lastModified || 0, date: fileObservationDate(file, tables[role]?.workbookCreatedAt, tables[role]?.workbookModifiedAt) })),
       originalFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, file })),
+      signal: state.controller?.signal,
     }).catch(async (error) => {
       error.batchStage = "атомарное сохранение Final";
       if (historicalSwitchChangeQueryId) await database.clearAnalyticsAggregateQuery(historicalSwitchChangeQueryId).catch(() => {});
@@ -4691,6 +4736,13 @@ async function runEnrichment() {
   try { historicalAddressPage = await loadHistoricalAddressDetailsPage(historicalAddressCandidates); }
   catch (error) { showError(error); }
   $("#enrichmentSummary").innerHTML = `<h3>${result.metadata.reused ? "Этот набор файлов уже объединён" : "Final успешно сохранён"}</h3><p>Main raw: <strong>${result.diagnostics.counts.mainRaw}</strong> · Main unique: <strong>${result.diagnostics.counts.mainUnique}</strong> · после SmartRoom: <strong>${result.diagnostics.counts.afterSmartroom}</strong> · DDIO IP: <strong>${result.diagnostics.counts.ddioMatchedIp}</strong> · адрес из истории: <strong>${result.diagnostics.counts.historicalAddressFilled}</strong> · помещение по Smartroom ID из истории: <strong>${result.diagnostics.counts.historicalSmartroomRoomFilled}</strong> · Final: <strong>${result.diagnostics.counts.finalUnique}</strong></p><p>Автоопределение: производитель заполнен у <strong>${detectedVendors}</strong> устройств (OUI, текст или похожие MAC); модель — у <strong>${detectedModels}</strong> (локальная база, MAC5 или похожие MAC). Определение модели ограничено доступными локальными правилами и данными Final.</p><p>Несопоставленных: ${result.diagnostics.counts.unmatchedTotal ?? result.diagnostics.unmatched.length} (примеры ${result.diagnostics.unmatched.length}, пропущено ${result.diagnostics.counts.unmatchedTruncated || 0}) · конфликтов: ${result.diagnostics.counts.conflictsTotal ?? result.diagnostics.conflicts.length} (примеры ${result.diagnostics.conflicts.length}, пропущено ${result.diagnostics.counts.conflictsTruncated || 0}) · некорректных: ${result.diagnostics.counts.invalidTotal ?? result.diagnostics.invalid.length} (примеры ${result.diagnostics.invalid.length}, пропущено ${result.diagnostics.counts.invalidTruncated || 0})</p>${identityConflictDetails(result.diagnostics.conflicts, result.diagnostics.counts.identityConflictsTotal)}${finalHistoryComparisonDetails(result.diagnostics.historyComparison)}<div data-switch-ip-change-container>${historicalSwitchChangeDetails(switchIpChangePage)}</div>${historicalAddressDetails(appliedHistoricalAddressIps, historicalAddressPage)}${historicalSmartroomDetails(result.historicalRoomIndex, appliedSmartroomSummary.historicalCount)}${importedSmartroomDetails(result.importedSmartroomRoomIndex, appliedSmartroomSummary.importedCount)}`;
+  const rekeyedIds = Number(result.diagnostics.counts.duplicateInternalIdsRekeyed) || 0;
+  if (rekeyedIds) {
+    const note = document.createElement("p");
+    note.className = "notice";
+    note.textContent = `Автоматически исправлены повторные внутренние ID: ${rekeyedIds}. Исходные значения сохранены для проверки.`;
+    $("#enrichmentSummary h3").after(note);
+  }
   bindHistoricalAddressPager($("#enrichmentSummary [data-historical-address-details]"), appliedHistoricalAddressIps, historicalAddressCandidates);
   bindMappingIndexPager(
     $("#enrichmentSummary [data-historical-smartroom-details]"),

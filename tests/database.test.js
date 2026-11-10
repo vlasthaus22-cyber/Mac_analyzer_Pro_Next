@@ -7773,6 +7773,12 @@ test("single-file analysis history stores and restores bounded chunks, filters m
   assert.equal(preview.result.diagnostics.invalid.length, 2);
   assert.equal(preview.result.diagnostics.invalidTotal, 1_205);
   assert.equal(preview.result.diagnostics.invalidTruncated, 1_203);
+  const page = await database.singleAnalysisDevicesPage("analysis-a", { offset: 1_000, limit: 100 });
+  assert.equal(page.total, devices.length);
+  assert.equal(page.rows.length, 5);
+  assert.deepEqual(page.rows, devices.slice(1_000));
+  assert.equal(page.hasPrevious, true);
+  assert.equal(page.hasNext, false);
   const deviceBatches = [];
   for await (const batch of database.singleAnalysisDeviceChunks("analysis-a")) deviceBatches.push(batch);
   assert.equal(deviceBatches.reduce((total, batch) => total + batch.length, 0), devices.length);
@@ -7803,6 +7809,21 @@ test("single-file analysis persistence reads staged device pages and stores the 
   assert.equal(metadata.deviceCount, devices.length);
   const restored = await database.loadSingleAnalysis("staged-analysis");
   assert.deepEqual(restored.result.devices, devices);
+});
+
+test("cancelling Final commit aborts the atomic write without replacing active data", async () => {
+  const database = new Database(`cancel-final-commit-${crypto.randomUUID()}`);
+  const before = await database.saveFinal({ id: "cancel-before", devices: [{ id: "before", mac: "00:11:22:33:44:01" }] });
+  const controller = new globalThis.AbortController();
+  await assert.rejects(database.saveFinal({
+    id: "cancel-during-commit",
+    devices: Array.from({ length: 501 }, (_, index) => ({ id: `cancel-${index}`, mac: `00:11:22:33:${String(index >> 8).padStart(2, "0")}:${String(index & 255).padStart(2, "0")}` })),
+    signal: controller.signal,
+    onProgress: ({ phase }) => { if (phase === "chunk") controller.abort(); },
+  }), { name: "AbortError" });
+  assert.equal((await database.activeSnapshot()).id, before.id);
+  assert.equal((await database.listSnapshots()).some(({ id }) => id === "cancel-during-commit"), false);
+  assert.equal(await database.inventoryCount(), 1);
 });
 
 test("scheduled staged analysis persists its full roster before Final consumes the stage", async () => {

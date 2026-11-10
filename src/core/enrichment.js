@@ -122,7 +122,7 @@ async function deviceIdAt(devices, position, pageRows, pageOffset) {
   return row[0]?.id;
 }
 
-async function assertUniqueDeviceIds(devices, signal) {
+async function assertUniqueDeviceIds(devices, signal, diagnostics) {
   const count = deviceCount(devices);
   if (!count) return;
   let capacity = 1;
@@ -134,9 +134,10 @@ async function assertUniqueDeviceIds(devices, signal) {
   const positions = new Uint32Array(capacity);
   const mask = capacity - 1;
   await forEachDevicePage(devices, async (rows, pageOffset) => {
+    let changed = false;
     for (let pageIndex = 0; pageIndex < rows.length; pageIndex += 1) {
       const index = pageOffset + pageIndex;
-      const id = String(rows[pageIndex]?.id || "");
+      let id = String(rows[pageIndex]?.id || "");
       let hash = 0x811c9dc5;
       for (let offset = 0; offset < id.length; offset += 1) {
         hash ^= id.charCodeAt(offset);
@@ -147,14 +148,52 @@ async function assertUniqueDeviceIds(devices, signal) {
       while (positions[slot]) {
         const previousIndex = positions[slot] - 1;
         if (hashes[slot] === hash && await deviceIdAt(devices, previousIndex, rows, pageOffset) === id) {
-          throw new Error("После обогащения обнаружены дубли внутренних ID");
+          const device = rows[pageIndex];
+          if (device.id && !device.sourceInternalId) device.sourceInternalId = String(device.id);
+          device.id = stableId({ ...device, id: "", internalDeviceId: "", internal_device_id: "" }, `duplicate-recovery-${index}`);
+          id = String(device.id);
+          diagnostics.counts.duplicateInternalIdsRekeyed = (diagnostics.counts.duplicateInternalIdsRekeyed || 0) + 1;
+          addDiagnosticConflict(diagnostics, {
+            source: "Final",
+            row: index + 1,
+            field: "identity",
+            reason: "Повторный внутренний ID переименован детерминированно; исходный ID сохранён как sourceInternalId",
+            selected: device.sourceInternalId || "",
+            alternative: id,
+          });
+          hash = 0x811c9dc5;
+          for (let offset = 0; offset < id.length; offset += 1) {
+            hash ^= id.charCodeAt(offset);
+            hash = Math.imul(hash, 0x01000193);
+          }
+          hash >>>= 0;
+          slot = hash & mask;
+          changed = true;
+          while (positions[slot]) {
+            const existingIndex = positions[slot] - 1;
+            if (hashes[slot] === hash && await deviceIdAt(devices, existingIndex, rows, pageOffset) === id) {
+              device.id = stableId({ ...device, id: "" }, `duplicate-recovery-${index}-${slot}`);
+              id = String(device.id);
+              hash = 0x811c9dc5;
+              for (let offset = 0; offset < id.length; offset += 1) {
+                hash ^= id.charCodeAt(offset);
+                hash = Math.imul(hash, 0x01000193);
+              }
+              hash >>>= 0;
+              slot = hash & mask;
+              continue;
+            }
+            slot = (slot + 1) & mask;
+          }
+          break;
         }
         slot = (slot + 1) & mask;
       }
       hashes[slot] = hash;
       positions[slot] = index + 1;
     }
-  }, { signal, writeBack: false });
+    return { changed };
+  }, { signal, writeBack: (_rows, result) => result?.changed === true });
 }
 
 const MERGE_FIELDS = [
@@ -494,6 +533,24 @@ export async function findStagedIdentityMatch(candidate, identityIndex, deviceSt
   return findIdentityMatch(candidate, { devices, tokens: identityIndex.tokens });
 }
 
+function assignUniqueInternalId(candidate, identityConflict, diagnostics, source, rowNumber) {
+  if (identityConflict && candidate.id) {
+    // Keep a conflicting source ID as provenance, while giving this distinct
+    // device an internal key based on its other strong identity.
+    candidate.sourceInternalId = String(candidate.id);
+    candidate.id = stableId({ ...candidate, id: "", internalDeviceId: "", internal_device_id: "" });
+    retainDiagnosticSample(diagnostics, "decisions", {
+      action: "DISAMBIGUATED_SOURCE_ID",
+      source,
+      row: rowNumber,
+      sourceId: candidate.sourceInternalId,
+      id: candidate.id,
+    });
+    return;
+  }
+  candidate.id = stableId(candidate);
+}
+
 async function createMainDevicesInStage(rows, mapping, diagnostics, enrichmentFieldSettings, deviceStore, signal) {
   if (!isPagedDeviceStore(deviceStore) || typeof deviceStore.appendPage !== "function" || deviceStore.count !== 0) {
     throw new TypeError("Для потокового формирования Main нужен пустой постраничный Final store");
@@ -541,7 +598,7 @@ async function createMainDevicesInStage(rows, mapping, diagnostics, enrichmentFi
         if (resolution.position < stagedCount) changedDevicesByPosition.set(resolution.position, resolution.match);
         retainDiagnosticSample(diagnostics, "decisions", { action: "MERGED_MAIN_DUPLICATE", row: rowNumber, id: resolution.match.id });
       } else {
-        candidate.id = stableId(candidate);
+        assignUniqueInternalId(candidate, strongerIdentityConflict, diagnostics, "Main", rowNumber);
         const position = stagedCount + pending.length;
         pending.push(candidate);
         pendingDevicesByPosition.set(position, candidate);
@@ -613,7 +670,7 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
       addIdentityToIndex(index, resolution.match, resolution.position);
       retainDiagnosticSample(diagnostics, "decisions", { action: "MERGED_MAIN_DUPLICATE", row: rowNumber, id: resolution.match.id });
     } else {
-      candidate.id = stableId(candidate);
+      assignUniqueInternalId(candidate, strongerIdentityConflict, diagnostics, "Main", rowNumber);
       devices.push(candidate);
       retainDiagnosticSample(diagnostics, "decisions", { action: "CREATED_FROM_MAIN", row: rowNumber, id: candidate.id });
       addIdentityToIndex(index, candidate, devices.length - 1);
@@ -709,7 +766,7 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
         continue;
       }
       if (strategy === STRATEGIES.ALLOW_EXPANSION) {
-        candidate.id = stableId(candidate);
+        assignUniqueInternalId(candidate, Boolean(resolution.strongIdentityUnmatched), diagnostics, "SmartRoom", rowNumber);
         if (isStaged) {
           const position = stagedCount + pending.length;
           pending.push(candidate);
@@ -1368,7 +1425,7 @@ export async function enrich(options = {}) {
     device.source = firstKnown(device.sources?.join(", "), "Main");
     return true;
   }, signal, { alwaysWriteBack: true });
-  await assertUniqueDeviceIds(final, signal);
+  await assertUniqueDeviceIds(final, signal, diagnostics);
   const finalCount = deviceCount(final);
   diagnostics.counts.finalUnique = finalCount;
   await progress(100, "Готово");

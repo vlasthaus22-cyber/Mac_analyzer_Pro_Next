@@ -1226,7 +1226,7 @@ test("notification browser smoke delivers only to its isolated TLS SMTP sink", (
 
 test("autonomous enrichment rechecks heap reserve during streamed stages and lookup batches", () => {
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
-  assert.match(enrichment, /async function assertUniqueDeviceIds\(devices, signal\)[\s\S]*?const hashes = new Uint32Array\(capacity\);[\s\S]*?await deviceIdAt\(devices, previousIndex, rows, pageOffset\) === id[\s\S]*?await assertUniqueDeviceIds\(final, signal\);[\s\S]*?diagnostics\.counts\.finalUnique/);
+  assert.match(enrichment, /async function assertUniqueDeviceIds\(devices, signal, diagnostics\)[\s\S]*?const hashes = new Uint32Array\(capacity\);[\s\S]*?await deviceIdAt\(devices, previousIndex, rows, pageOffset\) === id[\s\S]*?duplicateInternalIdsRekeyed[\s\S]*?await assertUniqueDeviceIds\(final, signal, diagnostics\);[\s\S]*?diagnostics\.counts\.finalUnique/);
   const ddio = readFileSync("src/core/ddio-overlay.js", "utf8");
   const limits = readFileSync("src/core/import-limits.js", "utf8");
   assert.match(limits, /export function assertBrowserHeapReserve/);
@@ -2723,6 +2723,8 @@ test("single-file analysis history persists, searches, restores, exports, and de
   assert.match(app, /database\.attachSingleAnalysisSnapshot\(savedAnalysis\.id, finalSnapshot\.id\)/);
   assert.match(app, /database\.listSingleAnalyses\(\{ query: history\.query, page: history\.page, limit: 25 \}\)/);
   assert.match(app, /database\.loadSingleAnalysis\(id, \{ previewOnly: true \}\)/);
+  assert.match(app, /database\.singleAnalysisDevicesPage\(result\.singleAnalysisId, \{ offset: \(requestedPage - 1\) \* pageSize, limit: pageSize \}\)/);
+  assert.match(app, /data-single-analysis-device-page/);
   assert.match(app, /singleFileDevicesCsvBatchChunks\(database\.singleAnalysisDeviceChunks\(result\.singleAnalysisId\)\)/);
   assert.match(app, /const devices = result\?\.singleAnalysisId \? singleAnalysisDevices\(result\.singleAnalysisId\) : currentSingleAnalysisDevices\(result\);[\s\S]*?devices: streamJsonArray\(devices\)/);
   assert.match(app, /result\.devices = previewDevices/);
@@ -2730,6 +2732,7 @@ test("single-file analysis history persists, searches, restores, exports, and de
   assert.match(app, /database\.deleteSingleAnalysis\(id\)/);
   assert.match(database, /async saveSingleAnalysis\(/);
   assert.match(database, /async loadSingleAnalysis\(/);
+  assert.match(database, /async singleAnalysisDevicesPage\(/);
   assert.match(database, /async \*singleAnalysisDeviceChunks\(id\)/);
 });
 

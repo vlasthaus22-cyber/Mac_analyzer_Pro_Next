@@ -4641,6 +4641,35 @@ export class Database {
     yield* this.#singleAnalysisFieldChunks(metadata, "devices");
   }
 
+  async singleAnalysisDevicesPage(id, { offset = 0, limit = 100 } = {}) {
+    const analysisId = String(id || "");
+    const start = Math.max(0, Math.floor(Number(offset) || 0));
+    const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+    if (!analysisId) throw new TypeError("Для чтения устройств нужен ID анализа");
+    const db = await this.open();
+    const metadataTx = db.transaction("singleAnalyses", "readonly");
+    const metadata = await requestResult(metadataTx.objectStore("singleAnalyses").get(analysisId));
+    await transactionDone(metadataTx);
+    if (!metadata) throw new Error("Сохранённый анализ не найден");
+    const total = Math.max(0, Number(metadata.deviceCount) || 0);
+    const pageOffset = Math.min(start, Math.max(0, Math.floor((Math.max(total, 1) - 1) / pageSize) * pageSize));
+    const end = Math.min(total, pageOffset + pageSize);
+    const rows = [];
+    for (let position = pageOffset; position < end;) {
+      const chunkIndex = Math.floor(position / CHUNK_SIZE);
+      const tx = db.transaction("singleAnalysisChunks", "readonly");
+      const chunk = await requestResult(tx.objectStore("singleAnalysisChunks").get([analysisId, chunkIndex]));
+      await transactionDone(tx);
+      if (!Array.isArray(chunk?.devices)) throw snapshotIntegrityError(`Сохранённый анализ повреждён: отсутствует блок ${chunkIndex + 1}`);
+      const inChunk = position % CHUNK_SIZE;
+      const take = Math.min(end - position, chunk.devices.length - inChunk);
+      if (take <= 0) throw snapshotIntegrityError(`Сохранённый анализ повреждён: неполный блок ${chunkIndex + 1}`);
+      rows.push(...chunk.devices.slice(inChunk, inChunk + take));
+      position += take;
+    }
+    return { rows, total, offset: pageOffset, limit: pageSize, page: Math.floor(pageOffset / pageSize) + 1, pageCount: Math.max(1, Math.ceil(total / pageSize)), hasPrevious: pageOffset > 0, hasNext: pageOffset + rows.length < total };
+  }
+
   async *#singleAnalysisFieldChunks(metadata, field) {
     const allowedFields = new Set(["devices", "invalid"]);
     if (!allowedFields.has(field)) throw new TypeError("Неподдерживаемое поле текущего анализа");
@@ -4867,7 +4896,7 @@ export class Database {
     return { snapshotId: "", recovered: false, unavailable: Boolean(activeId || hasFinal) };
   }
 
-  async saveFinal({ id = crypto.randomUUID(), name, snapshotType, sourceKey = "", createdAt = new Date().toISOString(), processingTimeMs = 0, devices, stagedDeviceQueryId = "", stagedDeviceCount = null, diagnostics = {}, comparison = null, comparisonEvents = null, comparisonStream = null, historyPlanId = "", historyPlanEventCount = null, historyPlanBaselineId = "", historyPlanBaselineSignature = "", sourceFiles = [], originalFiles = [], activate = true, updateInventory = true, consumeDevices = false, onProgress = null }) {
+  async saveFinal({ id = crypto.randomUUID(), name, snapshotType, sourceKey = "", createdAt = new Date().toISOString(), processingTimeMs = 0, devices, stagedDeviceQueryId = "", stagedDeviceCount = null, diagnostics = {}, comparison = null, comparisonEvents = null, comparisonStream = null, historyPlanId = "", historyPlanEventCount = null, historyPlanBaselineId = "", historyPlanBaselineSignature = "", sourceFiles = [], originalFiles = [], activate = true, updateInventory = true, consumeDevices = false, onProgress = null, signal = null }) {
     if (comparison && (comparisonEvents || comparisonStream) || comparisonEvents && comparisonStream) throw new Error("Передайте только один вариант сравнения History");
     if (historyPlanId && (comparison || comparisonEvents || comparisonStream)) throw new Error("План History нельзя совмещать с другим вариантом сравнения");
     if (historyPlanId && (!String(historyPlanId).startsWith("history-plan:") || !Number.isSafeInteger(historyPlanEventCount) || historyPlanEventCount < 0)) {
@@ -4898,8 +4927,12 @@ export class Database {
     const stores = ["snapshots", "snapshotChunks", "snapshotRoomIndex", "snapshotRoomIndexMetadata", "inventory", "history", "settings", "knownModels", "switchAddressEvidence", "analyticsCache", "smartroomRoomMappings", "finalAnalyticsMetadata", "originalFiles", ...(historyPlanId || usesStagedDevices ? ["legacyObservationQueryScratch"] : [])];
     const tx = db.transaction(stores, "readwrite", { durability: "strict" });
     const done = transactionDone(tx);
+    const abortForSignal = () => { try { tx.abort(); } catch {} };
+    if (signal?.aborted) abortForSignal();
+    else signal?.addEventListener("abort", abortForSignal, { once: true });
     const reportProgress = (detail) => { try { onProgress?.(detail); } catch {} };
     try {
+    if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
     const stageStore = usesStagedDevices ? tx.objectStore("legacyObservationQueryScratch") : null;
     if (usesStagedDevices) {
       const stageLease = await requestResult(stageStore.get([stagedDeviceQueryId, "", "lease"]));
@@ -5245,7 +5278,10 @@ export class Database {
     } catch (error) {
       try { tx.abort(); } catch {}
       await done.catch(() => {});
+      if (signal?.aborted) throw new DOMException("Операция отменена", "AbortError");
       throw finalWriteError(error);
+    } finally {
+      signal?.removeEventListener("abort", abortForSignal);
     }
   }
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.3.3 — 2026-11-10
+
+- Enrichment repairs duplicate internal IDs deterministically and retains conflicting source IDs for diagnostics instead of aborting the Final.
+- Cancel now aborts the atomic Final write transaction and preserves the prior active snapshot.
+- Single-file analysis results page through the complete stored device roster instead of showing only the first 20.
+- Full release includes autonomous HTML, Windows host, source, docs, reference data, tests, instructions, and SHA-256 checksums.
+- Verification: full Node test suite, lint, syntax checks, portable build, artifact check, and release archive check.
+
 ## v2.3.2 — 2026-11-10
 
 - Release ZIP uses deterministic DEFLATE compression for compressible files, while storing already-compressed files unchanged. This reduces the complete package from about 41 MB to about 22 MB without omitting files.

@@ -295,7 +295,7 @@ test("paged Final storage append failures abort enrichment instead of returning 
   }), /disk full/);
 });
 
-test("paged Final validation still rejects duplicate internal IDs", async () => {
+test("paged Final validation deterministically repairs duplicate internal IDs", async () => {
   const records = [];
   const deviceStore = {
     count: 0,
@@ -309,11 +309,13 @@ test("paged Final validation still rejects duplicate internal IDs", async () => 
     fieldSources: {},
     sources: [],
   }));
-  await assert.rejects(enrich({
+  const result = await enrich({
     mainDevices,
     smartroomRows: [],
     deviceStore,
-  }), /дубли внутренних ID/);
+  });
+  assert.equal(new Set(records.map(({ id }) => id)).size, records.length);
+  assert.equal(result.diagnostics.counts.duplicateInternalIdsRekeyed, 1);
 });
 
 test("enrichment persists every page update through the IndexedDB Final staging API", async () => {
@@ -1289,13 +1291,28 @@ test("Main and SmartRoom reuse parsed row arrays without iterating or copying th
   assert.equal(result.devices[0].room, "101");
 });
 
-test("final duplicate-ID validation rejects colliding internal IDs", async () => {
-  await assert.rejects(enrich({
+test("final duplicate-ID validation repairs colliding internal IDs", async () => {
+  const result = await enrich({
     mainDevices: [
       { id: "duplicate-final-id", mac: "00:11:22:33:44:71", fieldSources: {} },
       { id: "duplicate-final-id", mac: "00:11:22:33:44:72", fieldSources: {} },
     ],
-  }), /дубли внутренних ID/);
+  });
+  assert.equal(new Set(result.devices.map(({ id }) => id)).size, 2);
+  assert.equal(result.diagnostics.counts.duplicateInternalIdsRekeyed, 1);
+});
+
+test("Final collision repair preserves source IDs and emits a diagnostic", async () => {
+  const result = await enrich({
+    mainDevices: [
+      { id: "shared-source-id", mac: "00:11:22:33:44:71", fieldSources: {} },
+      { id: "shared-source-id", mac: "00:11:22:33:44:72", fieldSources: {} },
+    ],
+  });
+  assert.equal(new Set(result.devices.map(({ id }) => id)).size, 2);
+  assert.equal(result.diagnostics.counts.duplicateInternalIdsRekeyed, 1);
+  assert.equal(result.devices[1].sourceInternalId, "shared-source-id");
+  assert.ok(result.diagnostics.conflicts.some(({ source, reason }) => source === "Final" && reason.includes("детерминированно")));
 });
 
 test("final ID validation tolerates compact-hash collisions between distinct IDs", async () => {
