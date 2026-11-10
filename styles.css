@@ -194,6 +194,27 @@ body.is-resizing-column, body.is-resizing-column * { cursor: col-resize !importa
 .bar-fill { height: 100%; border-radius: inherit; background: var(--accent, #128178); }
 .local-cluster-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 canvas { display: block; width: 100%; height: 260px; }
+#analyticsView canvas { height: 176px; }
+#analyticsView .analytics-grid .panel { min-width: 0; padding: 13px; }
+#analyticsView .analytics-grid .panel h3 { margin-bottom: 8px; }
+#analyticsView .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+#analyticsView .kpi { min-height: 76px; padding: 10px 12px; }
+#analyticsView .kpi strong { font-size: 22px; }
+.ip-mapping-table { width: 100%; min-width: 0; }
+.ip-mapping-table th:nth-child(1), .ip-mapping-table td:nth-child(1) { width: 150px; }
+.ip-mapping-table th:nth-child(2), .ip-mapping-table td:nth-child(2) { width: min(34vw, 280px); max-width: min(34vw, 280px); }
+.ip-mapping-table th:nth-child(3), .ip-mapping-table td:nth-child(3) { width: 150px; }
+.ip-mapping-table th:last-child, .ip-mapping-table td:last-child { width: 100px; }
+.guide-procedures { display: grid; gap: 10px; margin: 14px 0; }
+.guide-procedures details { padding: 13px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.guide-procedures summary { color: var(--primary-dark); font-weight: 750; cursor: pointer; }
+.guide-procedures p:last-child { margin-bottom: 0; }
+.settings-accordion { min-width: 0; }
+.settings-accordion > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--primary-dark); font-size: 16px; font-weight: 750; cursor: pointer; }
+.settings-accordion > summary::after { content: "+"; color: var(--primary); font-size: 20px; }
+.settings-accordion[open] > summary { margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.settings-accordion[open] > summary::after { content: "−"; }
+.settings-accordion-body { min-width: 0; }
 .chart-state.error { color: var(--danger); }
 .rank-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .model-prefix-link { width: 100%; color: inherit; font: inherit; text-align: left; background: transparent; border: 0; cursor: pointer; }

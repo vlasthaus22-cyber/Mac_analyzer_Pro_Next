@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.3.0 — 2026-11-10
+
+- Analytics charts and KPI cards use a more compact layout to reduce scrolling.
+- Settings for database transfer, OUI, manufacturer/model detection, vendor lookup, historical enrichment, IP-to-address rules, and MAC model rules can be expanded only when needed.
+- The Guide now explains where the active IndexedDB lives, how to export and restore portable `.madb.json` backups, where legacy SQLite files are commonly stored, and how to import `mac_analyzer_settings.json`.
+- IP-to-physical-address mapping tables constrain long values to compact columns while keeping the full value available on hover.
+- Full `pnpm check` and release-readiness checks passed; the complete isolated browser smoke finished with `ok: true`, including repeated batch runs, two-/three-file comparisons, analytics, archive transfer, and restart recovery.
+
 ## v2.2.0 — 2026-11-09
 
 - Optional Windows host imports a local IEEE OUI CSV/TXT reference into its own SQLite reference mappings at startup, using content hashes for idempotence and preserving custom/learned rules.

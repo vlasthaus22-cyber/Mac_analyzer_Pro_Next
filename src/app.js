@@ -1898,7 +1898,7 @@ async function renderIpMappings() {
   const mappings = await database.ipAddressMappings();
   const host = $("#ipMappingList");
   host.innerHTML = mappings.length
-    ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>IP коммутатора</th><th>Физический адрес</th><th>Источник</th><th></th></tr></thead><tbody>${mappings.map((item) => `<tr><td>${escapeHtml(item.switchIp)}</td><td>${escapeHtml(item.address)}</td><td>${escapeHtml(item.source)}</td><td><button type="button" class="button secondary" data-delete-ip-mapping="${escapeHtml(item.switchIp)}">Удалить</button></td></tr>`).join("")}</tbody></table></div>`
+    ? `<div class="table-scroll"><table class="data-table ip-mapping-table"><thead><tr><th>IP коммутатора</th><th>Физический адрес</th><th>Источник</th><th></th></tr></thead><tbody>${mappings.map((item) => `<tr><td title="${escapeHtml(item.switchIp)}">${escapeHtml(item.switchIp)}</td><td title="${escapeHtml(item.address)}">${escapeHtml(item.address)}</td><td title="${escapeHtml(item.source)}">${escapeHtml(item.source)}</td><td><button type="button" class="button secondary" data-delete-ip-mapping="${escapeHtml(item.switchIp)}">Удалить</button></td></tr>`).join("")}</tbody></table></div>`
     : '<p class="empty">Правила ещё не добавлены.</p>';
   host.querySelectorAll("[data-delete-ip-mapping]").forEach((button) => button.addEventListener("click", () => (async () => {
     await database.deleteIpAddressMapping(button.dataset.deleteIpMapping);
