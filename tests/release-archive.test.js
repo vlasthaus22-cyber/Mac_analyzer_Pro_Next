@@ -19,6 +19,15 @@ test("release ZIP builder writes deterministic UTF-8 entries with valid CRC and 
   assert.match(sha256(first), /^[a-f0-9]{64}$/);
 });
 
+test("release ZIP compresses repetitive source data and preserves its bytes", () => {
+  const data = Buffer.from("MAC Analyzer release source\n".repeat(2000), "utf8");
+  const zip = createZip([{ name: "MAC-Analyzer-Pro-Next/source.txt", data }]);
+  assert.equal(zip.readUInt16LE(8), 8, "ZIP uses raw DEFLATE for compressible entries");
+  const decoded = readZipEntries(zip);
+  assert.deepEqual(decoded.get("MAC-Analyzer-Pro-Next/source.txt"), data);
+  assert.ok(zip.length < data.length / 10);
+});
+
 test("release ZIP builder and verifier reject traversal and corrupted payloads", () => {
   assert.throws(() => createZip([{ name: "MAC-Analyzer-Pro-Next/../outside.txt", data: "unsafe" }]), /Unsafe release ZIP path/);
   const zip = createZip([{ name: "MAC-Analyzer-Pro-Next/file.txt", data: "payload" }]);

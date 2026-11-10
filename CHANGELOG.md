@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.3.2 — 2026-11-10
+
+- Release ZIP uses deterministic DEFLATE compression for compressible files, while storing already-compressed files unchanged. This reduces the complete package from about 41 MB to about 22 MB without omitting files.
+- ZIP verification now validates both stored and DEFLATE entries, including decompressed byte length and CRC.
+- The complete release package retains all 358 entries, including the autonomous HTML, Windows host, sources, docs, reference data, and tests.
+
 ## v2.3.1 — 2026-11-10
 
 - The global Cancel button now interrupts more active tasks, and cancelling enrichment completes cleanly without leaving an error banner or partial Final data.

@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 
 const UTF8_FLAG = 0x0800;
 const ZIP_STORED = 0;
+const ZIP_DEFLATED = 8;
 const ZIP_EOCD = 0x06054b50;
 const ZIP_LOCAL = 0x04034b50;
 const ZIP_CENTRAL = 0x02014b50;
@@ -38,32 +40,36 @@ export function createZip(entries) {
     const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data);
     if (!name.length || name.length > 0xffff || name.includes(0)) throw new TypeError("Release ZIP contains an invalid file name");
     const size = checkedU32(data.length, `File ${entry.name}`);
+    const compressed = deflateRawSync(data, { level: 9 });
+    const method = compressed.length < data.length ? ZIP_DEFLATED : ZIP_STORED;
+    const payload = method === ZIP_DEFLATED ? compressed : data;
+    const compressedSize = checkedU32(payload.length, `Compressed file ${entry.name}`);
     const crc = crc32(data);
     const local = Buffer.alloc(30 + name.length);
     local.writeUInt32LE(ZIP_LOCAL, 0);
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(UTF8_FLAG, 6);
-    local.writeUInt16LE(ZIP_STORED, 8);
+    local.writeUInt16LE(method, 8);
     local.writeUInt16LE(0, 10);
     local.writeUInt16LE(0x2821, 12); // deterministic DOS date: 2000-01-01
     local.writeUInt32LE(crc, 14);
-    local.writeUInt32LE(size, 18);
+    local.writeUInt32LE(compressedSize, 18);
     local.writeUInt32LE(size, 22);
     local.writeUInt16LE(name.length, 26);
     local.writeUInt16LE(0, 28);
     name.copy(local, 30);
-    localParts.push(local, data);
+    localParts.push(local, payload);
 
     const central = Buffer.alloc(46 + name.length);
     central.writeUInt32LE(ZIP_CENTRAL, 0);
     central.writeUInt16LE(0x031e, 4);
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(UTF8_FLAG, 8);
-    central.writeUInt16LE(ZIP_STORED, 10);
+    central.writeUInt16LE(method, 10);
     central.writeUInt16LE(0, 12);
     central.writeUInt16LE(0x2821, 14);
     central.writeUInt32LE(crc, 16);
-    central.writeUInt32LE(size, 20);
+    central.writeUInt32LE(compressedSize, 20);
     central.writeUInt32LE(size, 24);
     central.writeUInt16LE(name.length, 28);
     central.writeUInt16LE(0, 30);
@@ -74,7 +80,7 @@ export function createZip(entries) {
     central.writeUInt32LE(checkedU32(localOffset, "ZIP local-header offset"), 42);
     name.copy(central, 46);
     centralParts.push(central);
-    localOffset += local.length + data.length;
+    localOffset += local.length + payload.length;
     checkedU32(localOffset, "ZIP local data");
   }
   const centralDirectory = Buffer.concat(centralParts);
@@ -116,17 +122,19 @@ export function readZipEntries(zip) {
     const commentLength = bytes.readUInt16LE(offset + 32);
     const localOffset = bytes.readUInt32LE(offset + 42);
     const name = bytes.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
-    if (!(flags & UTF8_FLAG) || method !== ZIP_STORED || compressedSize !== size || !name || name.startsWith("/") || name.split("/").includes("..")) {
+    if (!(flags & UTF8_FLAG) || ![ZIP_STORED, ZIP_DEFLATED].includes(method) || (method === ZIP_STORED && compressedSize !== size) || !name || name.startsWith("/") || name.split("/").includes("..")) {
       throw new Error(`Release artifact has an unsafe or unsupported ZIP entry: ${name}`);
     }
     if (entries.has(name)) throw new Error(`Release artifact contains duplicate path: ${name}`);
-    if (localOffset + 30 > centralOffset || bytes.readUInt32LE(localOffset) !== ZIP_LOCAL) throw new Error(`Release artifact has an invalid local header: ${name}`);
+    if (localOffset + 30 > centralOffset || bytes.readUInt32LE(localOffset) !== ZIP_LOCAL || bytes.readUInt16LE(localOffset + 8) !== method) throw new Error(`Release artifact has an invalid local header: ${name}`);
     const localNameLength = bytes.readUInt16LE(localOffset + 26);
     const localExtraLength = bytes.readUInt16LE(localOffset + 28);
     const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
-    const dataEnd = dataOffset + size;
+    const dataEnd = dataOffset + compressedSize;
     if (dataEnd > centralOffset) throw new Error(`Release artifact entry is truncated: ${name}`);
-    const data = bytes.subarray(dataOffset, dataEnd);
+    const payload = bytes.subarray(dataOffset, dataEnd);
+    const data = method === ZIP_DEFLATED ? inflateRawSync(payload) : payload;
+    if (data.length !== size) throw new Error(`Release artifact entry has an invalid uncompressed size: ${name}`);
     if (crc32(data) !== crc) throw new Error(`Release artifact CRC mismatch: ${name}`);
     entries.set(name, data);
     offset += 46 + nameLength + extraLength + commentLength;
