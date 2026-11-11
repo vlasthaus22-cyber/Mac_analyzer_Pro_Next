@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.3.6 — 2026-11-11
+
+- Distribution fix: the stable release now provides the complete verified application as one downloadable ZIP, alongside the standalone HTML and Windows host.
+- No application behavior changed from v2.3.5; this release makes the already verified full package directly downloadable without assembly steps.
+- Verification: full release checks and artifact hashes.
+
 ## v2.3.5 — 2026-11-11
 
 - Dashboard counters now distinguish the active Final and count unique MAC addresses rather than cumulative Inventory rows or repeated snapshot observations.
