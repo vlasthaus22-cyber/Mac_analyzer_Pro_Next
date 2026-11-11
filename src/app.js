@@ -14,7 +14,6 @@ import { createBoundedBase64FileView } from "./data/base64-file.js";
 import { streamJsonArray, writePrettyJson } from "./core/json-stream.js";
 import { requestReadableStreamFileHandle, saveReadableStreamToFile } from "./core/file-stream.js";
 import { createDataQualityAccumulator } from "./core/data-quality.js";
-import { appendLocalNotification, DEFAULT_LOCAL_NOTIFICATION_SETTINGS, normalizeLocalNotificationLog, normalizeLocalNotificationSettings } from "./core/local-notifications.js";
 import { DEFAULT_EXTERNAL_VENDOR_SETTINGS, externalVendorCandidateMacs, importedExternalVendorSettingsFallback, normalizeExternalVendorMac, normalizeExternalVendorSettings } from "./core/external-vendor-settings.js";
 import { clearExternalVendorCache, getExternalVendorCacheSummary, loadExternalVendorSettings, lookupExternalVendorMacs, saveExternalVendorSettings, testExternalVendorApi } from "./ui/external-vendor-controls.js";
 import { DEFAULT_NOTIFICATION_SETTINGS, normalizeNotificationSettings } from "./core/notification-settings.js";
@@ -163,7 +162,6 @@ async function loadImportedRoomIndexFromDatabase(database, ids, { signal } = {})
 }
 const scheduledBatchQueue = createSerialQueue();
 const workspaceStateQueue = createSerialQueue();
-const localNotificationQueue = createSerialQueue();
 let ieeeOuiIndex = null;
 let bundledIeeeRegistry = null;
 let macHistoryOptionsTimer = 0;
@@ -246,8 +244,6 @@ const state = {
   analytics: null,
   dataQualityHistoryOffset: 0,
   dataQualityHistoryRequestId: 0,
-  localNotificationSettings: { ...DEFAULT_LOCAL_NOTIFICATION_SETTINGS, events: { ...DEFAULT_LOCAL_NOTIFICATION_SETTINGS.events } },
-  localNotificationLog: [],
   externalVendorApiSettings: { ...DEFAULT_EXTERNAL_VENDOR_SETTINGS },
   externalVendorApiProviders: [],
   notificationApiSettings: normalizeNotificationSettings({ channels: DEFAULT_NOTIFICATION_SETTINGS }),
@@ -343,7 +339,7 @@ const ieeeCidCatalogState = { query: "", page: 1, pageSize: 20 };
 let progressGeneration = 0;
 let progressHideTimer = 0;
 
-async function downloadReadableStream(filename, stream, mimeType, description, fileHandle = null) {
+async function downloadReadableStream(filename, stream, mimeType, description, fileHandle = null, { streamToDiskOnly = false } = {}) {
   const extension = [".macarchive.json", ".madb.json"].find((suffix) => filename.endsWith(suffix))
     || `.${String(filename).split(".").at(-1) || "json"}`;
   try {
@@ -359,6 +355,7 @@ async function downloadReadableStream(filename, stream, mimeType, description, f
     if (error?.name === "AbortError") return "cancelled";
     throw error;
   }
+  if (streamToDiskOnly) throw new Error("Полная база JSON не помещается в память браузера для обычной загрузки. Используйте Chrome или Edge и сохранение файла через системное окно.");
   const blob = await new globalThis.Response(stream, { headers: { "Content-Type": mimeType } }).blob();
   download(filename, blob, mimeType);
   return "downloaded";
@@ -581,93 +578,20 @@ function isEngineerActive() {
   return isEngineeringSessionActive(state.engineeringSession);
 }
 
-function renderLocalNotificationLog() {
-  const host = $("#localNotificationLog");
-  if (!host) return;
-  const events = state.localNotificationSettings.events;
-  const eventInputs = {
-    analysis: $("#localNotificationEvent_analysis"),
-    quality: $("#localNotificationEvent_quality"),
-    backup: $("#localNotificationEvent_backup"),
-  };
-  for (const [event, input] of Object.entries(eventInputs)) if (input) input.checked = events[event];
-  const status = $("#localNotificationStatus");
-  if (status) status.textContent = state.localNotificationLog.length.toLocaleString("ru-RU") + " записей · журнал хранится только в IndexedDB этого браузера.";
-  host.replaceChildren();
-  if (!state.localNotificationLog.length) {
-    host.textContent = "Локальных уведомлений пока нет.";
-    return;
+async function sendAnalysisNotification(title, message, summaryDetails = {}) {
+  if (!Object.values(state.notificationApiSettings.channels).some((channel) => channel.enabled)) return;
+  const { snapshotId, ...notificationFields } = summaryDetails;
+  try {
+    const summary = createNotificationSummaryAccumulator();
+    if (snapshotId) await database.forEachSnapshotChunk(snapshotId, (chunk) => summary.acceptChunk(chunk));
+    const result = await deliverAnalysisNotification({ type: "analysis", title, message, ...notificationFields, ...summary.finish() });
+    const failed = Object.entries(result.channels || {}).filter(([, status]) => status !== "sent").map(([channel]) => channel);
+    $("#externalNotificationStatus").textContent = failed.length
+      ? "Внешняя доставка не выполнена для каналов: " + failed.join(", ") + ". Проверьте настройки."
+      : "Сводка анализа отправлена во включённые каналы.";
+  } catch {
+    $("#externalNotificationStatus").textContent = "Внешняя доставка не выполнена. Проверьте optional host и настройки канала.";
   }
-  for (const item of state.localNotificationLog) {
-    const article = document.createElement("article");
-    article.className = "local-notification-item";
-    const heading = document.createElement("strong");
-    heading.textContent = item.title;
-    const detail = document.createElement("p");
-    detail.className = "muted";
-    detail.textContent = `${new Date(item.createdAt).toLocaleString("ru-RU")} · ${item.type} · локально`;
-    const message = document.createElement("p");
-    message.textContent = item.message;
-    article.dataset.level = item.level;
-    article.append(heading, detail, message);
-    host.append(article);
-  }
-}
-
-async function loadLocalNotifications() {
-  const [settings, log] = await Promise.all([
-    database.getSetting("localNotificationSettings", DEFAULT_LOCAL_NOTIFICATION_SETTINGS),
-    database.getSetting("localNotificationLog", []),
-  ]);
-  state.localNotificationSettings = normalizeLocalNotificationSettings(settings);
-  state.localNotificationLog = normalizeLocalNotificationLog(log);
-  renderLocalNotificationLog();
-}
-
-async function saveLocalNotificationSettings() {
-  const events = {
-    analysis: $("#localNotificationEvent_analysis").checked,
-    quality: $("#localNotificationEvent_quality").checked,
-    backup: $("#localNotificationEvent_backup").checked,
-  };
-  const settings = normalizeLocalNotificationSettings({ events });
-  await localNotificationQueue.enqueue(async () => {
-    await database.setSetting("localNotificationSettings", settings);
-    state.localNotificationSettings = settings;
-  });
-  renderLocalNotificationLog();
-  $("#localNotificationSaveStatus").textContent = "Настройки сохранены в IndexedDB этого браузера.";
-}
-
-async function recordLocalNotification(type, title, message, level = "info", summaryDetails = {}) {
-  const added = await localNotificationQueue.enqueue(async () => {
-    const settings = normalizeLocalNotificationSettings(await database.getSetting("localNotificationSettings", state.localNotificationSettings));
-    const stored = normalizeLocalNotificationLog(await database.getSetting("localNotificationLog", state.localNotificationLog));
-    const result = appendLocalNotification(stored, { type, title, message, level }, settings);
-    if (result.added) await database.setSetting("localNotificationLog", result.log);
-    state.localNotificationSettings = settings;
-    state.localNotificationLog = result.log;
-    renderLocalNotificationLog();
-    return Boolean(result.added);
-  });
-  if (type === "analysis" && Object.values(state.notificationApiSettings.channels).some((channel) => channel.enabled)) {
-    const { snapshotId, ...notificationFields } = summaryDetails;
-    Promise.resolve().then(async () => {
-      const summary = createNotificationSummaryAccumulator();
-      if (snapshotId) {
-        await database.forEachSnapshotChunk(snapshotId, (chunk) => summary.acceptChunk(chunk));
-      }
-      return deliverAnalysisNotification({ type, title, message, ...notificationFields, ...summary.finish() });
-    })
-      .then((result) => {
-        const failed = Object.entries(result.channels || {}).filter(([, status]) => status !== "sent").map(([channel]) => channel);
-        $("#externalNotificationStatus").textContent = failed.length
-          ? "Внешняя доставка не выполнена для каналов: " + failed.join(", ") + ". Проверьте настройки."
-          : "Сводка анализа отправлена во включённые каналы.";
-      })
-      .catch(() => { $("#externalNotificationStatus").textContent = "Внешняя доставка не выполнена. Проверьте optional host и настройки канала."; });
-  }
-  return added;
 }
 
 const notificationChannelFields = Object.freeze({
@@ -761,15 +685,6 @@ async function testNotificationApiChannel(channel) {
   $("#externalNotificationStatus").textContent = result.ok
     ? "Тестовое сообщение " + channel + " отправлено."
     : "Тестовое сообщение " + channel + " не отправлено.";
-}
-
-async function clearLocalNotificationLog() {
-  if (!globalThis.confirm("Очистить локальный журнал уведомлений?")) return;
-  await localNotificationQueue.enqueue(async () => {
-    await database.setSetting("localNotificationLog", []);
-    state.localNotificationLog = [];
-  });
-  renderLocalNotificationLog();
 }
 
 function applyExternalVendorApiSettings(settings, providers = []) {
@@ -961,7 +876,7 @@ async function enrichActiveFinalWithExternalVendorApi() {
       + "; найдено: " + updated.toLocaleString("ru-RU") + "; из кэша: " + cached.toLocaleString("ru-RU")
       + "; внешних запросов: " + lookups.toLocaleString("ru-RU") + ".";
     await refreshDatabaseState();
-    recordLocalNotification("analysis", "API-обогащение завершено", "Создан новый Final; заполнено производителей: " + updated.toLocaleString("ru-RU") + ".", "success").catch(showError);
+    sendAnalysisNotification("API-обогащение завершено", "Создан новый Final; заполнено производителей: " + updated.toLocaleString("ru-RU") + ".");
     await refreshExternalVendorCacheStatus();
     return metadata;
   } finally {
@@ -1642,7 +1557,6 @@ function activateView(name) {
       loadHistoryLog({ filters: state.historyLog.filters, cursor: null, previous: [] }).catch(showError);
     }
   }
-  if (name === "notifications") renderLocalNotificationLog();
   if (name === "notifications") loadNotificationApiSettings();
   if (name === "rooms") initializeRoomFilters().catch(showError);
   if (name === "data") { renderSnapshotList(); renderMac5RuleList().catch(showError); renderLocalArchiveList().catch(showError); renderLegacyAutosaveRestoreList().catch(showError); renderPerformanceMetrics().catch(showError); renderApplicationLog().catch(showError); }
@@ -3301,7 +3215,7 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
     state.singleFile.result = result;
     renderSingleAnalysis(result);
     $("#singleAnalysisPersistenceStatus").textContent = `Снимок одиночного анализа сохранён в локальную историю: ${finalSnapshot.name}${finalSnapshot.reused ? " · набор уже был сохранён" : ""}.`;
-    recordLocalNotification("analysis", "Анализ одного файла завершён", `Обработано устройств: ${finalSnapshot.deviceCount.toLocaleString("ru-RU")}.`, "success", { snapshotId: finalSnapshot.id, fileName: file.name, deviceCount: finalSnapshot.deviceCount, processingTimeMs: Math.max(0, Math.round(performance.now() - startedAt)) }).catch(showError);
+    sendAnalysisNotification("Анализ одного файла завершён", `Обработано устройств: ${finalSnapshot.deviceCount.toLocaleString("ru-RU")}.`, { snapshotId: finalSnapshot.id, fileName: file.name, deviceCount: finalSnapshot.deviceCount, processingTimeMs: Math.max(0, Math.round(performance.now() - startedAt)) });
     state.analytics = null;
     await refreshDatabaseState();
     if (!$("#singleAnalysisHistory").hidden) {
@@ -4504,7 +4418,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     result.historicalRoomIndex = null;
     result.importedSmartroomRoomIndex = null;
   }
-  recordLocalNotification("analysis", "Объединение данных завершено", `Сохранён Final: ${finalDeviceCount.toLocaleString("ru-RU")} устройств.`, "success", { snapshotId: metadata.id, fileName: Object.entries(files).filter(([, file]) => file).map(([role, file]) => role + ": " + file.name).join(", "), deviceCount: finalDeviceCount, processingTimeMs: metadata.processingTimeMs }).catch(showError);
+  sendAnalysisNotification("Объединение данных завершено", `Сохранён Final: ${finalDeviceCount.toLocaleString("ru-RU")} устройств.`, { snapshotId: metadata.id, fileName: Object.entries(files).filter(([, file]) => file).map(([role, file]) => role + ": " + file.name).join(", "), deviceCount: finalDeviceCount, processingTimeMs: metadata.processingTimeMs });
   return { ...result, presentation, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal };
 }
 
@@ -5514,7 +5428,6 @@ async function runDataQualityAnalysis() {
     });
     const report = accumulator.finish();
     const savedReport = await database.saveDataQualityReport(snapshot, report);
-    recordLocalNotification("quality", "Проверка качества завершена", `Устройства: ${report.devices.toLocaleString("ru-RU")}; оценка: ${report.score}/100; проблем: ${report.issues.length.toLocaleString("ru-RU")}.`, report.issues.length ? "warning" : "success").catch(showError);
     const issueRows = report.issues.map((issue) => "<li><strong>" + escapeHtml(issue.title) + "</strong> · " + escapeHtml(issue.count.toLocaleString("ru-RU")) + " · " + escapeHtml(issue.severity) + "<br>" + escapeHtml(issue.recommendation) + "</li>").join("");
     const recommendations = report.recommendations.map((recommendation) => "<li>" + escapeHtml(recommendation) + "</li>").join("");
     const labels = { vendor: "Производитель", manufacturer: "Производитель", model: "Модель", address: "Адрес", ip: "IP устройства", room: "Помещение", switchIp: "IP коммутатора", switchPort: "Порт" };
@@ -8751,10 +8664,15 @@ async function exportDatabase() {
   progress(5, "Чтение локальной базы", "Экспорт базы");
   const filename = `mac-analyzer-next-${new Date().toISOString().slice(0, 10)}.madb.json`;
   const archiveStream = portableDatabaseArchiveStream();
-  const result = await downloadReadableStream(filename, archiveStream, "application/json", "Резервная копия MAC Analyzer Next");
-  finishProgress(result === "cancelled" ? "Экспорт базы отменён" : result === "saved" ? "Архив базы записан потоково" : "Архив базы сформирован");
+  let result;
+  try {
+    result = await downloadReadableStream(filename, archiveStream, "application/json", "База MAC Analyzer Next в JSON", null, { streamToDiskOnly: true });
+  } catch (error) {
+    finishProgress("Экспорт базы не выполнен");
+    throw error;
+  }
+  finishProgress(result === "cancelled" ? "Экспорт базы отменён" : "База JSON записана потоково на диск");
   if (result === "cancelled") return;
-  recordLocalNotification("backup", "Архив создан", "Портативная резервная копия сформирована локально.", "success").catch(showError);
 }
 
 async function uploadActiveFinalToOptionalHost() {
@@ -8968,7 +8886,6 @@ async function importDatabase(file) {
   await restoreLegacyTaskSchedulers();
   startFinalAutoSave();
   finishProgress("База импортирована");
-  recordLocalNotification("backup", "Архив импортирован", "Локальная база дополнена данными переносимого архива.", "success").catch(showError);
 }
 
 async function importLegacySQLite(file, walFile = null) {
@@ -11006,16 +10923,17 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     }
     updateOptionalHostSnapshotSelectionUi();
   });
-  $("#saveLocalNotificationSettings").addEventListener("click", () => saveLocalNotificationSettings().catch(showError));
   for (const channel of ["email", "telegram", "slack"]) {
     const label = channel[0].toUpperCase() + channel.slice(1);
     $("#saveNotification" + label).addEventListener("click", () => saveNotificationApiChannel(channel).catch(showError));
     $("#testNotification" + label).addEventListener("click", () => testNotificationApiChannel(channel).catch(showError));
   }
-  $("#testLocalNotification").addEventListener("click", () => recordLocalNotification("test", "Тестовая запись", "Проверка локального журнала уведомлений.").catch(showError));
-  $("#clearLocalNotificationLog").addEventListener("click", () => clearLocalNotificationLog().catch(showError));
   $("#exportReferenceArchiveButton").addEventListener("click", () => exportReferenceArchive().catch(showError));
-  $("#importDatabaseInput").addEventListener("change", (event) => importDatabase(event.target.files[0]).catch(showError));
+  $("#importDatabaseInput").addEventListener("change", (event) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    importDatabase(file).catch(showError).finally(() => { input.value = ""; });
+  });
   $("#importSqliteDatabaseInput").addEventListener("change", (event) => {
     try {
       const { file, walFile } = resolveLegacySQLiteFileSelection(event.target.files);
@@ -11749,7 +11667,6 @@ async function bootstrap() {
   }
   await database.open();
   initializeOptionalHostConnection();
-  await loadLocalNotifications().catch(showError);
   await loadExternalVendorApiSettings();
   await loadNotificationApiSettings();
   await database.clearExpiredAnalyticsAggregateQueries("switch-ip-report:").catch(showError);

@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.3.7 — 2026-11-11
+
+- Database transfer controls now clearly download and load the portable `.madb.json` database; choosing the same JSON file again works without refreshing the page.
+- Full database JSON export streams directly to a user-selected file and never creates a full-size in-memory Blob. Import remains token-streamed and restores records in bounded batches.
+- Removed the local completion-notification log and its IndexedDB writes. Explicitly opted-in Email, Telegram and Slack summary delivery remains available.
+- Verification: full release checks, release-readiness matrix and portable package verification.
+
 ## v2.3.6 — 2026-11-11
 
 - Distribution fix: the stable release now provides the complete verified application as one downloadable ZIP, alongside the standalone HTML and Windows host.

@@ -489,13 +489,13 @@ test("opt-in analysis notifications derive aggregate address and room counts fro
   assert.match(app, /database\.forEachSnapshotChunk\(snapshotId, \(chunk\) => summary\.acceptChunk\(chunk\)\)/);
   assert.match(summary, /counts\.filledAddresses \+= 1/);
   assert.match(summary, /counts\.rooms \+= 1/);
-  assert.match(app, /deliverAnalysisNotification\(\{ type, title, message, \.\.\.notificationFields, \.\.\.summary\.finish\(\) \}\)/);
+  assert.match(app, /deliverAnalysisNotification\(\{ type: "analysis", title, message, \.\.\.notificationFields, \.\.\.summary\.finish\(\) \}\)/);
   assert.doesNotMatch(app, /deliverAnalysisNotification\(\{[^}]*ip:/);
 });
 
 test("single-file analysis sends one summary notification linked to its Final snapshot", () => {
   const app = readFileSync("src/app.js", "utf8");
-  const calls = [...app.matchAll(/recordLocalNotification\("analysis", "Анализ одного файла завершён"[^\n]*/g)];
+  const calls = [...app.matchAll(/sendAnalysisNotification\("Анализ одного файла завершён"[^\n]*/g)];
   assert.equal(calls.length, 1);
   assert.match(calls[0][0], /snapshotId: finalSnapshot\.id/);
 });
@@ -1478,22 +1478,17 @@ test("full check runs every Node test file and the Python optional-host integrat
   assert.match(pythonRunner, /-m", "unittest", "discover", "-s", "tests", "-p", "test_\*\.py/);
 });
 
-test("local notification journal is bounded, event-scoped, and has no external send transport", () => {
+test("local notification journal is removed while opt-in external notification settings remain", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
-  const notifications = readFileSync("src/core/local-notifications.js", "utf8");
-  assert.match(html, /id="notificationsView"[\s\S]*?id="localNotificationLog"/);
-  assert.match(app, /database\.setSetting\("localNotificationLog"/);
-  assert.match(app, /recordLocalNotification\("analysis"/);
-  assert.match(app, /recordLocalNotification\("quality"/);
-  assert.match(app, /recordLocalNotification\("backup"/);
-  const notificationRenderer = app.match(/function renderLocalNotificationLog\(\)\s*\{[\s\S]*?\n\}/)?.[0] || "";
-  assert.match(notificationRenderer, /heading\.textContent = item\.title/);
-  assert.match(notificationRenderer, /message\.textContent = item\.message/);
-  assert.doesNotMatch(notificationRenderer, /innerHTML/);
-  assert.match(notifications, /LOCAL_NOTIFICATION_LIMIT = 100/);
-  assert.match(notifications, /status: "local"/);
-  assert.doesNotMatch(notifications, /fetch\s*\(|XMLHttpRequest|WebSocket|SMTP|Telegram|Slack|webhook/i);
+  assert.doesNotMatch(html, /localNotification|Локальные уведомления|local-notification/);
+  assert.match(html, /Внешние уведомления/);
+  assert.doesNotMatch(app, /localNotification|recordLocalNotification|renderLocalNotificationLog/);
+  assert.match(app, /async function sendAnalysisNotification\(/);
+  assert.match(app, /deliverAnalysisNotification\(/);
+  assert.match(html, /notificationEmailEnabled/);
+  assert.match(html, /notificationTelegramEnabled/);
+  assert.match(html, /notificationSlackEnabled/);
 });
 
 test("the application opens one shared current IndexedDB version without a legacy v4 fallback", () => {
@@ -3476,7 +3471,7 @@ test("user guide names the browser database, portable archive, and source SQLite
   for (const content of [html, readme, storageGuide]) {
     assert.match(content, /IndexedDB/);
     assert.match(content, /mac-analyzer-next-ГГГГ-ММ-ДД\.madb\.json/);
-    assert.match(content, /Загрузить архив/);
+    assert.match(content, /Загрузить\s+(?:базу\s+из JSON|архив)/);
     assert.match(content, /data[\\/]legacy[\\/]/);
     assert.match(content, /mac_history\.db/);
     assert.match(content, /vendor_model_history\.db/);
@@ -3595,9 +3590,18 @@ test("large analysis and comparison JSON exports use the bounded writer and Save
   assert.doesNotMatch(jsonExport, /showSaveFilePicker|TransformStream|\.blob\(\)|const chunks = \[\]/);
   assert.match(app, /async function downloadTextWriterExport\([\s\S]*?requestReadableStreamFileHandle\([\s\S]*?new globalThis\.TransformStream\([\s\S]*?createTextBlobStreamSink\(mimeType\)/);
   assert.match(app, /const textWriter = \{ write: \(chunk\) => writer\.write\(String\(chunk\)\) \}/);
-  assert.match(app, /async function downloadReadableStream\(filename, stream, mimeType, description(?:, fileHandle = null)?\)[\s\S]*?saveReadableStreamToFile\(stream,[\s\S]*?new globalThis\.Response\(stream,[\s\S]*?\.blob\(\)/);
+  assert.match(app, /async function downloadReadableStream\(filename, stream, mimeType, description, fileHandle = null, \{ streamToDiskOnly = false \} = \{\}\)[\s\S]*?saveReadableStreamToFile\(stream,[\s\S]*?if \(streamToDiskOnly\)[\s\S]*?new globalThis\.Response\(stream,[\s\S]*?\.blob\(\)/);
   assert.match(app, /async function exportReferenceArchive\(\)[\s\S]*?downloadReadableStream\(filename, archiveStream,[\s\S]*?Экспорт архива отменён/);
-  assert.match(app, /async function exportDatabase\(\)[\s\S]*?downloadReadableStream\(filename, archiveStream,[\s\S]*?Архив базы записан потоково/);
+  const databaseExport = app.slice(app.indexOf("async function exportDatabase()"), app.indexOf("\nasync function uploadActiveFinalToOptionalHost()"));
+  assert.match(databaseExport, /\.madb\.json/);
+  assert.match(databaseExport, /streamToDiskOnly: true/);
+  assert.match(databaseExport, /База JSON записана потоково на диск/);
+  assert.match(app, /async function importDatabase\(file\)[\s\S]*?inspectPortableArchiveHeader\(file\)[\s\S]*?importPortableArchiveFile\(file, \{ header \}\)/);
+  assert.match(app, /importDatabaseInput"\)\.addEventListener\("change", \(event\) => \{[\s\S]*?finally\(\(\) => \{ input\.value = ""; \}\)/);
+  const html = readFileSync("index.html", "utf8");
+  assert.match(html, /Скачать базу в JSON \(\.madb\.json\)/);
+  assert.match(html, /Загрузить базу из JSON/);
+  assert.match(html, /Портативный JSON Next проверяется и дополняет текущую базу/);
   assert.match(app, /async function exportDeviceAnalyticsXlsx\(\)[\s\S]*?createXlsxWorkbookStream\(deviceAnalyticsXlsxSheets[\s\S]*?downloadReadableStream\(/);
   const localArchiveStart = app.indexOf('host.querySelectorAll("[data-export-local-archive]")');
   const localArchiveEnd = app.indexOf('\n  host.querySelectorAll("[data-delete-local-archive]")', localArchiveStart);
