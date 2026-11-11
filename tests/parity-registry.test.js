@@ -473,7 +473,7 @@ test("reference Dashboard browser evidence checks exact pair counts, graph value
   assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
   assert.match(browserSmoke, /--reference-dashboard-146-only/);
   assert.match(browserSmoke, /expectedKpis: \{ devices: 6, added: 3, absent: 1, modified: 2 \}/);
-  assert.match(browserSmoke, /добавлено 3, отсутствовало 1/);
+  assert.match(browserSmoke, /count===3&&dashboard\.chart\[1\]\?\.\[index\]===-1/);
   assert.match(browserSmoke, /roomTimelineCount: timelineCount/);
   assert.match(browserSmoke, /runtimeDiagnostics\.length/);
 });

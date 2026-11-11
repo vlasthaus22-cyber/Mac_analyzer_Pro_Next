@@ -144,6 +144,7 @@ import {
   roomPairComparisonContent,
   roomCoverageContent,
   roomTimelineObservationContent,
+  setChartState,
   showDialog,
   unassignedDevicesContent,
 } from "./ui/render.js";
@@ -6396,12 +6397,10 @@ function paintAnalyticsSummary(analytics) {
     if (host) host.replaceChildren();
   }
   for (const selector of ["#weeklyChart", "#presenceChart", "#pyqtFieldCoverageChart", "#pyqtVendorShareChart", "#pyqtVendorTopChart", "#pyqtRoomDistributionChart"]) {
-    const canvas = $(selector);
-    canvas?.getContext?.("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    setChartState($(selector), "График рассчитывается…");
   }
   for (const selector of ["#dashboardStatusTotalsChart", "#dashboardStatusVendorsChart", "#dashboardStatusFieldsChart", "#dashboardStatusAbsentChart"]) {
-    const canvas = $(selector);
-    canvas?.getContext?.("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    setChartState($(selector), "График рассчитывается…");
   }
   $("#roomOccupancyStatus").textContent = "Сводка выбранного статуса рассчитывается…";
   $("#analyticsReportPreview").textContent = "Сводка выбранного статуса рассчитывается…";
@@ -6437,22 +6436,10 @@ function drawDashboardStatusCharts(analytics) {
     "chart:fields": "#dashboardStatusFieldsChart",
     "chart:absent-vendors": "#dashboardStatusAbsentChart",
   };
-  const style = getComputedStyle(document.body);
-  const color = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
-  const colors = {
-    background: color("--bg", "#f4f7f8"), surface: color("--surface", "#fff"),
-    text: color("--text", "#172326"), muted: color("--muted", "#66777b"),
-    grid: color("--border", "#d6e0e2"), axis: color("--muted", "#66777b"),
-    positive: color("--primary", "#087f8c"), negative: color("--danger", "#c92a2a"),
-    blue: color("--primary-dark", "#2667a8"),
-  };
   for (const chart of model.charts) {
     const canvas = $(canvasByKey[chart.key]);
-    const context = canvas?.getContext?.("2d");
-    if (!canvas || !context) continue;
-    canvas.width = Math.max(800, canvas.clientWidth);
-    canvas.height = Math.max(240, canvas.clientHeight);
-    drawDashboardExportChart(context, { ...chart, title: "" }, 0, 0, canvas.width, canvas.height, colors);
+    if (chart.key === "chart:totals") drawFinalTotalsTrend(canvas, analytics.totals);
+    else drawBars(canvas, chart.items, { horizontal: true, datasetLabel: chart.key === "chart:fields" ? "Изменений" : "Устройств" });
   }
 }
 

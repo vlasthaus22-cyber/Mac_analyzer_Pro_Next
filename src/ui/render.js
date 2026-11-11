@@ -440,14 +440,17 @@ export function modelPrefixAnalyticsContent(result) {
 
 const chartInstances = new WeakMap();
 
-function setChartState(canvas, message = "", error = false) {
+export function setChartState(canvas, message = "", error = false) {
+  if (!canvas) return;
   if (message) {
     chartInstances.get(canvas)?.destroy?.();
     chartInstances.delete(canvas);
     globalThis.Chart?.getChart?.(canvas)?.destroy?.();
   }
-  const state = canvas?.parentElement?.querySelector?.(`[data-chart-state="${canvas.id}"]`);
-  if (canvas) canvas.hidden = Boolean(message);
+  const parent = canvas.parentElement;
+  const container = parent?.classList?.contains("chart-frame") ? parent.parentElement : parent;
+  const state = container?.querySelector?.(`[data-chart-state="${canvas.id}"]`);
+  canvas.hidden = Boolean(message);
   if (state) {
     state.hidden = !message;
     state.textContent = message;
@@ -455,7 +458,7 @@ function setChartState(canvas, message = "", error = false) {
   }
 }
 
-export function drawBars(canvas, items, { positive = "#087f5b", negative = "#c92a2a", label = "value", datasetLabel = "Значение", afterLabel, maximum } = {}) {
+export function drawBars(canvas, items, { positive = "#087f5b", negative = "#c92a2a", label = "value", datasetLabel = "Значение", afterLabel, maximum, horizontal = false } = {}) {
   if (!canvas) return false;
   if (!Array.isArray(items)) {
     setChartState(canvas, "Ошибка: данные графика имеют неверный формат.", true);
@@ -487,6 +490,17 @@ export function drawBars(canvas, items, { positive = "#087f5b", negative = "#c92
     ChartConstructor.getChart?.(canvas)?.destroy?.();
     setChartState(canvas);
     const colors = rows.map(({ value }) => value < 0 ? negative : positive);
+    const theme = chartThemeColors();
+    const categories = {
+      ticks: { color: theme.text, maxRotation: 0, autoSkip: true, maxTicksLimit: horizontal ? 10 : 5, callback: compactChartTick },
+      grid: { display: false },
+    };
+    const values = {
+      beginAtZero: true,
+      ...(Number.isFinite(maximum) && maximum > 0 ? { max: maximum } : {}),
+      ticks: { precision: 0, color: theme.muted, maxTicksLimit: 5 },
+      grid: { color: theme.border },
+    };
     const chart = new ChartConstructor(context, {
       type: "bar",
       data: {
@@ -497,8 +511,9 @@ export function drawBars(canvas, items, { positive = "#087f5b", negative = "#c92
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
-        ...(typeof afterLabel === "function" ? { plugins: { tooltip: { callbacks: { afterLabel } } } } : {}),
-        scales: { y: { beginAtZero: true, ...(Number.isFinite(maximum) && maximum > 0 ? { max: maximum } : {}), ticks: { precision: 0 } } },
+        indexAxis: horizontal ? "y" : "x",
+        plugins: { legend: { display: false }, ...(typeof afterLabel === "function" ? { tooltip: { callbacks: { afterLabel } } } : {}) },
+        scales: horizontal ? { x: values, y: categories } : { x: categories, y: values },
       },
     });
     chartInstances.set(canvas, chart);
@@ -547,7 +562,10 @@ export function drawPie(canvas, items, { datasetLabel = "Устройства", 
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
-        ...(typeof afterLabel === "function" ? { plugins: { tooltip: { callbacks: { afterLabel } } } } : {}),
+        plugins: {
+          legend: { labels: { color: chartThemeColors().text, boxWidth: 9, padding: 5, font: { size: 11 } } },
+          ...(typeof afterLabel === "function" ? { tooltip: { callbacks: { afterLabel } } } : {}),
+        },
       },
     });
     chartInstances.set(canvas, chart);
@@ -575,6 +593,11 @@ function chartThemeColors() {
   } catch {
     return defaults;
   }
+}
+
+function compactChartTick(value) {
+  const label = String(this.getLabelForValue(value));
+  return label.length > 16 ? label.slice(0, 15) + "…" : label;
 }
 
 function drawLineChart(canvas, labels, datasets, title = "", chartType = "line") {
@@ -611,7 +634,7 @@ function drawLineChart(canvas, labels, datasets, title = "", chartType = "line")
           data: dataset.data,
           borderColor: dataset.color || (dataset.tone === "danger" ? colors.danger : colors.primary),
           backgroundColor: dataset.backgroundColor || dataset.color || (dataset.tone === "danger" ? colors.danger : colors.primary),
-          pointRadius: (dataset.type || chartType) === "line" ? 3 : 0,
+          pointRadius: (dataset.type || chartType) === "line" && labels.length <= 30 ? 3 : 0,
           tension: 0,
         })),
       },
@@ -619,13 +642,14 @@ function drawLineChart(canvas, labels, datasets, title = "", chartType = "line")
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
+        interaction: { mode: "index", intersect: false },
         plugins: {
           legend: { display: datasets.length > 1, labels: { color: colors.text } },
           title: { display: Boolean(title), text: title, color: colors.text },
         },
         scales: {
-          x: { ticks: { color: colors.muted }, grid: { color: colors.border } },
-          y: { beginAtZero: true, ticks: { precision: 0, color: colors.muted }, grid: { color: colors.border } },
+          x: { ticks: { color: colors.muted, maxRotation: 0, maxTicksLimit: 5, callback: compactChartTick }, grid: { display: false } },
+          y: { beginAtZero: true, ticks: { precision: 0, color: colors.muted, maxTicksLimit: 5 }, grid: { color: colors.border } },
         },
       },
     });
@@ -640,12 +664,6 @@ function drawLineChart(canvas, labels, datasets, title = "", chartType = "line")
 
 export function drawFinalChangeTrend(canvas, items = []) {
   const rows = Array.isArray(items) ? items : [];
-  if (canvas) canvas.title = rows.map((item) => {
-    const label = String(item?.label || "Без даты");
-    const added = Math.max(0, Math.floor(Number(item?.added) || 0));
-    const absent = Math.abs(Math.floor(Number(item?.absent) || 0));
-    return `${label}: добавлено ${added}, отсутствовало ${absent}`;
-  }).join("\n") || "Нет данных для сравнения Final";
   return drawLineChart(canvas, rows.map((item) => String(item?.label || "Без даты")), [
     { label: "Добавлено", data: rows.map((item) => Number(item?.added || 0)) },
     { label: "Отсутствовало", data: rows.map((item) => {
@@ -659,8 +677,10 @@ export function drawFinalTotalsTrend(canvas, items = []) {
   const rows = Array.isArray(items) ? items : [];
   const previous = Number(rows.at(-2)?.value || 0);
   const current = Number(rows.at(-1)?.value || 0);
-  const percentage = previous ? ((current - previous) / previous) * 100 : current ? 100 : 0;
-  const title = `Было ${previous.toLocaleString("ru-RU")}, стало ${current.toLocaleString("ru-RU")} (${percentage >= 0 ? "+" : ""}${percentage.toFixed(1)}%)`;
+  const percentage = previous ? ((current - previous) / previous) * 100 : 0;
+  const title = rows.length < 2
+    ? `Устройств: ${current.toLocaleString("ru-RU")}`
+    : `Было ${previous.toLocaleString("ru-RU")}, стало ${current.toLocaleString("ru-RU")}${previous ? ` (${percentage >= 0 ? "+" : ""}${percentage.toFixed(1)}%)` : ""}`;
   return drawLineChart(canvas, rows.map((item) => String(item?.label || "Без даты")), [
     { label: "Устройств", data: rows.map((item) => Number(item?.value || 0)) },
   ], title);
@@ -676,7 +696,6 @@ export function drawLegacyDailyStatistics(canvas, rows = []) {
 
 export function drawWeekly(canvas, items) {
   if (!Array.isArray(items)) return drawBars(canvas, items);
-  if (canvas) canvas.title = items.map((item) => `${formatWeekRangeLabel(item?.label)}: ${item?.modified ?? "—"} изменений, ${item?.rooms ?? "—"} помещений, ${item?.macs ?? "—"} MAC`).join("\n");
   return drawBars(canvas, items.map((item) => ({ label: formatWeekRangeLabel(item?.label), value: item?.modified })), {
     datasetLabel: "Изменений",
     afterLabel: ({ dataIndex }) => {

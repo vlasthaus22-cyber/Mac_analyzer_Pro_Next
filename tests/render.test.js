@@ -296,7 +296,7 @@ test("Chart.js renderer validates rows, renders every row and releases prior ins
     assert.equal(drawWeekly(canvas, [{ label: "Неделя 1", modified: 2, rooms: 1, macs: 3 }]), true);
     assert.equal(rendered[0].destroyed, true);
     assert.equal(rendered[1].config.data.datasets[0].label, "Изменений");
-    assert.equal(canvas.title, "Неделя 1: 2 изменений, 1 помещений, 3 MAC");
+    assert.equal(rendered[1].config.options.scales.x.ticks.maxRotation, 0);
     assert.equal(drawBars(canvas, []), false);
     assert.equal(rendered[1].destroyed, true);
     assert.equal(state.textContent, "Нет данных для построения графика.");
@@ -365,8 +365,7 @@ test("weekly chart uses reference date ranges, including weeks that cross a year
       { label: "2026-12-28", modified: 3, rooms: 2, macs: 4 },
     ]), true);
     assert.deepEqual(config.data.labels, ["05.01–11.01.2026", "28.12–03.01.2026/2027"]);
-    assert.match(canvas.title, /05\.01–11\.01\.2026: 2 изменений/);
-    assert.match(canvas.title, /28\.12–03\.01\.2026\/2027: 3 изменений/);
+    assert.deepEqual(config.data.datasets[0].data, [2, 3]);
     assert.equal(config.options.plugins.tooltip.callbacks.afterLabel({ dataIndex: 0 }), "Переговорных: 1 · MAC-адресов: 2");
     assert.equal(config.options.plugins.tooltip.callbacks.afterLabel({ dataIndex: 1 }), "Переговорных: 2 · MAC-адресов: 4");
   } finally {
@@ -405,7 +404,7 @@ test("Final presence and device-count charts use the reference line series and t
       { label: "Final 1", added: 0, absent: 0 },
       { label: "Final 2", added: 3, absent: 2 },
     ]), true);
-    assert.equal(presenceCanvas.title, "Final 1: добавлено 0, отсутствовало 0\nFinal 2: добавлено 3, отсутствовало 2");
+    assert.equal(presenceCanvas.title, "");
     assert.equal(rendered[0].config.type, "line");
     assert.deepEqual(rendered[0].config.data.labels, ["Final 1", "Final 2"]);
     assert.deepEqual(rendered[0].config.data.datasets.map((dataset) => dataset.label), ["Добавлено", "Отсутствовало"]);
@@ -433,6 +432,8 @@ test("Final presence and device-count charts use the reference line series and t
       { label: "Всего устройств", data: [20, 24] },
       { label: "Новых устройств", data: [3, 4] },
     ]);
+    assert.equal(drawFinalTotalsTrend(makeCanvas("single-final"), [{ label: "Final 1", value: 10 }]), true);
+    assert.equal(rendered[3].config.options.plugins.title.text, "Устройств: 10");
   } finally {
     if (previousChart === undefined) delete globalThis.Chart;
     else globalThis.Chart = previousChart;

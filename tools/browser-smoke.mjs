@@ -522,7 +522,7 @@ if (process.argv.includes("--dashboard-history-signs-only")) {
   let state=null;
   for(let attempt=0;attempt<300;attempt+=1){
     await wait(100);
-    state=await evaluate(`(()=>({loading:!document.querySelector('#analyticsLoadingStatus').hidden,history:[...document.querySelectorAll('#analyticsHistoryKpis .kpi')].map(item=>({label:item.querySelector('span')?.textContent.trim()||'',value:item.querySelector('strong')?.textContent.trim()||''})),presenceTitle:document.querySelector('#presenceChart')?.title||'',configs:window.__smokeChartConfigs||[],error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    state=await evaluate(`(()=>({loading:!document.querySelector('#analyticsLoadingStatus').hidden,history:[...document.querySelectorAll('#analyticsHistoryKpis .kpi')].map(item=>({label:item.querySelector('span')?.textContent.trim()||'',value:item.querySelector('strong')?.textContent.trim()||''})),trendSizes:['presenceChart','totalChart'].map(id=>document.getElementById(id).parentElement.getBoundingClientRect().height),configs:window.__smokeChartConfigs||[],error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if(state.error)throw new Error(`Dashboard history trends failed: ${state.message}`);
     if(!state.loading&&state.history.length===3&&state.configs.some(item=>item.canvasId==='presenceChart')&&state.configs.some(item=>item.canvasId==='totalChart'))break;
   }
@@ -530,14 +530,29 @@ if (process.argv.includes("--dashboard-history-signs-only")) {
   const totals=state.configs.find(item=>item.canvasId==='totalChart');
   const added=presence?.datasets.find(item=>item.label==='Добавлено')?.data;
   const absent=presence?.datasets.find(item=>item.label==='Отсутствовало')?.data;
-  if(state.loading||state.history.find(item=>item.label==='Final в истории')?.value!=='3'||state.history.find(item=>item.label==='Устройств во всех Final')?.value!=='8'
+  if(state.loading||state.history.find(item=>item.label==='Final в истории')?.value!=='3'||state.history.find(item=>item.label==='Наблюдений MAC во всех Final')?.value!=='8'
     ||presence?.labels.length!==2||presence.labels.some(label=>label.includes('history_first'))
     ||JSON.stringify(added)!==JSON.stringify([1,1])||JSON.stringify(absent)!==JSON.stringify([0,-1])
     ||JSON.stringify(totals?.labels)!==JSON.stringify(['Final history_first.csv','Final history_second.csv','Final history_third.csv'])
     ||JSON.stringify(totals?.datasets?.[0]?.data)!==JSON.stringify([2,3,3])
-    ||!state.presenceTitle.includes('Final history_second.csv: добавлено 1, отсутствовало 0')
-    ||!state.presenceTitle.includes('Final history_third.csv: добавлено 1, отсутствовало 1'))throw new Error(`Final history trend axes, signs, or full snapshot sequence are incorrect: ${JSON.stringify({state,presence,totals,added,absent})}`);
-  console.log(JSON.stringify({dashboardHistorySignsOnly:true,history:state.history,presence,totals,presenceTitle:state.presenceTitle,ok:true}));
+    ||state.trendSizes.some(height=>height<140||height>200))throw new Error(`Final history trend axes, signs, or full snapshot sequence are incorrect: ${JSON.stringify({state,presence,totals,added,absent})}`);
+  const compactLayout = [];
+  for (const width of [1280, 420]) {
+    await command("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
+    await wait(250);
+    const charts = await evaluate(`["presenceChart", "totalChart"].map(id => {
+      const canvas = document.getElementById(id);
+      const frame = canvas.parentElement.getBoundingClientRect();
+      const plot = canvas.getBoundingClientRect();
+      return { width: plot.width, height: plot.height, frameWidth: frame.width, frameHeight: frame.height };
+    })`);
+    if (charts.some(chart => chart.width <= 0 || chart.height < 140 || chart.height > 200
+      || Math.abs(chart.frameWidth - chart.width) > 1 || Math.abs(chart.frameHeight - chart.height) > 1)) {
+      throw new Error(`Chart canvas does not fit its compact frame at ${width}px: ${JSON.stringify(charts)}`);
+    }
+    compactLayout.push({ width, charts });
+  }
+  console.log(JSON.stringify({dashboardHistorySignsOnly:true,history:state.history,presence,totals,compactLayout,ok:true}));
   await command("Browser.close");
   socket.close();
   process.exit(0);
@@ -4122,11 +4137,11 @@ if (process.argv.includes("--reference-dashboard-146-only")) {
   let dashboard = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await wait(100);
-    dashboard = await evaluate(`(()=>({devices:document.querySelector('#analyticsKpis [data-kpi="devices"] strong')?.textContent||'',modified:document.querySelector('#analyticsKpis [data-kpi="modified"] strong')?.textContent||'',absent:document.querySelector('#analyticsKpis [data-kpi="absent"] strong')?.textContent||'',chart:document.querySelector('#presenceChart')?.title||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    dashboard = await evaluate(`(()=>({devices:document.querySelector('#analyticsKpis [data-kpi="devices"] strong')?.textContent||'',modified:document.querySelector('#analyticsKpis [data-kpi="modified"] strong')?.textContent||'',absent:document.querySelector('#analyticsKpis [data-kpi="absent"] strong')?.textContent||'',chart:window.Chart?.getChart?.(document.querySelector('#presenceChart'))?.data?.datasets?.map(series=>series.data)||[],error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (dashboard.error) throw new Error(`Dashboard parity report failed: ${dashboard.message}`);
-    if (dashboard.devices.split("/").at(-1).trim() === "6" && dashboard.modified === "2" && dashboard.absent === "1" && dashboard.chart.includes("добавлено 3, отсутствовало 1")) break;
+    if (dashboard.devices.split("/").at(-1).trim() === "6" && dashboard.modified === "2" && dashboard.absent === "1" && dashboard.chart[0]?.some((count,index)=>count===3&&dashboard.chart[1]?.[index]===-1)) break;
   }
-  if (dashboard.devices.split("/").at(-1).trim() !== "6" || dashboard.modified !== "2" || dashboard.absent !== "1" || !dashboard.chart.includes("добавлено 3, отсутствовало 1")) throw new Error(`Dashboard cards/chart differ from the exact 6/3/1/2 source scenario: ${JSON.stringify({selectedPair,dashboard})}`);
+  if (dashboard.devices.split("/").at(-1).trim() !== "6" || dashboard.modified !== "2" || dashboard.absent !== "1" || !dashboard.chart[0]?.some((count,index)=>count===3&&dashboard.chart[1]?.[index]===-1)) throw new Error(`Dashboard cards/chart differ from the exact 6/3/1/2 source scenario: ${JSON.stringify({selectedPair,dashboard})}`);
   await evaluate(`(()=>{const mode=document.querySelector('#changeReportModeSelect');mode.value='period';mode.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#changeReportFrom').value='2026-10-14';document.querySelector('#changeReportTo').value='2026-10-15';document.querySelector('#applyChangeReportButton').click();return true})()`);
   const changeCategories = [];
   for (const [key, label, expectedCount] of [["all", "Все", 10], ["critical", "Критические", 1], ["added", "Добавлены", 7], ["absent", "Отсутствуют", 1], ["modified", "Изменены", 2]]) {
@@ -4784,6 +4799,45 @@ if (process.argv.includes("--reference-archive-only")) {
     if (archiveImportError) throw new Error(`MAC_ANALYZER_NEXT_ARCHIVE v1 import failed: ${archiveImportError}`);
   }
   if (nextArchiveState?.active !== 'next-v1-smoke-final' || nextArchiveState.snapshot?.snapshotType !== 'final' || nextArchiveState.device?.manufacturer !== 'Next v1 Vendor' || nextArchiveState.history?.snapshotId !== 'next-v1-smoke-final' || nextArchiveState.snapshotCount !== 2 || nextArchiveState.inventoryCount !== 3 || nextArchiveState.historyCount !== 2) throw new Error(`MAC_ANALYZER_NEXT_ARCHIVE v1 did not restore its archived active Final additively: ${JSON.stringify(nextArchiveState)}`);
+  const roundTrip = await evaluate(`(async () => {
+    const originalPicker = Object.getOwnPropertyDescriptor(window, "showSaveFilePicker");
+    const chunks = [];
+    let filename;
+    let closeFile;
+    let abortFile;
+    const saved = new Promise((resolve, reject) => { closeFile = resolve; abortFile = reject; });
+    Object.defineProperty(window, "showSaveFilePicker", { configurable: true, value: async (options) => {
+      filename = options.suggestedName;
+      return { createWritable: async () => new WritableStream({
+        write(chunk) { chunks.push(chunk); },
+        close: closeFile,
+        abort: abortFile,
+      }) };
+    } });
+    try {
+      document.querySelector("#exportDatabaseButton").click();
+      await Promise.race([saved, new Promise((_, reject) => setTimeout(() => reject(new Error("JSON export did not close the stream")), 15000))]);
+      const file = new File(chunks, filename, { type: "application/json" });
+      const archive = JSON.parse(await file.text());
+      const input = document.querySelector("#importDatabaseInput");
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const transfer = new DataTransfer();
+        transfer.items.add(file);
+        input.files = transfer.files;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        for (let poll = 0; input.value && poll < 300; poll += 1) await new Promise(resolve => setTimeout(resolve, 50));
+        if (input.value || !document.querySelector("#errorBanner").hidden) throw new Error("JSON re-import did not finish cleanly");
+      }
+      return { filename, writes: chunks.length, format: archive.format, snapshots: archive.snapshots.length,
+        localNotifications: Boolean(document.querySelector("#localNotificationLog")) };
+    } finally {
+      if (originalPicker) Object.defineProperty(window, "showSaveFilePicker", originalPicker);
+      else delete window.showSaveFilePicker;
+    }
+  })()`);
+  if (!roundTrip.filename?.endsWith(".madb.json") || roundTrip.writes < 2 || roundTrip.format !== "MAC_ANALYZER_NEXT_ARCHIVE"
+    || roundTrip.snapshots !== 2 || roundTrip.localNotifications) throw new Error(`Portable JSON roundtrip failed: ${JSON.stringify(roundTrip)}`);
+  console.log("browser smoke: streamed JSON export and two re-imports of the same file passed");
   const backState = await navigateToHistoryDatabase(-1, sourceDatabase);
   const sourceAfterBack = await evaluate(`(()=>new Promise((resolve,reject)=>{const request=indexedDB.open(${JSON.stringify(sourceDatabase)});request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({active:active.result?.value||'',snapshots:snapshots.result,inventory:inventory.result,history:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   if (backState.db !== sourceDatabase || sourceAfterBack.active !== sourceRecords.active || sourceAfterBack.snapshots !== sourceRecords.snapshots || sourceAfterBack.inventory !== sourceRecords.inventory || sourceAfterBack.history !== sourceRecords.history) throw new Error(`Browser Back did not restore the unchanged source profile: ${JSON.stringify({backState,sourceRecords,sourceAfterBack})}`);
@@ -6446,8 +6500,20 @@ const scopedDeviceCount = missingScopedKpis?.devices.split('/').at(-1)?.replaceA
 if (missingScopedKpis?.error || missingScopedKpis?.loading || missingScopedKpis?.status !== 'missing' || scopedDeviceCount !== missingScopedKpis.absent.replaceAll(/\s/g, '') || missingScopedKpis.manufacturers.replaceAll(/\s/g, '') !== String(missingScopedKpis.manufacturerRows) || missingScopedKpis.rooms.replaceAll(/\s/g, '') !== String(missingScopedKpis.roomRows)) {
   throw new Error(`KPI, производители и помещения не используют один missing-status набор: ${JSON.stringify(missingScopedKpis)}`);
 }
-await evaluate(`document.querySelector('#resetAnalyticsDashboardFiltersButton').click()`);
 console.log("browser smoke: missing-status device, manufacturer and room KPIs match the full selected-status roster");
+
+async function resetDashboardDrilldownFilters() {
+  await evaluate(`document.querySelector('#resetAnalyticsDashboardFiltersButton').click()`);
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(100);
+    const ready = await evaluate(`document.querySelector('#analyticsLoadingStatus').hidden
+      && document.querySelector('#analyticsDashboardStatus').value === 'all'
+      && !document.querySelector('#analyticsDashboardManufacturer').value
+      && !document.querySelector('#analyticsDashboardRoom').value`);
+    if (ready) return;
+  }
+  throw new Error("Dashboard filters did not reset before the next drilldown");
+}
 
 async function openDashboardAggregateKpi(key, title) {
   await evaluate(`document.querySelector('#analyticsKpis [data-kpi="${key}"]')?.click()`);
@@ -6469,8 +6535,9 @@ async function openDashboardAggregateKpi(key, title) {
   return { rows: detail.rows, selected };
 }
 
+await resetDashboardDrilldownFilters();
 const manufacturerKpiDrilldown = await openDashboardAggregateKpi("manufacturers", "Производители выбранного Final");
-await evaluate(`document.querySelector('#resetAnalyticsDashboardFiltersButton').click()`);
+await resetDashboardDrilldownFilters();
 const roomKpiDrilldown = await openDashboardAggregateKpi("rooms", "Помещения выбранного Final");
 await evaluate(`document.querySelector('#resetAnalyticsDashboardFiltersButton').click()`);
 console.log(JSON.stringify({ browserSmokeDashboardAggregateKpis: { manufacturers: manufacturerKpiDrilldown, rooms: roomKpiDrilldown } }));

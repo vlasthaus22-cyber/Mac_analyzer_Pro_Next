@@ -1882,9 +1882,13 @@ test("weekly history chart stays independent from the configurable status chart 
   const app = readFileSync("src/app.js", "utf8");
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   const renderer = readFileSync("src/ui/render.js", "utf8");
-  const weeklyChart = html.match(/<article class="panel wide"><h3>Динамика изменения MAC-адресов по неделям<\/h3>[\s\S]*?<\/article>/)?.[0] || "";
+  const weeklyChart = html.match(/<article class="panel"><h3>Динамика изменения MAC-адресов по неделям<\/h3>[\s\S]*?<\/article>/)?.[0] || "";
   assert.match(weeklyChart, /<h3>Динамика изменения MAC-адресов по неделям<\/h3>/);
   assert.match(weeklyChart, /id="weeklyChart"[^>]*aria-label="Динамика изменения MAC-адресов по неделям"/);
+  assert.match(html, /class="analytics-grid analytics-trends"/);
+  for (const id of ["weeklyChart", "presenceChart", "totalChart", "dashboardStatusTotalsChart"]) {
+    assert.ok(html.includes(`<div class="chart-frame"><canvas id="${id}"`), id);
+  }
   assert.match(html, /data-dashboard-widget="chart:fields"/);
   assert.match(html, /data-dashboard-widget="chart:vendors"/);
   assert.match(html, /data-dashboard-widget="chart:absent-vendors"/);
