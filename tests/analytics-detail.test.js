@@ -312,6 +312,20 @@ test("analytics uses shared empty markers for vendor, model, room, IP, address, 
   assert.equal(payload.summary.withSwitchPort, 0);
 });
 
+test("analytics counts unique MAC devices once and treats legacy physicalAddress as address", () => {
+  const collector = createCollector({ includeClusters: false, includeTopologyDevices: false });
+  collector.accept([
+    { mac: "00:11:22:33:44:81", address: "", physicalAddress: "Building A" },
+    { mac: "00:11:22:33:44:81", room: "Duplicate room" },
+    { mac: "00:11:22:33:44:82", room: "101" },
+  ]);
+  const dataset = collector.finish();
+  assert.equal(dataset.summary.devices, 2);
+  assert.equal(dataset.summary.withAddress, 1);
+  assert.equal(dataset.roomOccupancy.unassignedDevices, 1);
+  assert.equal(dataset.roomOccupancy.assignedDevices, 1);
+});
+
 test("unknown switch IP markers are excluded from switch analytics and topology", () => {
   const devices = [
     { mac: "00:11:22:33:44:01", switchIp: "10.0.0.1", switchPort: "1" },

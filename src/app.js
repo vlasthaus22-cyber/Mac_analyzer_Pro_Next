@@ -91,7 +91,7 @@ import { DEFAULT_VENDOR_DETECTOR_SETTINGS, legacyVendorDetectorSettings, normali
 import { inventorySearchCsvChunks, inventorySearchTsvChunks, tableRowsTsv, tableRowsTsvChunks } from "./core/table-actions.js";
 import { createSnapshotXlsxSheets, writeSnapshotCsv, writeSnapshotHtml, writeSnapshotJson, writeSnapshotText, writeSnapshotYaml } from "./core/snapshot-export.js";
 import { createSnapshotPdfBlob } from "./core/pdf-export.js";
-import { createInventoryXlsxSheets } from "./core/inventory-export.js";
+import { createInventorySearchXlsxSheets, createInventoryXlsxSheets } from "./core/inventory-export.js";
 import { createXlsxWorkbookStream } from "./core/xlsx-export.js";
 import { historyExportSheets } from "./core/history-export.js";
 import { buildDeviceAnalytics, collectDeviceAppearances, deviceAnalyticsContent, deviceAnalyticsHtmlChunks, deviceAnalyticsHtmlHistoryRows, deviceAnalyticsTxt, deviceAnalyticsXlsxSheets } from "./core/device-analytics.js";
@@ -1735,8 +1735,9 @@ async function refreshDatabaseState() {
   state.inventoryTotal = await database.inventoryCount();
   const optionalInventoryUploadButton = $("#optionalHostInventoryUploadButton");
   if (optionalInventoryUploadButton) optionalInventoryUploadButton.disabled = state.inventoryTotal === 0;
-  writeDatabaseStatusCache({ snapshotCount: state.snapshotMetadata.length, inventoryCount: state.inventoryTotal });
-  $("#databaseStatus").textContent = `${state.snapshotMetadata.length} Final · ${state.inventoryTotal.toLocaleString("ru-RU")} устройств`;
+  const activeFinalCount = Number(state.activeSnapshot?.deviceCount || 0);
+  writeDatabaseStatusCache({ snapshotCount: state.snapshotMetadata.length, activeFinalCount, inventoryCount: state.inventoryTotal });
+  $("#databaseStatus").textContent = `${state.snapshotMetadata.length} Final · ${activeFinalCount.toLocaleString("ru-RU")} в активном Final`;
   renderSnapshotSelectors();
   // The catalogue is authoritative now. Restart active Dashboard work before
   // slower, unrelated page refreshes so cancellation cannot strand its UI.
@@ -1996,12 +1997,6 @@ async function loadInventoryColumnConfig() {
     }
   }
   state.inventoryColumnConfig = normalizeInventoryColumnConfig(saved);
-  const savedPhysicalAddress = saved?.columns?.find(({ key }) => key === "physicalAddress");
-  if (!restoredLegacyPreferences && savedPhysicalAddress && !savedPhysicalAddress.visible
-    && ["Адрес из источника", "Физический адрес"].includes(savedPhysicalAddress.label)) {
-    state.inventoryColumnConfig = updateInventoryColumn(state.inventoryColumnConfig, "physicalAddress", { label: "Физический адрес", visible: true });
-    await database.setSetting("inventoryColumnConfig", state.inventoryColumnConfig);
-  }
   state.inventoryColumnConfigLoaded = true;
   renderInventoryColumnManager();
   if (restoredLegacyPreferences) $("#inventoryColumnStatus").textContent = "Настройки столбцов восстановлены из импортированной базы.";
@@ -2957,8 +2952,8 @@ function renderSingleAnalysis(result) {
     ["С производителем", summary.withManufacturer], ["С моделью", summary.withModel], ["С помещением", summary.withRoom], ["С адресом", summary.withAddress],
   ];
   const ranking = (title, rows) => `<section><h3>${title}</h3>${rows.length ? `<ol>${rows.map((item) => `<li>${escapeHtml(item.label)} — ${item.value.toLocaleString("ru-RU")}</li>`).join("")}</ol>` : '<p class="muted">Нет данных</p>'}</section>`;
-  const columns = [["mac", "MAC"], ["manufacturer", "Производитель"], ["model", "Модель"], ["ip", "IP"], ["switchIp", "IP коммутатора"], ["room", "Помещение"], ["address", "Адрес"], ["physicalAddress", "Физический адрес"], ["sourceRows", "Строки"]];
-  const shown = result.preview.map((device) => ({ ...device, sourceRows: formatSingleFileSourceRows(device) }));
+  const columns = [["mac", "MAC"], ["manufacturer", "Производитель"], ["model", "Модель"], ["ip", "IP"], ["switchIp", "IP коммутатора"], ["room", "Помещение"], ["address", "Адрес"], ["sourceRows", "Строки"]];
+  const shown = result.preview.map((device) => ({ ...device, address: device.address || device.physicalAddress || "", sourceRows: formatSingleFileSourceRows(device) }));
   const invalid = result.invalidPreview;
   const invalidMacs = result.invalidMacPreview || [];
   const ambiguous = result.ambiguousPreview;
@@ -3000,8 +2995,8 @@ async function renderSingleAnalysisDevices(result, requestedPage = 1) {
   if (request !== state.singleAnalysisDevicePageRequest || !host.isConnected) return;
   state.singleAnalysisDevicePage = page.page;
   heading.textContent = `Распознанные устройства · показано ${Math.min(page.offset + page.rows.length, page.total).toLocaleString("ru-RU")} из ${page.total.toLocaleString("ru-RU")}`;
-  const columns = [["mac", "MAC"], ["manufacturer", "Производитель"], ["model", "Модель"], ["ip", "IP"], ["switchIp", "IP коммутатора"], ["room", "Помещение"], ["address", "Адрес"], ["physicalAddress", "Физический адрес"], ["sourceRows", "Строки"]];
-  const rows = page.rows.map((device) => ({ ...device, sourceRows: formatSingleFileSourceRows(device) }));
+  const columns = [["mac", "MAC"], ["manufacturer", "Производитель"], ["model", "Модель"], ["ip", "IP"], ["switchIp", "IP коммутатора"], ["room", "Помещение"], ["address", "Адрес"], ["sourceRows", "Строки"]];
+  const rows = page.rows.map((device) => ({ ...device, address: device.address || device.physicalAddress || "", sourceRows: formatSingleFileSourceRows(device) }));
   const pager = page.pageCount > 1
     ? `<div class="action-row"><span class="muted">Страница ${page.page.toLocaleString("ru-RU")} из ${page.pageCount.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-single-analysis-device-page="${page.page - 1}" ${page.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-single-analysis-device-page="${page.page + 1}" ${page.hasNext ? "" : "disabled"}>Дальше</button></div>`
     : "";
@@ -5013,8 +5008,8 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
   const matchesDashboard = createDashboardDeviceMatcher(analytics.dashboardFilters || {});
   const datasetSnapshotId = dashboardStatus === "missing" ? analytics.previous?.id || "" : analytics.current?.id || "";
   const datasetCacheSnapshotId = `${datasetSnapshotId}:dashboard:${dashboardStatus}`;
-  const datasetCacheKey = `selected-final-dataset-v7:${JSON.stringify(analytics.comparisonPairSignature || analytics.dashboardFilters || {})}`;
-  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 7);
+  const datasetCacheKey = `selected-final-dataset-v8:${JSON.stringify(analytics.comparisonPairSignature || analytics.dashboardFilters || {})}`;
+  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 8);
   if (!state.analyticsRequests.isCurrent(revision)) return null;
   let dataset = cachedDataset?.snapshotId === datasetCacheSnapshotId ? cachedDataset.dataset : null;
   if (!dataset) {
@@ -5022,7 +5017,22 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
     const clusterQueryId = datasetSnapshotId ? `analytics-final-v2:${datasetCacheSnapshotId}:${JSON.stringify(analytics.dashboardFilters || {})}` : "";
     if (clusterQueryId) await database.clearAnalyticsAggregateQuery(clusterQueryId);
     const datasetCollector = createDatasetAnalyticsCollector({ includeTopologyDevices: false, includeTopologySummary: !clusterQueryId, includeClusters: !clusterQueryId, includeRankings: !clusterQueryId, clusterFields });
+    const seenAnalyticsDeviceKeys = new Set();
     let rowsProcessed = 0;
+    const uniqueAnalyticsRows = (rows) => {
+      const unique = [];
+      for (const device of rows) {
+        const mac = normalizeMac(device?.mac || device?.macFormatted || device?.mac_formatted);
+        const fallbackId = text(device?.id || device?.deviceId || device?.serial);
+        const key = mac ? `mac:${mac}` : fallbackId ? `id:${fallbackId.toLocaleLowerCase("ru-RU")}` : "";
+        if (key) {
+          if (seenAnalyticsDeviceKeys.has(key)) continue;
+          seenAnalyticsDeviceKeys.add(key);
+        }
+        unique.push(device);
+      }
+      return unique;
+    };
     const acceptStatusChunk = (chunk = [], startOffset = 0) => {
       if (dashboardStatus === "missing") return chunk.filter((_device, index) => missingPositionMask?.[startOffset + index] === 1);
       if (dashboardStatus !== "changed" && dashboardStatus !== "unchanged") return chunk;
@@ -5040,7 +5050,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       }),
       isCurrent: () => state.analyticsRequests.isCurrent(revision),
       accept: async (chunk, startOffset = 0) => {
-        const selectedChunk = acceptStatusChunk(chunk, startOffset).filter(matchesDashboard);
+        const selectedChunk = uniqueAnalyticsRows(acceptStatusChunk(chunk, startOffset).filter(matchesDashboard));
         if (!selectedChunk.length) return;
         datasetCollector.accept(selectedChunk);
         const pendingRowsProcessed = rowsProcessed + selectedChunk.length;
@@ -5104,7 +5114,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       };
       stage("Сохранение рассчитанной сводки Dashboard…");
     }
-    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 7, {
+    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 8, {
       onProgress: ({ phase }) => {
         const labels = {
           started: "Сохранение сводки: открыта транзакция…",
@@ -6536,10 +6546,12 @@ function drawDashboardStatusCharts(analytics) {
 function paintAnalyticsDetails(analytics) {
   paintHistoryBackfill(analytics);
   const history = analytics.history || { snapshots: 0, deviceTotal: 0, uniqueMacs: 0 };
+  const selectedMacCount = Number(analytics.totals?.find((item) => item.id === analytics.current?.id)?.value
+    ?? history.selectedSnapshotUniqueMacs ?? 0);
   $("#analyticsHistoryKpis").innerHTML = [
     ["Final в истории", history.snapshots],
-    ["Устройств во всех Final", history.deviceTotal],
-    ["Уникальных MAC во всех Final", history.uniqueMacs],
+    ["Наблюдений MAC во всех Final", history.deviceTotal],
+    ["Уникальных MAC в выбранном Final", selectedMacCount],
   ].map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number(value).toLocaleString("ru-RU")}</strong></article>`).join("");
   renderKpis($("#analyticsKpis"), analytics.kpis, {
     devices: () => {
@@ -6557,9 +6569,12 @@ function paintAnalyticsDetails(analytics) {
     switchAnomalyRooms: () => openRoomAnomalyDialog(analytics),
     codecChanges: () => showAnalyticsModificationPage(analytics, 0, true).catch(showError),
   }, activeDashboardWidgetKeys(), {
-    devices: `${Number(history.uniqueMacs || 0).toLocaleString("ru-RU")} / ${Number(analytics.dashboardFilteredDeviceCount ?? analytics.kpis.devices ?? 0).toLocaleString("ru-RU")}`,
+    devices: Number(analytics.dashboardFilters?.status === "all"
+      ? selectedMacCount
+      : analytics.dashboardFilteredDeviceCount ?? analytics.kpis.devices ?? selectedMacCount).toLocaleString("ru-RU"),
     manufacturers: Number(analytics.dataset?.summary?.uniqueVendors ?? analytics.kpis.manufacturers).toLocaleString("ru-RU"),
     rooms: Number(analytics.dataset?.roomOccupancy?.uniqueRooms ?? analytics.dataset?.summary?.uniqueRooms ?? analytics.kpis.rooms).toLocaleString("ru-RU"),
+    withoutRoom: Number(analytics.dataset?.roomOccupancy?.unassignedDevices ?? analytics.kpis.withoutRoom).toLocaleString("ru-RU"),
   });
   drawWeekly($("#weeklyChart"), analytics.weekly);
   drawFinalChangeTrend($("#presenceChart"), analytics.snapshotChanges);
@@ -7132,6 +7147,26 @@ async function exportSearchCsv() {
   const mime = "text/csv;charset=utf-8";
   const stream = readableTextStreamFromIterable(iterable);
   await downloadReadableStream("devices.csv", stream, mime, "Inventory CSV");
+}
+
+async function exportSearchXlsx() {
+  const button = $("#exportSearchXlsxButton");
+  const query = keyText(state.search);
+  const columns = visibleInventoryColumns(state.inventoryColumnConfig);
+  const result = await createInventorySearchXlsxSheets(database, {
+    query,
+    matches: (device, search) => !search || matchesDeviceSearch(device, search),
+    columns,
+    onProgress: (exported, total) => { button.textContent = `Excel · ${exported.toLocaleString("ru-RU")} / ${total.toLocaleString("ru-RU")}`; },
+  });
+  const validation = new globalThis.TransformStream({
+    async flush() {
+      if (result.exported !== result.total) throw new Error(`Экспортировано ${result.exported} из ${result.total} строк поиска. Повторите экспорт.`);
+    },
+  });
+  await downloadReadableStream("devices-search.xlsx", createXlsxWorkbookStream(result.sheets).pipeThrough(validation), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Поиск Inventory Excel");
+  button.textContent = `Excel · ${result.exported.toLocaleString("ru-RU")}`;
+  globalThis.setTimeout(() => { if (button.isConnected) button.textContent = "Excel / XLSX"; }, 4_000);
 }
 
 async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
@@ -9385,7 +9420,7 @@ function renderSavedFinalSearchResults(rows) {
     const date = new Date(value || "");
     return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("ru-RU");
   };
-  container.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>MAC / ID</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Помещение</th><th>Адрес</th><th>Физический адрес</th><th>Final</th><th>Дата</th></tr></thead><tbody>${rows.map((row) => `<tr><td><button class="link-button" type="button" data-saved-final-snapshot="${escapeHtml(row.snapshotId)}" data-saved-final-index="${row.deviceIndex}">${escapeHtml(row.macFormatted)}</button></td><td>${escapeHtml(row.manufacturer || "—")}</td><td>${escapeHtml(row.model || "—")}</td><td>${escapeHtml(row.ip || "—")}</td><td>${escapeHtml(row.room || "—")}</td><td>${escapeHtml(row.address || "—")}</td><td>${escapeHtml(row.physicalAddress || "—")}</td><td>${escapeHtml(row.snapshotName)}</td><td>${escapeHtml(dateText(row.snapshotCreatedAt))}</td></tr>`).join("")}</tbody></table></div>`;
+  container.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>MAC / ID</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Помещение</th><th>Адрес</th><th>Final</th><th>Дата</th></tr></thead><tbody>${rows.map((row) => `<tr><td><button class="link-button" type="button" data-saved-final-snapshot="${escapeHtml(row.snapshotId)}" data-saved-final-index="${row.deviceIndex}">${escapeHtml(row.macFormatted)}</button></td><td>${escapeHtml(row.manufacturer || "—")}</td><td>${escapeHtml(row.model || "—")}</td><td>${escapeHtml(row.ip || "—")}</td><td>${escapeHtml(row.room || "—")}</td><td>${escapeHtml(row.address || row.physicalAddress || "—")}</td><td>${escapeHtml(row.snapshotName)}</td><td>${escapeHtml(dateText(row.snapshotCreatedAt))}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 async function runSavedFinalSearch() {
@@ -10248,6 +10283,11 @@ function bindEvents() {
   $("#previousPageButton").addEventListener("click", () => { state.page -= 1; scheduleWorkspaceStateSave(); renderDeviceTable().catch(showError); });
   $("#nextPageButton").addEventListener("click", () => { state.page += 1; scheduleWorkspaceStateSave(); renderDeviceTable().catch(showError); });
   $("#exportSearchCsvButton").addEventListener("click", () => exportSearchCsv().catch(showError));
+  $("#exportSearchXlsxButton").addEventListener("click", () => {
+    const button = $("#exportSearchXlsxButton");
+    button.disabled = true;
+    exportSearchXlsx().catch(showError).finally(() => { button.disabled = false; });
+  });
   $("#mac5ModelForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -11705,7 +11745,7 @@ async function bootstrap() {
   installTableSorter(document);
   const cachedStatus = readDatabaseStatusCache();
   if (cachedStatus) {
-    $("#databaseStatus").textContent = `${cachedStatus.snapshotCount} Final · ${cachedStatus.inventoryCount.toLocaleString("ru-RU")} устройств · последний сохранённый счётчик`;
+    $("#databaseStatus").textContent = `${cachedStatus.snapshotCount} Final · ${cachedStatus.activeFinalCount.toLocaleString("ru-RU")} в активном Final · последний сохранённый счётчик`;
   }
   await database.open();
   initializeOptionalHostConnection();

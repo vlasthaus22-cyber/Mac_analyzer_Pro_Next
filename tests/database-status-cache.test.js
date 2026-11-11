@@ -12,16 +12,18 @@ function memoryStorage() {
 
 test("database status cache preserves complete snapshot and inventory counters across unavailable startup", () => {
   const storage = memoryStorage();
-  assert.equal(writeDatabaseStatusCache({ snapshotCount: 12, inventoryCount: 12249 }, storage), true);
+  assert.equal(writeDatabaseStatusCache({ snapshotCount: 12, activeFinalCount: 214, inventoryCount: 12249 }, storage), true);
   const cached = readDatabaseStatusCache(storage);
   assert.equal(cached.snapshotCount, 12);
+  assert.equal(cached.activeFinalCount, 214);
   assert.equal(cached.inventoryCount, 12249);
   assert.ok(Number.isFinite(Date.parse(cached.savedAt)));
 });
 
 test("database status cache rejects malformed counters and tolerates unavailable storage", () => {
   assert.equal(readDatabaseStatusCache({ getItem: () => "{broken" }), null);
-  assert.equal(writeDatabaseStatusCache({ snapshotCount: -1, inventoryCount: 4 }, memoryStorage()), false);
+  assert.equal(writeDatabaseStatusCache({ snapshotCount: -1, activeFinalCount: 2, inventoryCount: 4 }, memoryStorage()), false);
+  assert.equal(readDatabaseStatusCache({ getItem: () => JSON.stringify({ snapshotCount: 2, activeFinalCount: "unknown", inventoryCount: 10 }) }), null);
   assert.equal(readDatabaseStatusCache({ getItem: () => { throw new Error("storage disabled"); } }), null);
   assert.equal(writeDatabaseStatusCache({ snapshotCount: 1, inventoryCount: 4 }, { setItem: () => { throw new Error("quota"); } }), false);
 });

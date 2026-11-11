@@ -279,7 +279,7 @@ test("full Dashboard cache reload and metadata-only trend close the autonomous a
   assert.match(row.status, /^Полностью подтверждено:/);
   assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
   assert.match(browserSmoke, /--dashboard-cache-reload-only/);
-  assert.match(browserSmoke, /selected-final-dataset-v7:/);
+  assert.match(browserSmoke, /selected-final-dataset-v8:/);
   assert.match(browserSmoke, /complete cached dashboard\/report did not recover after reopening/);
   assert.match(analyticsTests, /snapshot totals build an exact chronological trend from metadata without opening device rows/);
   assert.match(databaseTests, /snapshot history analytics cache is signed, readable, and invalidated on new Final/);
@@ -448,7 +448,7 @@ test("saved Final and Inventory counters remain visible during a real IndexedDB 
   assert.match(browserSmoke, /--database-unavailable-cache-only/);
   assert.match(browserSmoke, /cachedCounts\?\.snapshotCount !== 1/);
   assert.match(browserSmoke, /injected:\s*Boolean\(window\.__smokeIDBFailureInstalled\)/i);
-  assert.match(browserSmoke, /unavailableState\.status\.includes\("1 устройств"\)/);
+  assert.match(browserSmoke, /unavailableState\.status\.includes\("1 в активном Final"\)/);
 });
 
 test("all-changed room KPI opens the exact positive room roster in real-browser smoke", () => {

@@ -416,7 +416,7 @@ test("structured JSON values cannot become IPs, dates, or room keys", () => {
   assert.equal(normalizeDate({ value: "2026-10-15T10:30:00Z" }), "");
 });
 
-test("location hierarchy parses paths from room, locationPath or address and preserves empty positions", () => {
+test("location hierarchy parses explicit paths and legacy room paths, not address values", () => {
   const fromRoom = normalizeDevice({ room: "Банк, , Площадка, , Комната 3, Москва, улица 1" });
   assert.equal(fromRoom.businessUnit, "Банк");
   assert.equal(fromRoom.city, "");
@@ -424,13 +424,16 @@ test("location hierarchy parses paths from room, locationPath or address and pre
   assert.equal(fromRoom.floor, "");
   assert.equal(fromRoom.room, "Комната 3");
   assert.equal(fromRoom.address, "Москва, улица 1");
-
   const fromPath = normalizeDevice({ locationPath: "Банк, Москва, Площадка, 4, Комната 5", room: "Комната вручную" });
   assert.equal(fromPath.room, "Комната вручную");
   assert.equal(fromPath.businessUnit, "Банк");
-  const fromAddress = normalizeDevice({ address: "Банк, Москва, Площадка, 4, Комната 5, Москва, ул. Ленина" });
-  assert.equal(fromAddress.room, "Комната 5");
-  assert.equal(fromAddress.address, "Москва, ул. Ленина");
+  const plainAddress = "Банк, Москва, Площадка, 4, Комната 5, Москва, ул. Ленина";
+  const fromAddress = normalizeDevice({ address: plainAddress });
+  assert.equal(fromAddress.room, "");
+  assert.equal(fromAddress.address, plainAddress);
+  const plainRoom = normalizeDevice({ room: "Банк, Москва, Площадка, 4, Комната 5" });
+  assert.equal(plainRoom.room, "Комната 5");
+  assert.equal(plainRoom.businessUnit, "Банк");
 });
 
 test("normalized devices preserve the imported OUI comparison field", () => {

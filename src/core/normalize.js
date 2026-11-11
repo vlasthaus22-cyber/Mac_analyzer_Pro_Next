@@ -324,7 +324,10 @@ function parseLocationPath(value) {
 }
 
 function locationInference(input) {
-  for (const [field, value] of [["locationPath", input.locationPath], ["location", input.location], ["room", input.room], ["address", input.address]]) {
+  // A full location path may be supplied in the room column for legacy
+  // SmartRoom exports. A normal address may contain commas and must never be
+  // reinterpreted as a room.
+  for (const [field, value] of [["locationPath", input.locationPath], ["location", input.location], ["room", input.room]]) {
     if (!identityText(value)) continue;
     const parsed = parseLocationPath(value);
     if (parsed) return { ...parsed, sourceField: field };

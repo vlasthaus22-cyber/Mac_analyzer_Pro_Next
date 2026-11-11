@@ -958,7 +958,7 @@ test("saved Final search is reachable and renders a bounded, cancellable histori
   assert.ok(app.includes("savedFinalSearchController?.abort()"));
   assert.match(app, /state\.tableController,\s*savedFinalSearchController,\s*pyqtClusteringController/);
   assert.ok(app.includes("<th>Адрес</th>"));
-  assert.ok(app.includes("<th>Физический адрес</th>"));
+  assert.match(app, /<th>Помещение<\/th><th>Адрес<\/th><th>Final<\/th>/);
   assert.ok(app.includes('"ctrl+shift+f": () => { activateView("search"); runSavedFinalSearch().catch(showError); },'));
   assert.ok(search.includes("for (let snapshotIndex = snapshots.length - 1; snapshotIndex >= 0; snapshotIndex -= 1)"));
   assert.ok(search.includes("seenIdentities.has(identityKey)"));
@@ -2138,9 +2138,9 @@ test("extended selected-Final analytics reuses its loaded payload and falls back
   assert.match(app, /scheduleAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask, currentStatusMask\)/);
   assert.match(app, /function calculateAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null\)/);
   assert.match(app, /await feedAnalyticsDatasetRows\(\{[\s\S]*?devices: datasetSnapshotId \? undefined : analytics\.devices[\s\S]*?visitChunks: \(snapshotId, visit\) => database\.forEachSnapshotChunk\(snapshotId, visit, \{/);
-    assert.match(app, /selected-final-dataset-v7:/);
-  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 7\)/);
-  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 7, \{[\s\S]*?onProgress/);
+    assert.match(app, /selected-final-dataset-v8:/);
+  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 8\)/);
+  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 8, \{[\s\S]*?onProgress/);
   assert.match(app, /\.\.\.collectTopologyBuckets\(selectedChunk\)/);
   assert.match(app, /analyticsAggregateRankedPage\(clusterQueryId, "topology-switch", \{ limit: 20 \}\)/);
   assert.match(app, /dataset\.summary\.devices !== expectedDevices/);

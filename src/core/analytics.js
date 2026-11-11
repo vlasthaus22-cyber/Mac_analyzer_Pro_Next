@@ -61,7 +61,7 @@ function roomDescriptor(device) {
     site: text(device.site),
     floor: text(device.floor),
     room: text(device.room),
-    address: text(device.address),
+    address: text(device.address || device.physicalAddress),
   };
 }
 
@@ -1356,7 +1356,7 @@ export function createPresenceChurnTracker() {
     model: String(device.model || ""),
     ip: String(device.ip || ""),
     room: String(device.room || ""),
-    address: String(device.address || ""),
+    address: String(device.address || device.physicalAddress || ""),
     smartroomId: String(device.smartroomId || device.smartroom_id || ""),
   });
   const commit = (current) => {
@@ -1428,6 +1428,7 @@ export function createPresenceChurnTracker() {
     const current = incoming;
     incoming = null;
     commit(current);
+    return current.count;
   };
   return Object.freeze({
     beginSnapshot,
@@ -1535,7 +1536,6 @@ export async function aggregateSnapshotHistory(snapshots = [], visitSnapshotChun
     const snapshot = ordered[index];
     const comparison = index > 0 ? createFinalComparisonSummary(previousDevices, snapshot.createdAt, { deviceMatches: matchesCurrentDevice }) : null;
     const currentDevices = [];
-    let filteredDeviceCount = 0;
     churn.beginSnapshot(snapshot);
     await visitSnapshotChunks(snapshot.id, (devices) => {
       chunkMatchCache = new WeakMap();
@@ -1544,20 +1544,19 @@ export async function aggregateSnapshotHistory(snapshots = [], visitSnapshotChun
         const compact = compactComparisonDevice(device);
         compactMatchCache.set(compact, matched);
         currentDevices.push(compact);
-        if (matched) filteredDeviceCount += 1;
       }
       comparison?.observeChunk(devices);
       for (const device of devices) if (matchesCurrentDevice(device)) churn.observeDevice(device);
     }, snapshot, index);
-    churn.endSnapshot();
+    const uniqueMacCount = churn.endSnapshot();
     if (comparison) {
       const summary = comparison.finish();
       weekly.observeSummary(snapshot, summary);
       snapshotChanges.push({ label: snapshot.name || snapshot.createdAt, added: summary.added, absent: summary.absent });
     }
     previousDevices = currentDevices;
-    snapshotTotals.push({ label: snapshot.name || snapshot.createdAt, value: filteredDeviceCount });
-    deviceTotal += filteredDeviceCount;
+    snapshotTotals.push({ id: String(snapshot.id || ""), label: snapshot.name || snapshot.createdAt, value: uniqueMacCount });
+    deviceTotal += uniqueMacCount;
   }
   return {
     weekly: weekly.result(),
@@ -1568,6 +1567,7 @@ export async function aggregateSnapshotHistory(snapshots = [], visitSnapshotChun
       snapshots: ordered.length,
       deviceTotal,
       uniqueMacs: churn.uniqueCount(),
+      selectedSnapshotUniqueMacs: snapshotTotals.at(-1)?.value || 0,
     },
   };
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.3.5 — 2026-11-11
+
+- Dashboard counters now distinguish the active Final and count unique MAC addresses rather than cumulative Inventory rows or repeated snapshot observations.
+- Analytics deduplicates repeated MAC rows for device and room-coverage counts; legacy `physicalAddress` values fill the single visible Address field.
+- Normalization no longer turns a comma-separated `address` into a room hierarchy. Explicit `location`/`locationPath` and legacy paths in the `room` column retain their hierarchy behavior.
+- Search results include a streaming Excel/XLSX export of the complete current filter, split across sheets when needed.
+- Analytics trend and presence charts are shorter and more compact.
+- The portable database guide identifies the `.madb.json` backup format and explains that the active browser database remains in IndexedDB.
+- Verification: full `pnpm check` passed (including Python 199/199, Windows host runtime and verified portable ZIP); Chrome browser smoke passed; release readiness passed at 188/188 (100%).
+
 ## v2.3.4 — 2026-11-10
 
 - Inventory virtualization now listens on the actual scrollable table host, so pages larger than 50 rows can scroll past the first 20 rendered rows.

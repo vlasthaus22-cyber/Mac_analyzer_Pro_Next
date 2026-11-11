@@ -170,7 +170,7 @@ async function dispatchTrustedClick(selector) {
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 if (analyticsStagesOnly) await reloadDatabaseAndWait(new URL(target.url).searchParams.get("db"));
-async function navigateToHistoryDatabase(offset, expectedDatabase, expectedInventoryCount) {
+async function navigateToHistoryDatabase(offset, expectedDatabase) {
   const history = await command("Page.getNavigationHistory");
   const entry = history.entries[history.currentIndex + offset];
   if (!entry || new URL(entry.url).searchParams.get("db") !== expectedDatabase) {
@@ -186,9 +186,7 @@ async function navigateToHistoryDatabase(offset, expectedDatabase, expectedInven
     await attachToTarget(target.webSocketDebuggerUrl, { force: true });
     await command("Runtime.enable");
     const state = await evaluate(`(()=>({db:new URL(location.href).searchParams.get('db'),title:document.title,status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
-    const inventoryCountReady = expectedInventoryCount === undefined
-      || state.status.includes(`${Number(expectedInventoryCount).toLocaleString("ru-RU")} устройств`);
-    if (state.db === expectedDatabase && state.title === "MAC Analyzer Pro Next" && state.status && !state.error && inventoryCountReady) return state;
+    if (state.db === expectedDatabase && state.title === "MAC Analyzer Pro Next" && state.status.includes("в активном Final") && !state.error) return state;
   }
   throw new Error(`Browser did not restore ready database ${expectedDatabase} from history`);
 }
@@ -568,9 +566,9 @@ if (process.argv.includes("--search-doubleclick-only")) {
     const current=await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if(current.error)throw new Error(`Search double-click fixture failed: ${current.message}`);
     finalStatus=current.status;
-    if(finalStatus.includes('1 Final')&&finalStatus.includes('2 устройств'))break;
+    if(finalStatus.includes('1 Final')&&finalStatus.includes('2 в активном Final'))break;
   }
-  if(!finalStatus.includes('3 устройств'))throw new Error(`Search double-click fixture did not save three strong-identity devices: ${finalStatus}`);
+  if(!finalStatus.includes('3 в активном Final'))throw new Error(`Search double-click fixture did not save three strong-identity devices: ${finalStatus}`);
   const stored=await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const devices=chunks.result.filter(chunk=>chunk.snapshotId===active.result?.value).flatMap(chunk=>chunk.devices||[]);db.close();resolve(devices.map(({mac,deviceId,model})=>({mac,deviceId,model}))) };tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   if(stored.length!==3||!stored.some(item=>item.deviceId==='CONTEXT-MODEL-2'&&!item.mac&&item.model==='Context Model B'))throw new Error(`The model-only row did not retain strong Device ID identity: ${JSON.stringify(stored)}`);
   await evaluate(`document.querySelector('[data-view="search"]').click()`);
@@ -623,7 +621,7 @@ if (process.argv.includes("--dashboard-summary-parity-only")) {
     await wait(100);
     const state=await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if(state.error)throw new Error(`Dashboard summary fixture failed: ${state.message}`);
-    if(state.status.includes('1 Final')&&state.status.includes('5 устройств')){finalReady=true;break}
+    if(state.status.includes('1 Final')&&state.status.includes('5 в активном Final')){finalReady=true;break}
   }
   if(!finalReady)throw new Error('Dashboard summary fixture did not save all five devices');
    const databaseName = new URL(target.url).searchParams.get("db");
@@ -1777,9 +1775,9 @@ if (process.argv.includes("--table-context-actions-only")) {
     await wait(100);
     inventoryReady = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (inventoryReady.error) throw new Error(`Context-action Final failed: ${inventoryReady.message}`);
-    if (inventoryReady.status.includes("1 Final") && inventoryReady.status.includes("2 устройств")) break;
+    if (inventoryReady.status.includes("1 Final") && inventoryReady.status.includes("2 в активном Final")) break;
   }
-  if (!inventoryReady?.status.includes("2 устройств")) throw new Error(`Context-action Inventory did not load two rows: ${JSON.stringify(inventoryReady)}`);
+  if (!inventoryReady?.status.includes("2 в активном Final")) throw new Error(`Context-action Inventory did not load two rows: ${JSON.stringify(inventoryReady)}`);
   await evaluate(`document.querySelector('[data-view="search"]').click()`);
   await wait(200);
   await evaluate(`(()=>{window.__smokeClipboard=[];class SmokeClipboardItem{constructor(values){this.values=values}getType(type){return Promise.resolve(this.values[type])}}Object.defineProperty(globalThis,'ClipboardItem',{configurable:true,value:SmokeClipboardItem});Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(value)=>{window.__smokeClipboard.push(String(value))},write:async(items)=>{const blob=await items[0].getType('text/plain');window.__smokeClipboard.push(await blob.text())}}});return true})()`);
@@ -2426,9 +2424,9 @@ if (process.argv.includes("--data-directory-populated-startup-restore-only")) {
       const current = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
       if (current.error) throw new Error(`Could not create ${fileName}: ${current.message}`);
       status = current.status;
-      if (status.includes('1 Final') && status.includes('1 устройств')) break;
+      if (status.includes('1 Final') && status.includes('1 в активном Final')) break;
     }
-    if (!status.includes('1 Final') || !status.includes('1 устройств')) throw new Error(`${fileName} did not save one Final device: ${status}`);
+    if (!status.includes('1 Final') || !status.includes('1 в активном Final')) throw new Error(`${fileName} did not save one Final device: ${status}`);
     return await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const rows=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value||'',finals:rows.result.filter(item=>item.kind!=='single').map(item=>({id:item.id,deviceCount:item.deviceCount}))})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   };
 
@@ -2574,7 +2572,7 @@ if (process.argv.includes("--dashboard-settings-ui-only")) {
     await wait(100);
     const state = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if (state.error) throw new Error(`Dashboard settings fixture failed: ${state.message}`);
-    if (state.status.includes('1 Final') && state.status.includes('2 устройств')) { finalReady = true; break; }
+    if (state.status.includes('1 Final') && state.status.includes('2 в активном Final')) { finalReady = true; break; }
   }
   if (!finalReady) throw new Error('Dashboard settings fixture did not save its two-device Final');
   await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
@@ -2861,7 +2859,7 @@ if (process.argv.includes("--sqlite-smartroom-room-only")) {
     await wait(100);
     result = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (result.error) throw new Error(`Imported room mapping enrichment failed: ${result.message}`);
-    if (result.status.includes("1 Final") && result.status.includes("3 устройств")) break;
+    if (result.status.includes("1 Final") && result.status.includes("3 в активном Final")) break;
   }
   const persisted = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks','legacySmartroomRoomMappings'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const mappings=tx.objectStore('legacySmartroomRoomMappings').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const activeId=active.result?.value;const devices=chunks.result.filter((chunk)=>chunk.snapshotId===activeId).flatMap((chunk)=>chunk.devices||[]);db.close();resolve({activeId,importedMappings:mappings.result.map((item)=>({smartroomId:item.smartroomId,room:item.room,source:item.source,updatedAt:item.updatedAt})),devices:devices.map(({deviceId,smartroomId,room,fieldSources,roomConfidence})=>({deviceId,smartroomId,room,fieldSource:fieldSources?.room||'',roomConfidence}))})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   const exact = persisted.devices.find((device) => device.deviceId === "ROOM-EXACT");
@@ -2891,9 +2889,9 @@ if (process.argv.includes("--legacy-autosave-recovery-only")) {
     await wait(100);
     localFinalStatus = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (localFinalStatus.error) throw new Error(`Could not create a local Final before the legacy autosave import: ${localFinalStatus.message}`);
-    if (localFinalStatus.status.includes("1 Final") && localFinalStatus.status.includes("1 устройств")) break;
+    if (localFinalStatus.status.includes("1 Final") && localFinalStatus.status.includes("1 в активном Final")) break;
   }
-  if (!localFinalStatus?.status.includes("1 Final") || !localFinalStatus.status.includes("1 устройств")) throw new Error(`The local Final was not ready before legacy autosave import: ${JSON.stringify(localFinalStatus)}`);
+  if (!localFinalStatus?.status.includes("1 Final") || !localFinalStatus.status.includes("1 в активном Final")) throw new Error(`The local Final was not ready before legacy autosave import: ${JSON.stringify(localFinalStatus)}`);
   const beforeImport = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{const activeId=active.result?.value||'';const current=snapshots.result.find((snapshot)=>snapshot.id===activeId);db.close();resolve({activeId,snapshotCount:snapshots.result.length,snapshot:current||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   if (!beforeImport.activeId || beforeImport.snapshot?.deviceCount !== 1 || beforeImport.snapshotCount !== 1) throw new Error(`The disposable local Final is not a single complete snapshot: ${JSON.stringify(beforeImport)}`);
   await evaluate(`document.querySelector('[data-view="data"]').click()`);
@@ -3049,7 +3047,7 @@ if (process.argv.includes("--switch-ip-pages-only")) {
       await wait(100);
       state = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
       if (state.error) throw new Error(`Switch-IP paging Final ${expectedFinals} failed: ${state.message}`);
-      if (state.status.includes(`${expectedFinals} Final`) && state.status.includes(`${rowCount} устройств`)) return state;
+      if (state.status.includes(`${expectedFinals} Final`) && state.status.includes(`${rowCount} в активном Final`)) return state;
     }
     throw new Error(`Switch-IP paging Final ${expectedFinals} timed out: ${JSON.stringify(state)}`);
   };
@@ -3179,7 +3177,7 @@ if (process.argv.includes("--dashboard-xlsx-parity-only")) {
     await wait(100);
     const state = await evaluate("({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})");
     if (state.error) throw new Error(`Dashboard XLSX parity enrichment failed: ${state.message}`);
-    if (state.status.includes("1 Final") && state.status.includes("4 устройств")) { finalReady = true; break; }
+    if (state.status.includes("1 Final") && state.status.includes("4 в активном Final")) { finalReady = true; break; }
   }
   if (!finalReady) throw new Error("Dashboard XLSX parity source Final was not committed");
   await evaluate("document.querySelector('[data-view=\"analytics\"]').click()");
@@ -3233,9 +3231,9 @@ if (process.argv.includes("--database-unavailable-cache-only")) {
     await wait(100);
     savedStatus = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (savedStatus.error) throw new Error(`Cache smoke could not create its disposable Final: ${savedStatus.message}`);
-    if (savedStatus.status.includes("1 Final") && savedStatus.status.includes("1 устройств")) break;
+    if (savedStatus.status.includes("1 Final") && savedStatus.status.includes("1 в активном Final")) break;
   }
-  if (!savedStatus?.status.includes("1 Final") || !savedStatus.status.includes("1 устройств")) throw new Error(`The cache smoke Final did not finish: ${JSON.stringify(savedStatus)}`);
+  if (!savedStatus?.status.includes("1 Final") || !savedStatus.status.includes("1 в активном Final")) throw new Error(`The cache smoke Final did not finish: ${JSON.stringify(savedStatus)}`);
   const cachedCounts = await evaluate(`(()=>{const value=JSON.parse(localStorage.getItem('mac-analyzer-database-status-v1')||'null');return value&&{snapshotCount:value.snapshotCount,inventoryCount:value.inventoryCount}})()`);
   if (cachedCounts?.snapshotCount !== 1 || cachedCounts?.inventoryCount !== 1) throw new Error(`Successful database status was not cached before the failure: ${JSON.stringify(cachedCounts)}`);
   await command("Page.enable");
@@ -3245,9 +3243,9 @@ if (process.argv.includes("--database-unavailable-cache-only")) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     await wait(100);
     unavailableState = await evaluate(`(()=>({injected:Boolean(window.__smokeIDBFailureInstalled),status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
-    if (unavailableState.error && unavailableState.status.includes("1 Final") && unavailableState.status.includes("1 устройств")) break;
+    if (unavailableState.error && unavailableState.status.includes("1 Final") && unavailableState.status.includes("1 в активном Final")) break;
   }
-  if (!unavailableState?.error || !unavailableState.status.includes("1 Final") || !unavailableState.status.includes("1 устройств") || !unavailableState.message.includes("IndexedDB open failure")) {
+  if (!unavailableState?.error || !unavailableState.status.includes("1 Final") || !unavailableState.status.includes("1 в активном Final") || !unavailableState.message.includes("IndexedDB open failure")) {
     throw new Error(`The exact saved Final and Inventory counts were not retained when IndexedDB became unavailable: ${JSON.stringify({ cachedCounts, unavailableState })}`);
   }
   console.log(JSON.stringify({ cachedCounts, unavailableState, ok: true }));
@@ -3487,9 +3485,9 @@ if (process.argv.includes("--analytics-cache-reopen-only")) {
     await wait(100);
     finalState = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if (finalState.error) throw new Error(`Analytics-cache fixture failed: ${finalState.message}`);
-    if (finalState.status.includes('1 Final') && finalState.status.includes('3 устройств')) break;
+    if (finalState.status.includes('1 Final') && finalState.status.includes('3 в активном Final')) break;
   }
-  if (!finalState?.status.includes('1 Final') || !finalState.status.includes('3 устройств')) throw new Error(`Analytics-cache fixture did not produce one three-device Final: ${JSON.stringify(finalState)}`);
+  if (!finalState?.status.includes('1 Final') || !finalState.status.includes('3 в активном Final')) throw new Error(`Analytics-cache fixture did not produce one three-device Final: ${JSON.stringify(finalState)}`);
   await evaluate(`(()=>{window.__smokeSnapshotChunkTransactions=0;const original=IDBDatabase.prototype.transaction;IDBDatabase.prototype.transaction=function(stores,...args){const names=typeof stores==='string'?[stores]:Array.from(stores||[]);if(names.includes('snapshotChunks'))window.__smokeSnapshotChunkTransactions+=1;return original.call(this,stores,...args)}})()`);
   await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
   let firstRender = null;
@@ -3754,7 +3752,7 @@ if (process.argv.includes("--final-export-all-only")) {
     await wait(100);
     const state = await evaluate(`({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if (state.error) throw new Error(`Final export fixture failed: ${state.message}`);
-    if (state.status.includes("1 Final") && state.status.includes("1 устройств")) { finalReady = true; break; }
+    if (state.status.includes("1 Final") && state.status.includes("1 в активном Final")) { finalReady = true; break; }
   }
   if (!finalReady) throw new Error("Final export fixture did not produce exactly one device");
   await evaluate(`document.querySelector('[data-view="data"]').click()`);
@@ -4423,7 +4421,7 @@ if (process.argv.includes("--expansion-no-only") || process.argv.includes("--exp
     await wait(100);
     state = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (state.error) throw new Error(`Expansion strategy ${strategy} failed: ${state.message}`);
-    if (state.status.includes("Final") && !state.status.includes("0 устройств")) break;
+    if (state.status.includes("Final") && !state.status.includes("0 в активном Final")) break;
   }
   const finalState = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const activeId=active.result?.value||'';const snapshot=snapshots.result.find(item=>item.id===activeId);const devices=chunks.result.filter(chunk=>chunk.snapshotId===activeId).sort((a,b)=>a.index-b.index).flatMap(chunk=>chunk.devices||[]);db.close();resolve({activeId,deviceCount:devices.length,deviceIds:devices.map(device=>device.deviceId).sort(),macs:devices.map(device=>device.mac).sort(),unmatchedTotal:snapshot?.diagnosticCounts?.unmatchedTotal??snapshot?.unmatchedCount??null,status:document.querySelector('#databaseStatus')?.textContent||''})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   const expectedCount = strategy === "ALLOW_EXPANSION" ? 2 : 1;
@@ -4769,7 +4767,7 @@ if (process.argv.includes("--reference-archive-only")) {
     const profile = new URL(target.url).searchParams.get("db") || "";
     if (/^mac-analyzer-pro-next-profile-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(profile)) {
       importedProfile = await evaluate(`(()=>({db:new URL(location.href).searchParams.get('db'),status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
-      if (importedProfile.status.includes("1 Final") && importedProfile.status.includes("1 устройств")) break;
+      if (importedProfile.status.includes("1 Final") && importedProfile.status.includes("1 в активном Final")) break;
     }
   }
   const profileRecords = await evaluate(`(()=>{const name=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const request=indexedDB.open(name);request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshot=tx.objectStore('snapshots').get('reference-smoke-final');const device=tx.objectStore('inventory').get('DEV-REFERENCE-SMOKE');const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({active:active.result?.value,snapshot:Boolean(snapshot.result),vendor:device.result?.manufacturer||'',history:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
@@ -4786,10 +4784,10 @@ if (process.argv.includes("--reference-archive-only")) {
     if (archiveImportError) throw new Error(`MAC_ANALYZER_NEXT_ARCHIVE v1 import failed: ${archiveImportError}`);
   }
   if (nextArchiveState?.active !== 'next-v1-smoke-final' || nextArchiveState.snapshot?.snapshotType !== 'final' || nextArchiveState.device?.manufacturer !== 'Next v1 Vendor' || nextArchiveState.history?.snapshotId !== 'next-v1-smoke-final' || nextArchiveState.snapshotCount !== 2 || nextArchiveState.inventoryCount !== 3 || nextArchiveState.historyCount !== 2) throw new Error(`MAC_ANALYZER_NEXT_ARCHIVE v1 did not restore its archived active Final additively: ${JSON.stringify(nextArchiveState)}`);
-  const backState = await navigateToHistoryDatabase(-1, sourceDatabase, sourceRecords.inventory);
+  const backState = await navigateToHistoryDatabase(-1, sourceDatabase);
   const sourceAfterBack = await evaluate(`(()=>new Promise((resolve,reject)=>{const request=indexedDB.open(${JSON.stringify(sourceDatabase)});request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({active:active.result?.value||'',snapshots:snapshots.result,inventory:inventory.result,history:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   if (backState.db !== sourceDatabase || sourceAfterBack.active !== sourceRecords.active || sourceAfterBack.snapshots !== sourceRecords.snapshots || sourceAfterBack.inventory !== sourceRecords.inventory || sourceAfterBack.history !== sourceRecords.history) throw new Error(`Browser Back did not restore the unchanged source profile: ${JSON.stringify({backState,sourceRecords,sourceAfterBack})}`);
-  const forwardState = await navigateToHistoryDatabase(1, importedProfile.db, 3);
+  const forwardState = await navigateToHistoryDatabase(1, importedProfile.db);
   const reloadState = await reloadDatabaseAndWait(importedProfile.db);
   const profileAfterReload = await evaluate(`(()=>{const name=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const request=indexedDB.open(name);request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshot=tx.objectStore('snapshots').get('reference-smoke-final');const nextSnapshot=tx.objectStore('snapshots').get('next-v1-smoke-final');const device=tx.objectStore('inventory').get('DEV-REFERENCE-SMOKE');const transferDevice=tx.objectStore('inventory').get('DEVICE-TRANSFER-SMOKE');const nextDevice=tx.objectStore('inventory').get('NEXT-V1-DEVICE');const inventoryCount=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({active:active.result?.value,snapshot:Boolean(snapshot.result),nextSnapshot:Boolean(nextSnapshot.result),vendor:device.result?.manufacturer||'',transferVendor:transferDevice.result?.manufacturer||'',nextVendor:nextDevice.result?.manufacturer||'',inventoryCount:inventoryCount.result,history:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
   if (forwardState.db !== importedProfile.db || reloadState.db !== importedProfile.db || profileAfterReload.active !== nextArchiveState.active || !profileAfterReload.snapshot || !profileAfterReload.nextSnapshot || profileAfterReload.vendor !== profileRecords.vendor || profileAfterReload.transferVendor !== "Device Transfer Vendor" || profileAfterReload.nextVendor !== "Next v1 Vendor" || profileAfterReload.inventoryCount !== 3 || profileAfterReload.history !== nextArchiveState.historyCount) throw new Error(`Imported profile did not survive browser Forward and restart: ${JSON.stringify({forwardState,reloadState,profileRecords,profileAfterReload})}`);
@@ -4853,10 +4851,10 @@ if (process.argv.includes("--room-timeline-stress-only")) {
       await wait(100);
       finalState = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',progress:document.querySelector('#progressDetail')?.textContent||''}))()`);
       if (finalState.error) throw new Error(`Room stress Final ${expectedFinals} failed: ${finalState.message}`);
-      if (finalState.status.includes(`${expectedFinals} Final`) && finalState.status.includes(`${rows.toLocaleString("ru-RU")} устройств`)) break;
+    if (finalState.status.includes(`${expectedFinals} Final`) && finalState.status.includes(`${rows.toLocaleString("ru-RU")} в активном Final`)) break;
       if (attempt % 30 === 0) console.log(`browser smoke: room stress Final ${expectedFinals} progress ${finalState.progress || finalState.status}`);
     }
-    if (!finalState?.status.includes(`${expectedFinals} Final`) || !finalState.status.includes(`${rows.toLocaleString("ru-RU")} устройств`)) throw new Error(`Room stress Final ${expectedFinals} did not persist ${rows} rows: ${JSON.stringify(finalState)}`);
+    if (!finalState?.status.includes(`${expectedFinals} Final`) || !finalState.status.includes(`${rows.toLocaleString("ru-RU")} в активном Final`)) throw new Error(`Room stress Final ${expectedFinals} did not persist ${rows} rows: ${JSON.stringify(finalState)}`);
   }
   await evaluate(`document.querySelector('[data-view="rooms"]').click()`);
   let roomOption = null;
@@ -5405,7 +5403,7 @@ if (process.argv.includes("--roster-only")) {
     await wait(100);
     finalState = await evaluate(`({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if (finalState.error) throw new Error(`Roster-only enrichment failed: ${finalState.message}`);
-    if (finalState.status.includes(`${rosterSize.toLocaleString("ru-RU")} устройств`)) { finalReady = true; break; }
+    if (finalState.status.includes(`${rosterSize.toLocaleString("ru-RU")} в активном Final`)) { finalReady = true; break; }
     if (attempt && attempt % 50 === 0) console.log(`browser smoke: waiting for ${rosterSize.toLocaleString("ru-RU")} device Final: ${finalState.status}`);
   }
   if (!finalReady) throw new Error(`Roster-only ${rosterSize}-device Final was not committed: ${JSON.stringify(finalState)}`);
@@ -5487,7 +5485,7 @@ const finalState = await evaluate(`({
   status: document.querySelector('#databaseStatus').textContent,
   summary: document.querySelector('#enrichmentSummary').textContent
 })`);
-if (!finalState.status.includes("4 устройств")) throw new Error(`Неверное число Inventory: ${finalState.status}`);
+if (!finalState.status.includes("4 в активном Final")) throw new Error(`Неверное число Inventory: ${finalState.status}`);
 if (!finalState.summary.includes("конфликтов: 0")) throw new Error(`Secondary MAC создал конфликт идентичности: ${finalState.summary}`);
 await evaluate(`document.querySelector('[data-view="search"]').click()`);
 await wait(250);
@@ -5658,9 +5656,9 @@ if (process.argv.includes("--workspace-state-persistence-only")) {
     await wait(100);
     imported = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (imported.error) throw new Error(`Workspace-state Final import failed: ${imported.message}`);
-    if (imported.status.includes("64 устройств")) break;
+    if (imported.status.includes("64 в активном Final")) break;
   }
-  if (!imported?.status.includes("64 устройств")) throw new Error(`Workspace-state fixture did not create the expected 64-device active Final: ${JSON.stringify(imported)}`);
+  if (!imported?.status.includes("64 в активном Final")) throw new Error(`Workspace-state fixture did not create the expected 64-device active Final: ${JSON.stringify(imported)}`);
   await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
   let dashboardReady = null;
   for (let attempt = 0; attempt < 180; attempt += 1) {
@@ -5946,7 +5944,7 @@ if (process.argv.includes("--optional-host-transfer-only")) {
 if (process.argv.includes("--dashboard-cache-reload-only")) {
   let cachedReport = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    cachedReport = await evaluate(`new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('analyticsCache','readonly');const request=tx.objectStore('analyticsCache').openCursor();let found=null;request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;const value=cursor.value.value;if(cursor.value.key.startsWith('selected-final-dataset-v7:')&&value?.dataset?.reportText){found={key:cursor.value.key,reportText:value.dataset.reportText,devices:value.dataset.summary?.devices};return}cursor.continue()};tx.oncomplete=()=>{db.close();resolve(found)};tx.onerror=()=>{db.close();reject(tx.error)}}})`);
+    cachedReport = await evaluate(`new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('analyticsCache','readonly');const request=tx.objectStore('analyticsCache').openCursor();let found=null;request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;const value=cursor.value.value;if(cursor.value.key.startsWith('selected-final-dataset-v8:')&&value?.dataset?.reportText){found={key:cursor.value.key,reportText:value.dataset.reportText,devices:value.dataset.summary?.devices};return}cursor.continue()};tx.oncomplete=()=>{db.close();resolve(found)};tx.onerror=()=>{db.close();reject(tx.error)}}})`);
     if (cachedReport) break;
     await wait(100);
   }
@@ -6357,7 +6355,7 @@ if (!repeatedBatch) throw new Error("Повторная batch очередь н�
 await evaluate(`document.querySelector('[data-view="data"]').click()`);
 await wait(500);
 const finalBatchState = await evaluate(`({snapshotCount:document.querySelectorAll('#snapshotList tbody tr').length,databaseStatus:document.querySelector('#databaseStatus').textContent})`);
-if (finalBatchState.snapshotCount !== 3 || !finalBatchState.databaseStatus.includes("4 устройств")) throw new Error(`Повтор batch изменил количество Final или Inventory: ${JSON.stringify(finalBatchState)}`);
+if (finalBatchState.snapshotCount !== 3 || !finalBatchState.databaseStatus.includes("2 в активном Final")) throw new Error(`Повтор batch изменил количество Final или размер активного Final: ${JSON.stringify(finalBatchState)}`);
 await evaluate(`(()=>{Object.defineProperty(globalThis,'showSaveFilePicker',{configurable:true,value:undefined});const nativeCreate=URL.createObjectURL.bind(URL);const nativeClick=HTMLAnchorElement.prototype.click;window.__smokeFinalXlsx={blob:null,name:'',textBlob:null,textName:''};URL.createObjectURL=(blob)=>{if(blob.type==='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')window.__smokeFinalXlsx.blob=blob;if(blob.type==='text/plain;charset=utf-8')window.__smokeFinalXlsx.textBlob=blob;return nativeCreate(blob)};HTMLAnchorElement.prototype.click=function(){if(this.download==='final.xlsx')window.__smokeFinalXlsx.name=this.download;if(this.download==='final.txt')window.__smokeFinalXlsx.textName=this.download;return nativeClick.call(this)}})()`);
 await evaluate(`document.querySelector('#exportFinalXlsxButton').click()`);
 let finalXlsxExport = null;
@@ -6424,7 +6422,7 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
   if (localArchiveRestored.includes('Архив объединён')) break;
 }
 const archiveRestoreState = await evaluate(`({rows:document.querySelectorAll('#snapshotList tbody tr').length,status:document.querySelector('#databaseStatus').textContent})`);
-if (!localArchiveRestored.includes('Архив объединён') || archiveRestoreState.rows !== 3 || !archiveRestoreState.status.includes('4 устройств')) throw new Error(`Восстановление именованного архива нарушило текущие Final/Inventory: ${JSON.stringify({message:localArchiveRestored,state:archiveRestoreState})}`);
+if (!localArchiveRestored.includes('Архив объединён') || archiveRestoreState.rows !== 3 || !archiveRestoreState.status.includes('2 в активном Final')) throw new Error(`Восстановление именованного архива нарушило текущие Final/активный Final: ${JSON.stringify({message:localArchiveRestored,state:archiveRestoreState})}`);
 await evaluate(`document.querySelector('[data-delete-local-archive="${localArchiveRow.id}"]').click()`);
 let localArchiveDeleted = null;
 for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -6575,7 +6573,7 @@ for (let attempt = 0; attempt < 150; attempt += 1) {
 }
 if (!singleHistoryRestored) throw new Error("Сохранённый одиночный анализ не появился в истории UI");
 const postAnalysisStatus = await evaluate(`document.querySelector('#databaseStatus').textContent`);
-if (!postAnalysisStatus.includes("3 Final") || !postAnalysisStatus.includes("4 устройств")) throw new Error(`Одиночный анализ изменил каталог Final или Inventory: ${postAnalysisStatus}`);
+if (!postAnalysisStatus.includes("3 Final") || !postAnalysisStatus.includes("2 в активном Final")) throw new Error(`Одиночный анализ изменил каталог Final или активный Final: ${postAnalysisStatus}`);
 await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
 await wait(200);
 const finalSelectorOptions = await evaluate(`([...document.querySelectorAll('#baseSnapshotSelect option,#currentSnapshotSelect option')].map(option=>option.textContent).join(' '))`);
@@ -6756,7 +6754,7 @@ const scheduledState = await evaluate(`(()=>{const dbName=new URL(location.href)
 const scheduledInventoryRows = scheduledState.inventory;
 const secondaryIdentityRows = scheduledInventoryRows.filter((device) => device.mac === "00:11:22:33:44:54" || device.mac === "00:11:22:33:44:99" || device.alternateMacs?.includes("00:11:22:33:44:54"));
 const uniqueInventoryMacs = new Set(scheduledInventoryRows.map(({ mac }) => mac).filter(Boolean));
-if (!scheduledSnapshotStatus.includes("3 Final") || !scheduledSnapshotStatus.includes("5 устройств") || scheduledInventoryRows.length !== 5 || uniqueInventoryMacs.size !== 5
+if (!scheduledSnapshotStatus.includes("3 Final") || !scheduledSnapshotStatus.includes("2 в активном Final") || scheduledInventoryRows.length !== 5 || uniqueInventoryMacs.size !== 5
   || !scheduledState.activeId || scheduledState.activeMacs.includes("AA:BB:CC:DD:EE:66") || scheduledState.singleAnalyses < 3
   || secondaryIdentityRows.length !== 1 || secondaryIdentityRows[0].mac !== "00:11:22:33:44:54" || !secondaryIdentityRows[0].alternateMacs.includes("00:11:22:33:44:99")) {
   throw new Error(`Отдельные анализы изменили активный Final, потеряли уникальные Inventory или создали дубликат: ${scheduledSnapshotStatus}; ${JSON.stringify(scheduledState)}`);
@@ -6863,7 +6861,13 @@ const secondStressCsv = ["CallingStationID;Device ID", ...Array.from({ length: 5
 })].join("\n");
 const secondStressPayload = JSON.stringify(secondStressCsv);
 await evaluate(`document.querySelector('#resetFilesButton').click()`);
-await wait(150);
+let stressSourcesReset = false;
+for (let attempt = 0; attempt < 100; attempt += 1) {
+  await wait(50);
+  stressSourcesReset = await evaluate(`(()=>{const input=document.querySelector('#mainFileInput');return input?.files?.length===0&&document.querySelector('#mainFileStatus')?.textContent==='Не выбран'})()`);
+  if (stressSourcesReset) break;
+}
+if (!stressSourcesReset) throw new Error("Сброс предыдущего набора файлов не завершился перед импортом второго stress Final");
 await evaluate(`(()=>{const input=document.querySelector('#mainFileInput');const transfer=new DataTransfer();transfer.items.add(new File([${secondStressPayload}],'main_5000_devices_second.csv',{type:'text/csv'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
 let secondStressFileReady = false;
 for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -7058,7 +7062,7 @@ for (let attempt = 0; attempt < 150; attempt += 1) {
   }
   if (restartedState.status.includes("6 Final")) break;
 }
-if (!restartedState?.status.includes("6 Final") || !restartedState.status.includes("устройств") || restartedState.error) throw new Error(`Данные не восстановились после перезапуска страницы: ${JSON.stringify(restartedState)}`);
+if (!restartedState?.status.includes("6 Final") || !restartedState.status.includes("в активном Final") || restartedState.error) throw new Error(`Данные не восстановились после перезапуска страницы: ${JSON.stringify(restartedState)}`);
 console.log("browser smoke: IndexedDB state restored after page restart");
 
 await evaluate(`document.querySelector('#engineeringModeButton').click()`);
@@ -7104,17 +7108,17 @@ for (let attempt = 0; attempt < 240; attempt += 1) {
     await attachToTarget(target.webSocketDebuggerUrl, { force: true });
     await command("Runtime.enable");
     referenceArchiveImport = await evaluate(`(()=>({db:new URL(location.href).searchParams.get('db'),status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
-    if (referenceArchiveImport.status.includes("1 Final") && referenceArchiveImport.status.includes("1 устройств")) break;
+    if (referenceArchiveImport.status.includes("1 Final") && referenceArchiveImport.status.includes("1 в активном Final")) break;
   }
 }
 const referenceArchiveImportState = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const imported=tx.objectStore('snapshots').get('reference-smoke-final');const device=tx.objectStore('inventory').get('DEV-REFERENCE-SMOKE');const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshot:Boolean(imported.result),device:device.result?.manufacturer||'',historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
 const referenceSourcePreserved = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(referenceArchiveSourceDatabase)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshotCount:snapshots.result,inventoryCount:inventory.result,historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
-if (referenceArchiveImport?.error || !referenceArchiveImport?.db || !referenceArchiveImport.status.includes("1 Final") || !referenceArchiveImport.status.includes("1 устройств") || referenceArchiveImportState.activeId !== "reference-smoke-final" || !referenceArchiveImportState.snapshot || referenceArchiveImportState.device !== "Reference Vendor" || referenceArchiveImportState.historyCount !== 1 || referenceSourcePreserved.activeId !== referenceSourceBeforeImport.activeId || referenceSourcePreserved.snapshotCount !== referenceSourceBeforeImport.snapshotCount || referenceSourcePreserved.inventoryCount !== referenceSourceBeforeImport.inventoryCount || referenceSourcePreserved.historyCount !== referenceSourceBeforeImport.historyCount) throw new Error(`Эталонный .macarchive.json не открыл отдельный профиль или изменил исходную базу: ${JSON.stringify({referenceArchiveImport,referenceArchiveImportState,referenceSourceBeforeImport,referenceSourcePreserved,expectedActiveId:stressChunkState.activeSnapshotId})}`);
+if (referenceArchiveImport?.error || !referenceArchiveImport?.db || !referenceArchiveImport.status.includes("1 Final") || !referenceArchiveImport.status.includes("1 в активном Final") || referenceArchiveImportState.activeId !== "reference-smoke-final" || !referenceArchiveImportState.snapshot || referenceArchiveImportState.device !== "Reference Vendor" || referenceArchiveImportState.historyCount !== 1 || referenceSourcePreserved.activeId !== referenceSourceBeforeImport.activeId || referenceSourcePreserved.snapshotCount !== referenceSourceBeforeImport.snapshotCount || referenceSourcePreserved.inventoryCount !== referenceSourceBeforeImport.inventoryCount || referenceSourcePreserved.historyCount !== referenceSourceBeforeImport.historyCount) throw new Error(`Эталонный .macarchive.json не открыл отдельный профиль или изменил исходную базу: ${JSON.stringify({referenceArchiveImport,referenceArchiveImportState,referenceSourceBeforeImport,referenceSourcePreserved,expectedActiveId:stressChunkState.activeSnapshotId})}`);
 const referenceDeviceTransferState = await importDeviceArchiveAndVerify(referenceArchiveImport.db, referenceArchiveImportState.activeId);
-const referenceSourceBackState = await navigateToHistoryDatabase(-1, referenceArchiveSourceDatabase, referenceSourceBeforeImport.inventoryCount);
+const referenceSourceBackState = await navigateToHistoryDatabase(-1, referenceArchiveSourceDatabase);
 const referenceSourceAfterBack = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(referenceArchiveSourceDatabase)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshotCount:snapshots.result,inventoryCount:inventory.result,historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
 if (referenceSourceBackState.db !== referenceArchiveSourceDatabase || referenceSourceAfterBack.activeId !== referenceSourceBeforeImport.activeId || referenceSourceAfterBack.snapshotCount !== referenceSourceBeforeImport.snapshotCount || referenceSourceAfterBack.inventoryCount !== referenceSourceBeforeImport.inventoryCount || referenceSourceAfterBack.historyCount !== referenceSourceBeforeImport.historyCount) throw new Error(`Browser Back did not restore the exact unchanged source database: ${JSON.stringify({referenceSourceBeforeImport,referenceSourceBackState,referenceSourceAfterBack})}`);
-const referenceProfileForwardState = await navigateToHistoryDatabase(1, referenceArchiveImport.db, 2);
+const referenceProfileForwardState = await navigateToHistoryDatabase(1, referenceArchiveImport.db);
 const referenceProfileReloadState = await reloadDatabaseAndWait(referenceArchiveImport.db);
 const referenceProfileAfterReload = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const imported=tx.objectStore('snapshots').get('reference-smoke-final');const device=tx.objectStore('inventory').get('DEV-REFERENCE-SMOKE');const transferDevice=tx.objectStore('inventory').get('DEVICE-TRANSFER-SMOKE');const inventoryCount=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshot:Boolean(imported.result),vendor:device.result?.manufacturer||'',transferVendor:transferDevice.result?.manufacturer||'',inventoryCount:inventoryCount.result,historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
 if (referenceProfileForwardState.db !== referenceArchiveImport.db || referenceProfileReloadState.db !== referenceArchiveImport.db || referenceProfileAfterReload.activeId !== "reference-smoke-final" || !referenceProfileAfterReload.snapshot || referenceProfileAfterReload.vendor !== "Reference Vendor" || referenceProfileAfterReload.transferVendor !== "Device Transfer Vendor" || referenceProfileAfterReload.inventoryCount !== 2 || referenceProfileAfterReload.historyCount !== 1) throw new Error(`Imported reference profile did not survive browser Forward and reload: ${JSON.stringify({referenceProfileForwardState,referenceProfileReloadState,referenceProfileAfterReload})}`);

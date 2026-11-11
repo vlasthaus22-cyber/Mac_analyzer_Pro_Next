@@ -68,15 +68,16 @@ export function createAnalyticsHistoryWorkerRuntime(scope) {
     const pending = current.pending;
     if (!pending) throw new Error("Нет обрабатываемого Final");
     const { snapshot, index, devices, comparison } = pending;
-    current.churn.endSnapshot();
+    const uniqueMacCount = current.churn.endSnapshot();
     if (comparison) {
       const summary = comparison.finish();
       current.weekly.observeSummary(snapshot, summary);
       current.snapshotChanges.push({ label: snapshot.name || snapshot.createdAt, added: summary.added, absent: summary.absent });
     }
     current.snapshots.push({
+      id: String(snapshot.id || ""),
       label: snapshot.name || snapshot.createdAt,
-      value: pending.filteredDeviceCount,
+      value: uniqueMacCount,
     });
     current.previousDevices = devices;
     current.uniqueMacs = current.churn.uniqueCount();
@@ -96,6 +97,7 @@ export function createAnalyticsHistoryWorkerRuntime(scope) {
         snapshots: current.snapshots.length,
         deviceTotal: current.snapshots.reduce((sum, snapshot) => sum + Math.max(0, Number(snapshot.value) || 0), 0),
         uniqueMacs: current.uniqueMacs,
+        selectedSnapshotUniqueMacs: current.snapshots.at(-1)?.value || 0,
       },
     };
     session = null;

@@ -1,6 +1,37 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createInventoryXlsxSheets } from "../src/core/inventory-export.js";
+import { createInventorySearchXlsxSheets, createInventoryXlsxSheets } from "../src/core/inventory-export.js";
+
+test("Inventory search XLSX exports every matched row and falls back to the legacy address field", async () => {
+  const devices = [
+    { id: "a", mac: "00:11:22:33:44:01", hostname: "edge-one", physicalAddress: "Building A" },
+    { id: "b", mac: "00:11:22:33:44:02", hostname: "core-two", address: "HQ" },
+    { id: "c", mac: "00:11:22:33:44:03", hostname: "edge-three", address: "Branch" },
+  ];
+  const pageSizes = [];
+  const database = {
+    inventoryPage: async ({ afterId, limit }) => {
+      const start = afterId === null ? 0 : devices.findIndex(({ id }) => id === afterId) + 1;
+      const rows = devices.slice(start, start + limit);
+      pageSizes.push(rows.length);
+      return { rows, hasMore: start + rows.length < devices.length };
+    },
+  };
+  const result = await createInventorySearchXlsxSheets(database, {
+    query: "edge",
+    matches: (device, query) => device.hostname.includes(query),
+    columns: [{ key: "mac", label: "MAC" }, { key: "address", label: "Адрес" }],
+    pageSize: 1,
+    maxDataRowsPerSheet: 1,
+  });
+  assert.equal(result.total, 2);
+  assert.equal(result.sheets.length, 2);
+  const rows = [];
+  for (const sheet of result.sheets) for await (const row of sheet.rows) rows.push(row);
+  assert.deepEqual(rows, [["00:11:22:33:44:01", "Building A"], ["00:11:22:33:44:03", "Branch"]]);
+  assert.equal(result.exported, 2);
+  assert.ok(pageSizes.every((size) => size <= 1));
+});
 
 test("Inventory XLSX rows stream through bounded pages and split at the sheet row limit", async () => {
   const devices = Array.from({ length: 5 }, (_, index) => ({

@@ -207,7 +207,7 @@ test("snapshot history aggregation visits every snapshot once and compares adjac
     { label: "Three", added: 0, absent: 1 },
   ], "per-Final presence deltas start at the second snapshot and never fabricate first-snapshot changes");
   assert.deepEqual(result.totals.map(({ label, value }) => [label, value]), [["One", 1], ["Two", 2], ["Three", 1]]);
-  assert.deepEqual(result.history, { snapshots: 3, deviceTotal: 4, uniqueMacs: 2 });
+  assert.deepEqual(result.history, { snapshots: 3, deviceTotal: 4, uniqueMacs: 2, selectedSnapshotUniqueMacs: 1 });
 
   const ascending = [snapshots[1], snapshots[2], snapshots[0]];
   const noIterator = new Proxy(ascending, { get(target, property, receiver) {
@@ -216,6 +216,19 @@ test("snapshot history aggregation visits every snapshot once and compares adjac
   } });
   const orderedResult = await aggregateSnapshotHistory(noIterator, async (id, visit) => visit(bodies[id]), { snapshotsAscending: true });
   assert.deepEqual(orderedResult, result);
+});
+
+test("snapshot history totals count unique MACs instead of repeated device rows", async () => {
+  const snapshots = [{ id: "duplicate-macs", name: "Duplicate MACs", createdAt: "2026-11-10T00:00:00Z", deviceCount: 3 }];
+  const result = await aggregateSnapshotHistory(snapshots, async (_id, visit) => visit([
+    { id: "first", mac: "00:11:22:33:44:01" },
+    { id: "duplicate", mac: "00:11:22:33:44:01" },
+    { id: "second", mac: "00:11:22:33:44:02" },
+  ]));
+  assert.deepEqual(result.totals.map(({ value }) => value), [2]);
+  assert.equal(result.history.deviceTotal, 2);
+  assert.equal(result.history.selectedSnapshotUniqueMacs, 2);
+  assert.equal(result.history.uniqueMacs, 2);
 });
 
 test("snapshot history aggregation evaluates each device filter once per chunk", async () => {

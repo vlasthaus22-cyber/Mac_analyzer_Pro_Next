@@ -11,12 +11,12 @@ const DEFAULT_FIELDS = Object.freeze([
 const OPTIONAL_FIELDS = Object.freeze([
   ["macFormatted", "MAC (форматированный)"],
   ["oui3", "OUI (3 байта)"], ["oui4", "OUI (4 байта)"], ["oui5", "OUI (5 байт)"], ["oui6", "OUI (6 байт)"],
-  ["deviceId", "Device ID"], ["deviceName", "Название устройства"], ["physicalAddress", "Физический адрес"],
+  ["deviceId", "Device ID"], ["deviceName", "Название устройства"],
   ["businessUnit", "ТБ"], ["city", "Город"], ["site", "Площадка"], ["floor", "Этаж"],
   ["matchDetails", "Примечание"], ["addedAt", "Дата добавления"], ["source", "Источник"],
 ]);
 const DEFAULT_VISIBLE_ORDER = Object.freeze([
-  "rowNumber", "mac", "manufacturer", "model", "ip", "address", "physicalAddress", "room", "switchIp", "switchPort", "authenticationTime", "matchDetails",
+  "rowNumber", "mac", "manufacturer", "model", "ip", "address", "room", "switchIp", "switchPort", "authenticationTime", "matchDetails",
 ]);
 const DEFAULT_VISIBLE_KEYS = new Set(DEFAULT_VISIBLE_ORDER);
 const LEGACY_COLUMN_KEYS = Object.freeze({
@@ -200,6 +200,7 @@ export function inventoryCellText(device, key, rowNumber = null) {
     const source = device?.source || device?.sources;
     return Array.isArray(source) ? source.join(", ") : String(source ?? "");
   }
+  if (key === "address") return String(device?.address || device?.physicalAddress || "");
   const value = key.startsWith("custom_") ? device?.customFields?.[key] : device?.[key];
   if (Array.isArray(value)) return value.join(", ");
   if (value === null || value === undefined) return "";

@@ -488,6 +488,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
     const clusterMap = new Map();
     const topologyMap = new Map();
     const topologyUnassigned = [];
+    const seenDeviceKeys = new Set();
     const includeTopologyDevices = options.includeTopologyDevices !== false;
     const includeTopologySummary = options.includeTopologySummary !== false;
     const includeClusters = options.includeClusters !== false;
@@ -521,8 +522,14 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
         const switchPortValue = text(device.switchPort || device.switch_port);
         const switchPort = switchPortValue || "Не указан";
         const mac = normalizeMac(firstMac(device.mac, device.macFormatted, device.mac_formatted));
+        const id = text(device.id || device.deviceId || device.serial);
+        const uniqueKey = mac ? `mac:${mac}` : id ? `id:${id.toLocaleLowerCase("ru-RU")}` : "";
+        if (uniqueKey) {
+          if (seenDeviceKeys.has(uniqueKey)) continue;
+          seenDeviceKeys.add(uniqueKey);
+        }
         const ip = text(device.ip);
-        const address = text(device.address);
+        const address = text(device.address || device.physicalAddress);
         devices += 1;
         if (includeRankings) {
           tally(vendors, vendor);

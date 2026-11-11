@@ -299,6 +299,11 @@ test("Main, SmartRoom and DDIO mappings use documented aliases", () => {
   assert.equal(smartroom.deviceType, 4);
   assert.equal(smartroom.smartroomId, 5);
   assert.equal(detectMapping(["MAC", "Location Path"], [], "smartroom").locationPath, 1);
+  const addressMapping = detectMapping(["MAC", "Адрес"], [["00:11:22:33:44:55", "Банк, Москва, Площадка, 3, Комната 5"]], "main");
+  assert.equal(addressMapping.address, 1);
+  assert.equal(addressMapping.room, undefined);
+  const roomMapping = detectMapping(["MAC", "Помещение"], [["00:11:22:33:44:55", "Комната 5"]], "main");
+  assert.equal(roomMapping.room, 1);
   const ddio = detectMapping(["Column1", "Column2", "Column3", "Column9", "Column10"], [], "ddio");
   assert.deepEqual(ddio, { reservationMac: 2, reservationIp: 1, leaseMac: 4, leaseIp: 3 });
   assert.deepEqual(detectMapping(["Device ID", "Reservation IP", "Reservation MAC"], [], "ddio"), { reservationIp: 1, reservationMac: 2 });

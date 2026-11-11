@@ -53,39 +53,32 @@ test("dragging Inventory column widths rounds pixels and clamps to the resize bo
   assert.equal(inventoryColumnWidthAfterDrag(150, Number.NaN), 150);
 });
 
-test("address and source-address columns have distinct labels and migrate the old default label", () => {
+test("Inventory shows one address column and falls back to the legacy physicalAddress value", () => {
   const config = normalizeInventoryColumnConfig({ columns: [
     { key: "address", label: "Физический адрес", visible: true },
     { key: "physicalAddress", label: "Физический адрес", visible: true },
   ] });
   const address = config.columns.find(({ key }) => key === "address");
-  const sourceAddress = config.columns.find(({ key }) => key === "physicalAddress");
-
   assert.equal(address.label, "Адрес");
-  assert.equal(sourceAddress.label, "Физический адрес");
-  assert.equal(new Set(config.columns.map(({ label }) => label)).size, config.columns.length);
+  assert.equal(config.columns.some(({ key }) => key === "physicalAddress"), false);
   assert.equal(inventoryCellText({ address: "Офис 1", physicalAddress: "Корпус А" }, "address"), "Офис 1");
-  assert.equal(inventoryCellText({ address: "Офис 1", physicalAddress: "Корпус А" }, "physicalAddress"), "Корпус А");
+  assert.equal(inventoryCellText({ physicalAddress: "Корпус А" }, "address"), "Корпус А");
   const defaults = defaultInventoryColumnConfig();
-  assert.ok(visibleInventoryColumns(defaults).some(({ key, label }) => key === "physicalAddress" && label === "Физический адрес"));
+  assert.ok(visibleInventoryColumns(defaults).some(({ key, label }) => key === "address" && label === "Адрес"));
+  assert.equal(visibleInventoryColumns(defaults).some(({ label }) => label === "Физический адрес"), false);
 
   const migrated = normalizeInventoryColumnConfig({ columns: [
     { key: "address", label: "Физический адрес", visible: true },
     { key: "physicalAddress", label: "Адрес из источника", visible: false },
   ] });
   assert.equal(migrated.columns.find(({ key }) => key === "address").label, "Адрес");
-  assert.equal(migrated.columns.find(({ key }) => key === "physicalAddress").visible, false);
-
-  const customized = normalizeInventoryColumnConfig({ columns: [
-    { key: "physicalAddress", label: "Адрес площадки", visible: true },
-  ] });
-  assert.equal(customized.columns.find(({ key }) => key === "physicalAddress").label, "Адрес площадки");
+  assert.equal(migrated.columns.some(({ key }) => key === "physicalAddress"), false);
 });
 
 test("custom and renamed columns cannot introduce ambiguous duplicate headers", () => {
-  const config = addCustomInventoryColumn(defaultInventoryColumnConfig(), "Физический адрес", "123e4567-e89b-42d3-a456-426614174010");
+  const config = addCustomInventoryColumn(defaultInventoryColumnConfig(), "Адрес", "123e4567-e89b-42d3-a456-426614174010");
   const custom = config.columns.find(({ key }) => key === "custom_123e4567-e89b-42d3-a456-426614174010");
-  assert.equal(custom.label, "Физический адрес (2)");
+  assert.equal(custom.label, "Адрес (2)");
 
   const renamed = updateInventoryColumn(config, "deviceId", { label: "MAC" });
   assert.equal(renamed.columns.find(({ key }) => key === "deviceId").label, "MAC (2)");
@@ -95,7 +88,7 @@ test("custom and renamed columns cannot introduce ambiguous duplicate headers", 
     { key: "address", label: "Объект", visible: true },
     { key: "physicalAddress", label: "Объект", visible: true },
   ] });
-  assert.deepEqual(restored.columns.filter(({ key }) => ["address", "physicalAddress"].includes(key)).map(({ label }) => label), ["Объект", "Объект (2)"]);
+  assert.deepEqual(restored.columns.filter(({ key }) => key === "address").map(({ label }) => label), ["Объект"]);
 });
 
 test("legacy PyQt results-column preferences restore matching Inventory order, visibility and widths", () => {
@@ -195,10 +188,10 @@ test("inventory columns can be reordered and optional supported fields enabled",
 test("new Inventory configuration starts with the same visible columns and order as PyQt", () => {
   const config = defaultInventoryColumnConfig();
   assert.deepEqual(visibleInventoryColumns(config).map(({ key }) => key), [
-    "rowNumber", "mac", "manufacturer", "model", "ip", "address", "physicalAddress", "room", "switchIp", "switchPort", "authenticationTime", "matchDetails",
+    "rowNumber", "mac", "manufacturer", "model", "ip", "address", "room", "switchIp", "switchPort", "authenticationTime", "matchDetails",
   ]);
   assert.deepEqual(visibleInventoryColumns(config).map(({ label }) => label), [
-    "№", "MAC", "Производитель", "Модель", "IP-адрес", "Адрес", "Физический адрес", "Помещение", "IP коммутатора", "Порт подключения", "Время аутентификации", "Примечание",
+    "№", "MAC", "Производитель", "Модель", "IP-адрес", "Адрес", "Помещение", "IP коммутатора", "Порт подключения", "Время аутентификации", "Примечание",
   ]);
   assert.equal(config.columns.find(({ key }) => key === "deviceType").visible, false);
   assert.equal(config.columns.find(({ key }) => key === "hostname").visible, false);
