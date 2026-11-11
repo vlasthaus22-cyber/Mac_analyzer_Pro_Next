@@ -285,10 +285,22 @@ body.is-resizing-column, body.is-resizing-column * { cursor: col-resize !importa
 .change-category-tabs [role="tab"] strong { margin-left: 5px; }
 .change-device-groups { display: grid; gap: 8px; }
 .change-device-group { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--surface); }
-.change-device-group > summary { cursor: pointer; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
-.change-device-context { margin: 8px 0 4px 26px; color: var(--muted); }
-.change-device-fields { margin: 5px 0 0 26px; padding-left: 18px; }
-.change-device-fields li { padding: 3px 0; }
+.change-device-columns { display: grid; grid-template-columns: minmax(9ch, 1fr) minmax(10ch, 2fr) minmax(8ch, 1fr) 4ch; gap: 8px; align-items: start; overflow-wrap: anywhere; }
+.change-device-heading { padding: 0 13px; color: var(--muted); font-size: 12px; }
+.change-device-group > summary { cursor: pointer; list-style: none; }
+.change-device-group > summary::-webkit-details-marker { display: none; }
+.change-device-identity strong::before { content: "▸ "; color: var(--primary); }
+.change-device-group[open] .change-device-identity strong::before { content: "▾ "; }
+.change-device-columns small, .change-device-fields small, .room-timeline-index small { display: block; margin-top: 3px; }
+.change-device-count, .room-timeline-index td { text-align: right; font-variant-numeric: tabular-nums; }
+.change-device-group > .table-scroll { margin-top: 10px; }
+.change-device-fields { width: 100%; min-width: 0; table-layout: fixed; }
+.change-device-fields td, .change-device-fields th { white-space: normal; overflow-wrap: anywhere; }
+.room-timeline-index { width: 100%; min-width: max(100%, 460px); }
+.room-timeline-index th:first-child { width: 46%; white-space: normal; overflow-wrap: anywhere; }
+.room-timeline-index [aria-current="true"] { font-weight: 750; text-decoration: underline; }
+#roomTimelineObservation { margin-top: 12px; }
+#roomTimelineObservation .table-scroll { max-height: min(38vh, 20rem); }
 
 .room-filters { display: grid; grid-template-columns: repeat(6, minmax(130px, 1fr)); gap: 10px; margin-bottom: 13px; }
 .room-card { border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 10px; }

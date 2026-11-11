@@ -3,7 +3,7 @@ import { formatWeekRangeLabel } from "../core/analytics.js";
 import { isCriticalHistoryChange } from "../core/change-categories.js";
 import { identityTokens } from "../core/identity.js";
 import { inventoryCellText, visibleInventoryColumns } from "../core/inventory-columns.js";
-import { firstMac } from "../core/normalize.js";
+import { firstMac, keyText, text } from "../core/normalize.js";
 
 export function escapeHtml(value) {
   return String(value ?? "")
@@ -376,23 +376,37 @@ export function dashboardChangeDeviceGroups(events = []) {
   return [...groups.values()];
 }
 
+export function fullRoomAddress(location = {}) {
+  const seen = new Set();
+  const parts = [];
+  for (const field of ["businessUnit", "city", "site", "address", "physicalAddress", "floor", "room"]) {
+    const value = text(location[field]);
+    const key = keyText(value);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    parts.push(value);
+  }
+  return parts.join(" · ") || text(location.locationPath) || "Адрес не указан";
+}
+
 export function dashboardChangeDeviceGroupsContent(events = []) {
   const labels = { added: "Добавлено", absent: "Отсутствует", modified: "Изменено" };
   const severityLabels = { critical: "Критическое", low: "Низкое", other: "Другое" };
-  return dashboardChangeDeviceGroups(events).map((group) => {
+  const cards = dashboardChangeDeviceGroups(events).map((group) => {
     const { device, type, severity, changes, source } = group;
     const identity = device.mac || device.deviceId || device.serial || device.id || "Устройство без идентификатора";
-    const location = [device.model, device.address, device.room].filter((value) => String(value ?? "").trim()).map(escapeHtml);
+    const model = [device.manufacturer, device.model].filter(Boolean).join(" · ");
     const detailRows = changes.map((change) => {
       const field = change.label || change.field || "Изменение";
       const before = change.oldValue ?? "—";
       const after = change.newValue ?? "—";
-      const origin = change.source ? ` · Источник: ${escapeHtml(change.source)}` : "";
-      return `<li><span class="severity-badge severity-${isSafeSeverity(change.severity) ? change.severity : severity}">${escapeHtml(severityLabels[change.severity] || severityLabels[severity] || severityLabels.other)}</span> ${escapeHtml(field)}: ${escapeHtml(before)} → ${escapeHtml(after)}${origin}</li>`;
+      const origin = change.source ? `<small class="muted">Источник: ${escapeHtml(change.source)}</small>` : "";
+      return `<tr><th scope="row">${escapeHtml(field)} ${origin}</th><td>${escapeHtml(before)}</td><td>${escapeHtml(after)}</td><td><span class="severity-badge severity-${isSafeSeverity(change.severity) ? change.severity : severity}">${escapeHtml(severityLabels[change.severity] || severityLabels[severity] || severityLabels.other)}</span></td></tr>`;
     }).join("");
     const fallback = type === "added" ? "Устройство добавлено" : type === "absent" ? "Устройство отсутствует в текущем Final" : `Источник: ${escapeHtml(source || "История Final")}`;
-    return `<details class="change-device-group"><summary><span class="severity-badge severity-${isSafeSeverity(severity) ? severity : "other"}">${escapeHtml(severityLabels[severity] || severityLabels.other)}</span> <strong>${escapeHtml(labels[type] || labels.modified)}</strong> · ${escapeHtml(identity)} <span class="muted">${changes.length ? `· ${changes.length} пол.` : ""}</span></summary><div class="change-device-context">${location.length ? location.join(" · ") : "Модель и местоположение не указаны"}</div><ul class="change-device-fields">${detailRows || `<li>${fallback}</li>`}</ul></details>`;
+    return `<details class="change-device-group"><summary class="change-device-columns"><span class="change-device-identity"><strong>${escapeHtml(identity)}</strong>${model ? `<small class="muted">${escapeHtml(model)}</small>` : ""}</span><span>${escapeHtml(fullRoomAddress(device))}</span><span>${escapeHtml(labels[type] || labels.modified)}<small><span class="severity-badge severity-${isSafeSeverity(severity) ? severity : "other"}">${escapeHtml(severityLabels[severity] || severityLabels.other)}</span></small></span><span class="change-device-count">${changes.length.toLocaleString("ru-RU")}</span></summary>${detailRows ? `<div class="table-scroll"><table class="data-table change-device-fields"><thead><tr><th>Поле</th><th>Было</th><th>Стало</th><th>Важность</th></tr></thead><tbody>${detailRows}</tbody></table></div>` : `<p>${fallback}</p>`}</details>`;
   }).join("");
+  return cards ? `<div class="change-device-columns change-device-heading" aria-hidden="true"><span>Устройство</span><span>Полный адрес</span><span>Статус</span><span>Полей</span></div>${cards}` : "";
 }
 
 function isSafeSeverity(value) {
@@ -792,8 +806,7 @@ export function roomCoverageContent(rooms, onlyAllChanged = false, pages = {}, l
       : Number(room.rosterCount || 0) > 0
         ? `<button class="button secondary" type="button" data-room-coverage-page="${escapeHtml(room.key)}" data-page="1" ${page?.loading ? "disabled" : ""}>${page?.loading ? "Загрузка состава…" : `Загрузить состав Final · ${Number(room.rosterCount).toLocaleString("ru-RU")} устройств`}</button>`
         : '<p class="muted">В текущем Final устройств этого помещения нет.</p>';
-    return `<details class="room-card" ${page?.loading || Array.isArray(roster) ? "open" : ""}><summary><strong>${escapeHtml(room.room || room.smartroomId)}</strong><span>${room.changedCount}/${room.deviceCount} изменено</span><span>${escapeHtml(room.address || "Адрес не указан")}</span></summary>
-      <p>${escapeHtml([room.businessUnit, room.city, room.site, room.floor].filter(Boolean).join(", "))}</p>
+    return `<details class="room-card" ${page?.loading || Array.isArray(roster) ? "open" : ""}><summary><strong>${escapeHtml(fullRoomAddress(room))}</strong><span>${room.changedCount}/${room.deviceCount} изменено</span></summary>
       <button class="button secondary" type="button" data-open-room-history="${escapeHtml(JSON.stringify(details))}">Открыть хронологию помещения</button>
       ${rosterContent}</details>`;
   }).join("")}${listPagination}`;
@@ -805,6 +818,22 @@ function roomPageControls(page, total, pageSize, attributes = "") {
   const first = (page - 1) * pageSize + 1;
   const last = Math.min(page * pageSize, total);
   return `<p class="muted">Строки ${first.toLocaleString("ru-RU")}–${last.toLocaleString("ru-RU")} из ${total.toLocaleString("ru-RU")}</p><div class="action-row"><button class="button secondary" type="button" ${attributes} data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>Назад</button><button class="button secondary" type="button" ${attributes} data-page="${page + 1}" ${page >= pageCount ? "disabled" : ""}>Дальше</button></div>`;
+}
+
+export function roomTimelineIndexContent(room, entries, page, selectedId) {
+  const pageSize = 10;
+  const offset = (page - 1) * pageSize;
+  const first = entries.length - offset - 1;
+  const rows = [];
+  for (let index = first; index >= Math.max(0, first - pageSize + 1); index -= 1) {
+    const { id, name, createdAt, devices, added, absent, modified } = entries[index];
+    const date = new Date(createdAt);
+    const label = Number.isFinite(date.getTime()) ? date.toLocaleString("ru-RU") : "Без даты";
+    rows.push(`<tr><th scope="row"><button class="link-button" type="button" data-room-timeline-open="${escapeHtml(id)}"${id === selectedId ? ' aria-current="true"' : ""}>${escapeHtml(label)}</button><small class="muted">${escapeHtml(name || "Final")}</small></th><td>${devices}</td><td>${added ?? "—"}</td><td>${absent ?? "—"}</td><td>${modified ?? "—"}</td></tr>`);
+  }
+  return `<h3>${escapeHtml(fullRoomAddress(room))}</h3><p class="muted">Снимков: ${entries.length.toLocaleString("ru-RU")}. Выберите дату, чтобы открыть состав помещения и изменения.</p>
+    <div class="table-scroll"><table class="data-table room-timeline-index"><thead><tr><th>Дата и выгрузка</th><th>Устройств</th><th>Добавлено</th><th>Отсутствует</th><th>Изменено</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>
+    ${roomPageControls(page, entries.length, pageSize, 'data-room-timeline-index-page')}`;
 }
 
 export function roomTimelineObservationContent(snapshot, devices, comparison = null, room = {}, pages = {}, rosterOptions = {}) {
@@ -827,7 +856,7 @@ export function roomTimelineObservationContent(snapshot, devices, comparison = n
   const rosterStart = (rosterPage - 1) * 20;
   const changesStart = (changesPage - 1) * 20;
   const roster = rosterOptions.pageData ? devices : devices.slice(rosterStart, rosterStart + 20);
-  const title = [room.smartroomId, room.businessUnit, room.city, room.site, room.floor, room.room, room.address].filter(Boolean).join(" · ");
+  const title = fullRoomAddress(room);
   const time = new Date(snapshot.createdAt).toLocaleString("ru-RU");
   const transitionSummary = comparison
     ? `<p>Сравнение с ${escapeHtml(comparison.previousName)}: изменено ${modifiedCount}, добавлено ${addedCount}, отсутствует ${absentCount}, без изменений ${unchangedCount}, неоднозначно ${ambiguousCount}.</p>

@@ -154,7 +154,7 @@ test("room catalog reuses unchanged descriptors across repeated snapshots but up
   assert.notEqual(catalog.get("sr:sr-1"), descriptor);
   assert.deepEqual(catalog.get("sr:sr-1"), {
     businessUnit: "ЦА", city: "Москва", site: "Офис А", floor: "3", room: "302",
-    smartroomId: "SR-1", address: "Новый адрес", key: "sr:sr-1",
+    smartroomId: "SR-1", address: "Новый адрес", physicalAddress: "", locationPath: "", key: "sr:sr-1",
   });
 });
 

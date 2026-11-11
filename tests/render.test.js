@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { compareFinals } from "../src/core/comparison.js";
 import { macTimelineCandidateRowsContent } from "../src/ui/render.js";
-import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, createHistoryLogColumnWidthOptimizer, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, defaultHistoryLogColumnWidths, deviceTable, drawBars, drawPie, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, macTimelineSummaryStatsContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, normalizedHistoryLogColumnWidths, optimizedHistoryLogColumnWidths, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineObservationContent, setHistoryLogGroupsOpen, showDialog, unassignedDevicesContent } from "../src/ui/render.js";
+import { absentDevicesPageContent, churnContent, comparisonContent, comparisonDiagnosticsPageContent, createHistoryLogColumnWidthOptimizer, dashboardAggregateDialogContent, dashboardChangeDeviceGroups, dashboardChangeDeviceGroupsContent, dashboardFleetDialogContent, defaultHistoryLogColumnWidths, deviceTable, drawBars, drawPie, drawFinalChangeTrend, drawFinalTotalsTrend, drawLegacyDailyStatistics, drawWeekly, excelColumnLabel, finalHistoryComparisonDetails, HISTORY_LOG_COLUMNS, historyLogColumnControls, historyLogContent, identityConflictDetails, legacyObservationLogContent, macTimelineAppearancesContent, macTimelineContent, macTimelineSummaryContent, macTimelineSummaryStatsContent, modelPrefixAnalyticsContent, normalizedHistoryLogColumns, normalizedHistoryLogColumnWidths, optimizedHistoryLogColumnWidths, paginationSummary, renderKpis, roomAnomalyContent, roomCoverageContent, roomPairComparisonContent, roomTimelineIndexContent, roomTimelineObservationContent, setHistoryLogGroupsOpen, showDialog, unassignedDevicesContent } from "../src/ui/render.js";
 
 test("showDialog updates an already open dialog without calling showModal twice", () => {
   const title = { textContent: "" };
@@ -24,6 +24,21 @@ test("showDialog updates an already open dialog without calling showModal twice"
   assert.equal(showCount, 1);
 });
 
+test("room chronology lists ten dates per page in reverse order with a full address and selected snapshot", () => {
+  const room = { city: "Москва", site: "Главный офис", address: "Улица 1", physicalAddress: "Улица 1", floor: "3 этаж", room: "A<2>" };
+  const entries = Array.from({ length: 12 }, (_, index) => ({
+    id: `final-${index}`, name: `Выгрузка ${index}`, createdAt: "2026-11-11", devices: 3, added: 1, absent: 0, modified: 2,
+  }));
+  const newest = roomTimelineIndexContent(room, entries, 1, "final-11");
+  assert.match(newest, /Москва · Главный офис · Улица 1 · 3 этаж · A&lt;2&gt;/);
+  assert.equal((newest.match(/data-room-timeline-open=/g) || []).length, 10);
+  assert.match(newest, /data-room-timeline-open="final-11" aria-current="true"/);
+  const older = roomTimelineIndexContent(room, entries, 2, "final-1");
+  assert.equal((older.match(/data-room-timeline-open=/g) || []).length, 2);
+  assert.ok(older.indexOf('data-room-timeline-open="final-1"') < older.indexOf('data-room-timeline-open="final-0"'));
+  assert.match(older, /<td>3<\/td><td>1<\/td><td>0<\/td><td>2<\/td>/);
+});
+
 test("Dashboard change details group field events by device and escape context, values and sources", () => {
   const events = [
     { type: "modified", severity: "critical", device: { mac: "00:11:22:33:44:55", model: "<Router>", address: "Floor & 1", room: "R<2>" }, change: { field: "ip", label: "IP", oldValue: "10.0.0.1", newValue: "<script>", source: "Main & CSV" } },
@@ -40,9 +55,11 @@ test("Dashboard change details group field events by device and escape context, 
   assert.match(html, /Floor &amp; 1 · R&lt;2&gt;/);
   assert.match(html, /&lt;script&gt;/);
   assert.match(html, /Main &amp; CSV/);
-  assert.match(html, /2 пол\./);
-  assert.match(html, /severity-critical">Критическое<\/span> IP:/);
-  assert.match(html, /severity-other">Другое<\/span> Производитель:/);
+  assert.match(html, /change-device-count">2</);
+  assert.match(html, /Полный адрес/);
+  assert.match(html, /<th>Поле<\/th><th>Было<\/th><th>Стало<\/th>/);
+  assert.match(html, /severity-critical">Критическое<\/span>/);
+  assert.match(html, /severity-other">Другое<\/span>/);
   assert.deepEqual(groups[0].changes.map((change) => change.severity), ["critical", "other"]);
   const fieldSource = dashboardChangeDeviceGroupsContent([{
     type: "modified",
@@ -741,7 +758,7 @@ test("room chronology explains field changes, additions, removals and keeps the 
   ];
   const comparison = { ...compareFinals(previous, current, "2026-01-02T00:00:00Z"), previousName: "Final 1" };
   const html = roomTimelineObservationContent({ name: "Final 2", createdAt: "2026-01-02T00:00:00Z" }, current, comparison, room);
-  assert.match(html, /SR-1 · Room &lt;A&gt; · Address/);
+  assert.match(html, /Address · Room &lt;A&gt;/);
   assert.match(html, /Сравнение с Final 1: изменено 1, добавлено 1, отсутствует 1, без изменений 1/);
   assert.match(html, /IP устройства/);
   assert.match(html, /Добавлены \(1\)/);

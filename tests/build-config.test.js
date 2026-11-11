@@ -2995,8 +2995,10 @@ test("room chronology exposes comparison of the two latest Finals", () => {
   const roomTimelineBuilder = app.match(/async function showRoomTimeline\(roomKey = "", room = \{\}\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(roomTimelineBuilder, /scanRoomTimelineSnapshot\(snapshot, key, room, previous\?\.index \|\| null, knownRoomIndex, revision/);
   assert.doesNotMatch(roomTimelineBuilder, /knownRoomDevices|currentDevices/);
-  assert.match(app, /retainKnownDevices: snapshotIndex < snapshots\.length - 1/);
-  assert.match(app, /retainCurrentIndex: snapshotIndex < snapshots\.length - 1/);
+  assert.match(app, /retainKnownDevices: !isLatest/);
+  assert.match(app, /roomTimelineIndexContent\(/);
+  assert.match(app, /openRoomTimelineObservation\(entry\.dataset\.roomTimelineOpen\)/);
+  assert.match(app, /retainCurrentIndex: !isLatest/);
   assert.match(app, /async function scanRoomTimelineSnapshot\([\s\S]*?carryForwardRoomHistoryPage\(knownCandidates, usedPositions, devices, preservedPositions\)[\s\S]*?buildNextRoomHistoryIndex\(/);
   assert.match(app, /async function buildNextRoomHistoryIndex\([\s\S]*?forEachFinalAnalyticsIndexChunk\([\s\S]*?usedPositions\[position >> 3\]/);
   assert.doesNotMatch(app, /currentDevices = retainCurrentDevices|previous\.currentDevices/);

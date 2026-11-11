@@ -1,7 +1,7 @@
 import { keyText, locationKey, text } from "./normalize.js";
 
 export const ROOM_FILTER_FIELDS = Object.freeze(["businessUnit", "city", "site", "floor", "room"]);
-const ROOM_CATALOG_FIELDS = Object.freeze([...ROOM_FILTER_FIELDS, "smartroomId", "address"]);
+const ROOM_CATALOG_FIELDS = Object.freeze([...ROOM_FILTER_FIELDS, "smartroomId", "address", "physicalAddress", "locationPath"]);
 
 export function roomFilterSignature(revision, filters = {}) {
   return JSON.stringify([Number(revision) || 0, ROOM_FILTER_FIELDS.map((field) => keyText(filters[field]))]);

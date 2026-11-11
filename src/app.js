@@ -109,6 +109,7 @@ import {
   dashboardFleetDialogContent,
   dashboardAggregateDialogContent,
   dashboardChangeDeviceGroupsContent,
+  fullRoomAddress,
   deviceTable,
   defaultHistoryLogColumnWidths,
   excelColumnLabel,
@@ -144,6 +145,7 @@ import {
   roomPairComparisonContent,
   roomCoverageContent,
   roomTimelineObservationContent,
+  roomTimelineIndexContent,
   setChartState,
   showDialog,
   unassignedDevicesContent,
@@ -217,6 +219,9 @@ const state = {
   roomCatalogPromise: null,
   roomFilterCascadeSignature: "",
   roomTimelineSnapshotIds: [],
+  roomTimelineEntries: [],
+  roomTimelineIndexPage: 1,
+  roomTimelineSelectedId: "",
   roomTimelineRoom: {},
   roomTimelineKey: "",
   roomTimelineRevision: 0,
@@ -6363,7 +6368,7 @@ async function showAnalyticsAbsencePage(analytics, offset = 0, open = true) {
 }
 
 function modifiedEventsContent(result, codecOnly = false) {
-  const rows = result.events.map(({ device, change }) => `<tr><td>${escapeHtml(device?.mac || device?.deviceId || device?.serial || "—")}</td><td>${escapeHtml(device?.room || "—")}</td><td>${escapeHtml(change?.label || change?.field || "Изменение")}</td><td>${escapeHtml(change?.oldValue || "—")}</td><td>${escapeHtml(change?.newValue || "—")}</td></tr>`).join("");
+  const rows = result.events.map(({ device, change }) => `<tr><td>${escapeHtml(device?.mac || device?.deviceId || device?.serial || "—")}</td><td>${escapeHtml(fullRoomAddress(device))}</td><td>${escapeHtml(change?.label || change?.field || "Изменение")}</td><td>${escapeHtml(change?.oldValue || "—")}</td><td>${escapeHtml(change?.newValue || "—")}</td></tr>`).join("");
   const start = result.offset;
   const end = Math.min(result.total, start + result.events.length);
   const pager = result.total > result.limit ? `<div class="action-row"><span class="muted">Показано ${Math.min(start + result.events.length, result.total).toLocaleString("ru-RU")} из ${result.total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-analytics-modified-page="${result.previousOffset ?? Math.max(0, start - result.limit)}" data-modified-codec="${codecOnly}" ${start ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-analytics-modified-page="${result.nextOffset ?? start + result.limit}" data-modified-codec="${codecOnly}" ${result.hasNext ? "" : "disabled"}>Дальше</button></div>` : `<p class="muted">Событий: ${result.total.toLocaleString("ru-RU")}</p>`;
@@ -6376,16 +6381,22 @@ async function showAnalyticsModificationPage(analytics, offset = 0, codecOnly = 
   const dialog = $("#detailsDialog");
   const title = codecOnly ? "Изменения кодеков" : "Изменённые устройства";
   if (open) showDialog(dialog, title, '<p class="muted" role="status">Сравнение выбранных Final…</p>');
-  const result = await loadDashboardModificationPage(analytics, offset, 100, codecOnly ? { deviceType: "video conference" } : {});
-  if (!result || state.analytics !== analytics) return;
-  const expected = Number(analytics.comparison.modifiedEventCount ?? (analytics.comparison.modified || []).reduce((count, row) => count + (row.changes || []).length, 0));
-  if (!codecOnly && result.total !== expected) {
-    throw new Error("Число изменений не совпало с точным сравнением выбранных Final");
+  if (!codecOnly) {
+    const page = await loadDashboardChangeGroupPage(analytics, "modified", offset, 100);
+    if (!page || state.analytics !== analytics) return;
+    const diagnostics = await loadIdentityDiagnosticsMarkup(analytics);
+    if (state.analytics !== analytics) return;
+    const cards = dashboardChangeDeviceGroupsContent(page.groups);
+    const pager = page.hasPrevious || page.hasNext
+      ? `<div class="action-row"><button class="button secondary" type="button" data-analytics-modified-page="${Math.max(0, page.offset - page.limit)}" ${page.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-analytics-modified-page="${page.offset + page.limit}" ${page.hasNext ? "" : "disabled"}>Дальше</button></div>`
+      : "";
+    dialog.querySelector("[data-dialog-content]").innerHTML = `<p class="muted">Устройств: ${page.total.toLocaleString("ru-RU")} · изменений: ${page.totalEvents.toLocaleString("ru-RU")}</p>${cards ? `<div class="change-device-groups">${cards}</div>` : '<p class="empty">Подтверждённых изменений нет.</p>'}${pager}${diagnostics}`;
+    return;
   }
+  const result = await loadDashboardModificationPage(analytics, offset, 100, { deviceType: "video conference" });
+  if (!result || state.analytics !== analytics) return;
   dialog.querySelector("[data-dialog-title]").textContent = title;
-  const diagnostics = !codecOnly ? await loadIdentityDiagnosticsMarkup(analytics) : "";
-  if (state.analytics !== analytics) return;
-  dialog.querySelector("[data-dialog-content]").innerHTML = `${modifiedEventsContent(result, codecOnly)}${diagnostics}`;
+  dialog.querySelector("[data-dialog-content]").innerHTML = modifiedEventsContent(result, true);
 }
 
 function paintAnalyticsSummary(analytics) {
@@ -8005,11 +8016,15 @@ async function scanRoomPairComparison(snapshot, key, room, baselineIndex, knownI
 async function showRoomTimeline(roomKey = "", room = {}) {
   const key = roomKey || selectedRoomKey();
   if (!key) throw new Error("Выберите помещение или уточните поиск");
+  room = { ...roomDevices().find((device) => locationKey(device) === key), ...room };
   const revision = ++state.roomTimelineRevision;
   const timeline = $("#roomTimeline");
   timeline.classList.remove("empty");
-  timeline.innerHTML = "";
+  timeline.innerHTML = '<p class="muted" role="status">Собираю хронологию помещения…</p>';
   state.roomTimelineSnapshotIds = [];
+  state.roomTimelineEntries = [];
+  state.roomTimelineIndexPage = 1;
+  state.roomTimelineSelectedId = "";
   state.roomTimelineRoom = room;
   state.roomTimelineKey = key;
   state.roomTimelinePages = {};
@@ -8018,14 +8033,18 @@ async function showRoomTimeline(roomKey = "", room = {}) {
   let knownRoomIndex = null;
   let ambiguousHistoryMatches = 0;
   const snapshots = state.snapshotMetadata;
+  let latestObservation = null;
   try {
     for (let snapshotIndex = 0; snapshotIndex < snapshots.length; snapshotIndex += 1) {
       const snapshot = snapshots[snapshotIndex];
+      const isLatest = snapshotIndex === snapshots.length - 1;
       const scanned = await scanRoomTimelineSnapshot(snapshot, key, room, previous?.index || null, knownRoomIndex, revision, {
-        retainKnownDevices: snapshotIndex < snapshots.length - 1,
-        retainCurrentIndex: snapshotIndex < snapshots.length - 1,
-        captureRanges: { added: { offset: 0, limit: 20 }, absent: { offset: 0, limit: 20 }, modified: { offset: 0, limit: 20 }, ambiguous: { offset: 0, limit: 20 }, identityConflicts: { offset: 0, limit: 20 } },
-        rosterRange: { offset: 0, limit: 20 },
+        retainKnownDevices: !isLatest,
+        retainCurrentIndex: !isLatest,
+        ...(isLatest ? {
+          captureRanges: { added: { offset: 0, limit: 20 }, absent: { offset: 0, limit: 20 }, modified: { offset: 0, limit: 20 }, ambiguous: { offset: 0, limit: 20 }, identityConflicts: { offset: 0, limit: 20 } },
+          rosterRange: { offset: 0, limit: 20 },
+        } : {}),
       });
       if (!scanned || revision !== state.roomTimelineRevision) return;
       ambiguousHistoryMatches += scanned.ambiguousHistoryMatches;
@@ -8036,12 +8055,18 @@ async function showRoomTimeline(roomKey = "", room = {}) {
       knownRoomIndex = scanned.knownIndex;
       if (previousIndex) await database.invalidateFinalAnalyticsIndex(previousIndex.snapshotId);
       if (previousKnownIndex) await database.invalidateFinalAnalyticsIndex(previousKnownIndex.snapshotId);
-      const comparison = scanned.counts
-        ? roomTimelineComparisonPage(scanned.counts, scanned.rows, previousSnapshot?.name || "Final")
-        : null;
-      timeline.insertAdjacentHTML("beforeend", roomTimelineObservationContent(
-        snapshot, scanned.rosterRows, comparison, room, {}, { pageData: true, page: 1, total: scanned.deviceCount },
-      ));
+      if (revision !== state.roomTimelineRevision) return;
+      state.roomTimelineEntries.push({
+        id: snapshot.id, name: snapshot.name, createdAt: snapshot.createdAt, devices: scanned.deviceCount,
+        added: scanned.counts?.added, absent: scanned.counts?.absent, modified: scanned.counts?.modified,
+      });
+      if (isLatest) {
+        latestObservation = {
+          snapshot, devices: scanned.rosterRows,
+          comparison: scanned.counts ? roomTimelineComparisonPage(scanned.counts, scanned.rows, previousSnapshot?.name || "Final") : null,
+          roster: { pageData: true, page: 1, total: scanned.deviceCount },
+        };
+      }
       state.roomTimelineSnapshotIds.push(snapshot.id);
     }
   } finally {
@@ -8050,16 +8075,52 @@ async function showRoomTimeline(roomKey = "", room = {}) {
   }
   if (revision !== state.roomTimelineRevision) return;
   state.roomTimelineDiagnostics = ambiguousHistoryMatches;
+  if (!latestObservation) {
+    timeline.textContent = "Нет сохранённых Final для хронологии.";
+    finishProgress("Нет данных для хронологии");
+    return;
+  }
+  timeline.innerHTML = '<div id="roomTimelineIndex"></div><div id="roomTimelineObservation" aria-live="polite"></div>';
+  state.roomTimelineSelectedId = latestObservation.snapshot.id;
   renderRoomTimeline();
+  paintRoomTimelineObservation(latestObservation);
   finishProgress("Хронология помещения построена");
 }
 
 function renderRoomTimeline() {
-  const timeline = $("#roomTimeline");
   const notice = state.roomTimelineDiagnostics
     ? `<p class="notice">Для ${state.roomTimelineDiagnostics.toLocaleString("ru-RU")} неоднозначных исторических совпадений значения не переносились.</p>`
     : "";
-  if (notice && !timeline.querySelector(".notice")) timeline.insertAdjacentHTML("afterbegin", notice);
+  $("#roomTimelineIndex").innerHTML = notice + roomTimelineIndexContent(
+    state.roomTimelineRoom, state.roomTimelineEntries, state.roomTimelineIndexPage, state.roomTimelineSelectedId,
+  );
+}
+
+function paintRoomTimelineObservation(observation) {
+  $("#roomTimelineObservation").innerHTML = roomTimelineObservationContent(
+    observation.snapshot, observation.devices, observation.comparison, state.roomTimelineRoom,
+    state.roomTimelinePages[observation.snapshot.id], observation.roster,
+  );
+}
+
+async function openRoomTimelineObservation(snapshotId) {
+  if (!state.roomTimelineSnapshotIds.includes(snapshotId) || snapshotId === state.roomTimelineSelectedId) return;
+  const revision = ++state.roomTimelineRevision;
+  state.roomTimelineSelectedId = snapshotId;
+  state.roomTimelinePages = {};
+  $("#roomTimelineObservation").innerHTML = '<p class="muted" role="status">Загружаю выбранный снимок…</p>';
+  renderRoomTimeline();
+  $("#roomTimelineIndex [aria-current=true]")?.focus({ preventScroll: true });
+  try {
+    const observation = await loadRoomTimelineObservation(snapshotId);
+    if (observation && revision === state.roomTimelineRevision) paintRoomTimelineObservation(observation);
+  } catch (error) {
+    if (revision !== state.roomTimelineRevision) return;
+    state.roomTimelineSelectedId = "";
+    $("#roomTimelineObservation").textContent = "Снимок не загружен. Выберите дату повторно.";
+    renderRoomTimeline();
+    throw error;
+  }
 }
 
 async function loadRoomTimelineObservation(snapshotId) {
@@ -8160,23 +8221,12 @@ async function loadRoomTimelineObservation(snapshotId) {
 }
 
 async function updateRoomTimelinePage(snapshotId, section, page) {
-  if (!state.roomTimelineSnapshotIds.includes(snapshotId) || !["roster", "changes", "added", "absent"].includes(section)) return;
+  if (state.roomTimelineSelectedId !== snapshotId || !["roster", "changes", "added", "absent"].includes(section)) return;
+  const revision = ++state.roomTimelineRevision;
   state.roomTimelinePages[snapshotId] ||= {};
   state.roomTimelinePages[snapshotId][section] = page;
   const observation = await loadRoomTimelineObservation(snapshotId);
-  if (!observation || !state.roomTimelineSnapshotIds.includes(snapshotId)) return;
-  const replacement = document.createElement("div");
-  replacement.innerHTML = roomTimelineObservationContent(
-    observation.snapshot,
-    observation.devices,
-    observation.comparison,
-    state.roomTimelineRoom,
-    state.roomTimelinePages[snapshotId],
-    observation.roster,
-  );
-  const card = [...$("#roomTimeline").querySelectorAll("[data-room-timeline-id]")]
-    .find((element) => element.dataset.roomTimelineId === snapshotId);
-  if (card) card.replaceWith(replacement.firstElementChild);
+  if (observation && revision === state.roomTimelineRevision) paintRoomTimelineObservation(observation);
 }
 
 async function compareLatestRoomFinals() {
@@ -10748,13 +10798,21 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   $("#compareRoomFinalsButton").addEventListener("click", () => compareLatestRoomFinals().catch(showError));
   $("#showAllChangedRoomButton").addEventListener("click", () => showAllChangedRooms().catch(showError));
   $("#roomTimeline").addEventListener("click", (event) => {
+    const entry = event.target.closest("[data-room-timeline-open]");
+    if (entry) return openRoomTimelineObservation(entry.dataset.roomTimelineOpen).catch(showError);
+    const indexPage = event.target.closest("[data-room-timeline-index-page]");
+    if (indexPage) {
+      state.roomTimelineIndexPage = Number(indexPage.dataset.page) || 1;
+      renderRoomTimeline();
+      return;
+    }
     const button = event.target.closest("[data-room-timeline-snapshot]");
     if (!button) return;
     const snapshotId = button.dataset.roomTimelineSnapshot;
     const section = button.dataset.roomTimelineSection;
     if (!snapshotId || !["roster", "changes", "added", "absent"].includes(section)) return;
     button.disabled = true;
-    updateRoomTimelinePage(snapshotId, section, Number(button.dataset.page) || 1).catch(showError);
+    updateRoomTimelinePage(snapshotId, section, Number(button.dataset.page) || 1).catch(showError).finally(() => { button.disabled = false; });
   });
   $("#roomFinalComparison").addEventListener("click", (event) => {
     const button = event.target.closest("[data-room-pair-page]");

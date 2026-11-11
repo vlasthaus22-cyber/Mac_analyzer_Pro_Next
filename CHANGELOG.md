@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.3.8 — 2026-11-11
+
+- The Dashboard drilldown lists one row per changed device with aligned columns, the full recorded location, and expandable before/after field values.
+- Room history shows a paged chronology with per-snapshot counts and one selected snapshot card for the equipment and changes.
+
 ## v2.3.7 — 2026-11-11
 
 - Database transfer controls now clearly download and load the portable `.madb.json` database; choosing the same JSON file again works without refreshing the page.

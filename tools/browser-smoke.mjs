@@ -3637,10 +3637,19 @@ if (process.argv.includes("--room-history-parity-only")) {
   let timeline = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await wait(100);
-    timeline = await evaluate(`(()=>{const cards=[...document.querySelectorAll('#roomTimeline [data-room-timeline-id]')];return{count:cards.length,first:cards[0]?.textContent||'',last:cards.at(-1)?.textContent.replaceAll('\\u00a0',' ')||'',absence:cards[1]?.textContent||''}})()`);
+    timeline = await evaluate(`(()=>{const cards=[...document.querySelectorAll('#roomTimeline [data-room-timeline-id]')];return{count:document.querySelectorAll('#roomTimeline [data-room-timeline-open]').length,first:cards[0]?.textContent||'',last:cards.at(-1)?.textContent.replaceAll('\\u00a0',' ')||'',absence:cards[1]?.textContent||''}})()`);
     if (timeline.count === 3 && timeline.last.includes("Восстановленная модель")) break;
   }
-  if (timeline?.count !== 3 || !timeline.last.includes("Восстановленная модель") || !timeline.absence.includes("Отсутствуют (1)")
+    const latestTimeline = timeline;
+  await evaluate(`document.querySelectorAll('#roomTimeline [data-room-timeline-open]')[1]?.click()`);
+  let selectedAbsence = "";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    selectedAbsence = await evaluate(`document.querySelector('#roomTimeline [data-room-timeline-id]')?.textContent || ''`);
+    if (selectedAbsence.includes("Отсутствуют (1)")) break;
+  }
+  timeline.absence = selectedAbsence;
+  if (latestTimeline?.count !== 3 || !latestTimeline.last.includes("Восстановленная модель") || !timeline.absence.includes("Отсутствуют (1)")
     || !timeline.absence.includes("00:11:22:33:44:71") || !timeline.absence.includes("Восстановленная модель")) {
     throw new Error(`Room timeline did not retain the known model across the room absence: ${JSON.stringify(timeline)}`);
   }
@@ -4142,6 +4151,24 @@ if (process.argv.includes("--reference-dashboard-146-only")) {
     if (dashboard.devices.split("/").at(-1).trim() === "6" && dashboard.modified === "2" && dashboard.absent === "1" && dashboard.chart[0]?.some((count,index)=>count===3&&dashboard.chart[1]?.[index]===-1)) break;
   }
   if (dashboard.devices.split("/").at(-1).trim() !== "6" || dashboard.modified !== "2" || dashboard.absent !== "1" || !dashboard.chart[0]?.some((count,index)=>count===3&&dashboard.chart[1]?.[index]===-1)) throw new Error(`Dashboard cards/chart differ from the exact 6/3/1/2 source scenario: ${JSON.stringify({selectedPair,dashboard})}`);
+  await evaluate(`document.querySelector('#analyticsKpis [data-kpi="modified"]').click()`);
+  let drilldown = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(100);
+    drilldown = await evaluate(`(() => {
+      const dialog = document.querySelector('#detailsDialog');
+      const cards = [...dialog.querySelectorAll('.change-device-group')];
+      cards[0]?.setAttribute('open', '');
+      const fields = cards[0]?.querySelector('.change-device-fields');
+      return { count: cards.length, addresses: cards.map(card => card.querySelector('summary span:nth-child(2)')?.textContent),
+        columns: [...(fields?.querySelectorAll('thead th') || [])].map(th => th.textContent.replace('↕','')), rows: fields?.tBodies[0]?.rows.length || 0 };
+    })()`);
+    if (drilldown.count && drilldown.rows) break;
+  }
+  if (!drilldown?.rows || !drilldown.addresses.some(address => address?.includes("Test Address"))
+    || drilldown.columns.join("|") !== "Поле|Было|Стало|Важность") throw new Error(`Modified device drilldown is incomplete: ${JSON.stringify(drilldown)}`);
+  await evaluate(`document.querySelector('#detailsDialog').close()`);
+  await resetDashboardDrilldownFilters();
   await evaluate(`(()=>{const mode=document.querySelector('#changeReportModeSelect');mode.value='period';mode.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#changeReportFrom').value='2026-10-14';document.querySelector('#changeReportTo').value='2026-10-15';document.querySelector('#applyChangeReportButton').click();return true})()`);
   const changeCategories = [];
   for (const [key, label, expectedCount] of [["all", "Все", 10], ["critical", "Критические", 1], ["added", "Добавлены", 7], ["absent", "Отсутствуют", 1], ["modified", "Изменены", 2]]) {
@@ -4216,7 +4243,7 @@ if (process.argv.includes("--reference-dashboard-146-only")) {
   let timelineCount = 0;
   for (let attempt = 0; attempt < 60; attempt += 1) {
     await wait(100);
-    timelineCount = await evaluate(`document.querySelectorAll('#roomTimeline [data-room-timeline-id]').length`);
+    timelineCount = await evaluate(`document.querySelectorAll('#roomTimeline [data-room-timeline-open]').length`);
     if (timelineCount === 2) break;
   }
   if (timelineCount !== 2) throw new Error(`Dashboard parity room timeline should show both Finals for the full hierarchy/search filter, got ${timelineCount}`);
@@ -4929,12 +4956,12 @@ if (process.argv.includes("--room-timeline-stress-only")) {
   for (let attempt = 0; attempt < 1_200; attempt += 1) {
     await wait(100);
     heap.peak = Math.max(heap.peak, (await command("Runtime.getHeapUsage")).usedSize);
-    timeline = await evaluate(`(()=>({cards:document.querySelectorAll('#roomTimeline article[data-room-timeline-id]').length,rows:[...document.querySelectorAll('#roomTimeline article[data-room-timeline-id]')].map(article=>({tableRows:[...article.querySelectorAll('table')].map(table=>table.querySelectorAll('tbody tr:not([data-virtual-spacer="true"])').length),summaries:[...article.querySelectorAll('p')].map(node=>node.textContent.replace(/\\s+/g,' ')).filter(text=>text.startsWith('Строки ')),text:article.textContent.slice(0,220)})),loading:document.querySelector('#progressDetail')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
+    timeline = await evaluate(`(()=>({dates:document.querySelectorAll('#roomTimeline [data-room-timeline-open]').length,cards:document.querySelectorAll('#roomTimeline article[data-room-timeline-id]').length,rows:[...document.querySelectorAll('#roomTimeline article[data-room-timeline-id]')].map(article=>({tableRows:[...article.querySelectorAll('table')].map(table=>table.querySelectorAll('tbody tr:not([data-virtual-spacer="true"])').length),summaries:[...article.querySelectorAll('p')].map(node=>node.textContent.replace(/\\s+/g,' ')).filter(text=>text.startsWith('Строки ')),text:article.textContent.slice(0,220)})),loading:document.querySelector('#progressDetail')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (timeline.error) throw new Error(`Large room timeline failed: ${timeline.message}`);
-    if (timeline.cards === 2 && timeline.rows.every((entry)=>entry.tableRows.some((count) => count > 0))) break;
+    if (timeline.dates === 2 && timeline.cards === 1 && timeline.rows.every((entry)=>entry.tableRows.some((count) => count > 0))) break;
   }
   const normalizeDigits = (value) => value.replace(/\D/g, "");
-  if (timeline?.cards !== 2 || timeline.rows.some((entry)=>entry.tableRows.some(count=>count > 20) || !entry.summaries.some(summary=>normalizeDigits(summary).includes(`120${rows}`)))) {
+  if (timeline?.dates !== 2 || timeline?.cards !== 1 || timeline.rows.some((entry)=>entry.tableRows.some(count=>count > 20) || !entry.summaries.some(summary=>normalizeDigits(summary).includes(`120${rows}`)))) {
     throw new Error(`Large room timeline did not page each complete roster into a 20-row window: ${JSON.stringify(timeline)}`);
   }
   await evaluate(`document.querySelector('#compareRoomFinalsButton').click()`);
@@ -6581,10 +6608,27 @@ await evaluate(`document.querySelector('#showRoomButton').click()`);
 let roomTimelineCount = 0;
 for (let attempt = 0; attempt < 50; attempt += 1) {
   await wait(100);
-  roomTimelineCount = await evaluate(`document.querySelectorAll('#roomTimeline [data-room-timeline-id]').length`);
+  roomTimelineCount = await evaluate(`document.querySelectorAll('#roomTimeline [data-room-timeline-open]').length`);
   if (roomTimelineCount === 3) break;
 }
-if (roomTimelineCount !== 3) throw new Error(`Хронология комнаты не показала карточку для каждого из трёх Final: ${roomTimelineCount}`);
+if (roomTimelineCount !== 3) throw new Error(`Хронология комнаты не показала три даты: ${roomTimelineCount}`);
+const earlierRoomSnapshot = await evaluate(`(() => {
+  const entries = document.querySelectorAll('#roomTimeline [data-room-timeline-open]');
+  entries[1].click();
+  return entries[1].dataset.roomTimelineOpen;
+})()`);
+let roomCard = null;
+for (let attempt = 0; attempt < 100; attempt += 1) {
+  await wait(100);
+  roomCard = await evaluate(`(() => {
+    const cards = [...document.querySelectorAll('#roomTimeline [data-room-timeline-id]')];
+    return { count: cards.length, id: cards[0]?.dataset.roomTimelineId, address: document.querySelector('#roomTimelineIndex h3')?.textContent };
+  })()`);
+  if (roomCard.id === earlierRoomSnapshot) break;
+}
+if (roomCard?.count !== 1 || roomCard.id !== earlierRoomSnapshot || !roomCard.address?.includes("Кутузовский 1")) {
+  throw new Error(`Room history did not show one address card for the selected date: ${JSON.stringify(roomCard)}`);
+}
 await evaluate(`document.querySelector('#compareRoomFinalsButton').click()`);
 let roomPairUi = null;
 for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -6595,7 +6639,7 @@ for (let attempt = 0; attempt < 150; attempt += 1) {
 if (!roomPairUi?.text.includes('Изменилось всё оборудование') || !roomPairUi.cards.some(([label])=>label==='Добавлено') || !roomPairUi.cards.some(([label])=>label==='Отсутствует') || !roomPairUi.cards.some(([label])=>label==='Изменено') || !roomPairUi.statuses.includes('Добавлено') || !roomPairUi.statuses.includes('Отсутствует') || !roomPairUi.statuses.includes('Изменено')) {
   throw new Error(`Сравнение двух последних Final комнаты не показало добавления, отсутствия и изменения: ${JSON.stringify(roomPairUi)}`);
 }
-console.log("browser smoke: room cascade, all three Final timeline cards, and latest room additions/absences/changes verified");
+console.log("browser smoke: room cascade, all three Final dates and one selected snapshot, and latest room additions/absences/changes verified");
 
 await evaluate(`document.querySelector('[data-view="single"]').click()`);
 await wait(500);
