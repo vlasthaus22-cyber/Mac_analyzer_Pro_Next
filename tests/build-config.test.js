@@ -422,8 +422,6 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
     "analyticsDashboardStatus",
     "baseSnapshotSelect",
     "businessUnitFilter",
-    "changeReportBaseSnapshotSelect",
-    "changeReportCurrentSnapshotSelect",
     "cityFilter",
     "currentSnapshotSelect",
     "externalVendorApiProvider",
@@ -436,13 +434,13 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
   ]);
   assert.ok(app.includes('$("#applyAnalyticsDashboardFiltersButton").addEventListener("click"'));
   assert.ok(app.includes('$("#applyComparisonButton").addEventListener("click"'));
-  assert.ok(app.includes('$("#applyChangeSnapshotButton").addEventListener("click"'));
   assert.ok(app.includes('["businessUnit", "city", "site", "floor", "room"].forEach((field) => $(`#${field === "businessUnit" ? "businessUnit" : field}Filter`).addEventListener("change"'));
   const delegatedButtonAttributes = [...new Set(unlabelledButtons.flatMap((attributes) => [...attributes.matchAll(/\b(data-[\w-]+)/g)].map((match) => match[1])))].sort();
   assert.deepEqual(unlabelledButtons.filter((attributes) => !/\btype="submit"/.test(attributes) && !/\bdata-[\w-]+/.test(attributes)), []);
   assert.deepEqual(delegatedButtonAttributes, [
     "data-batch-directory-handle",
     "data-dashboard-settings-close",
+    "data-data-section",
     "data-device-action",
     "data-dialog-close",
     "data-engineering-close",
@@ -1391,8 +1389,8 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.match(app, /state\.singleFile\.mappingReviewed = true/);
   assert.match(app, /hasSingleFileMappingConflicts\(report\) && !state\.singleFile\.mappingReviewed/);
   assert.match(app, /Перед анализом откройте проверку вариантов и примените сопоставление/);
-  assert.match(app, /async function enrichStandaloneDevices\(devices, signal, \{ progressStart = 55, progressEnd = 90 \} = \{\}\)/);
-  const standaloneEnrichment = app.match(/async function enrichStandaloneDevices\(devices, signal, \{ progressStart = 55, progressEnd = 90 \} = \{\}\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(app, /async function enrichStandaloneDevices\(devices, signal, \{ progressStart = 55, progressEnd = 90, readOnly = false \} = \{\}\)/);
+  const standaloneEnrichment = app.match(/async function enrichStandaloneDevices\(devices, signal, \{ progressStart = 55, progressEnd = 90, readOnly = false \} = \{\}\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(standaloneEnrichment, /loadHistoricalAddressIndex: async \(ips\)[\s\S]*?retainHistoricalAddressIndex: false/);
   assert.match(app, /const enriched = await enrichStandaloneDevices\(result\.devices, controller\.signal, \{ progressStart: 30, progressEnd: 75 \}\)/);
   assert.match(app, /enrichStandaloneDevices\(stagedDeviceStore, controller\.signal, \{ progressStart: 40, progressEnd: 58 \}\)/);
@@ -1579,7 +1577,7 @@ test("saving a new Final counts unchanged devices without retaining pairwise row
   const historyPlan = readFileSync("src/core/history-plan.js", "utf8");
   const build = readFileSync("scripts/build-config.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
-  assert.match(app, /database\.buildPreviousFinalIdentityIndex\(activeSnapshotId, currentDevices\)/);
+  assert.match(app, /database\.buildPreviousFinalIdentityIndex\(activeSnapshotId, currentDevices(?:, "", \{ readOnly \})?\)/);
   assert.match(app, /finalHistoryComparisonDetails\(result\.diagnostics\.historyComparison\)/);
   const executeEnrichment = app.slice(app.indexOf("async function executeEnrichment("), app.indexOf("\nfunction recordOperationDuration", app.indexOf("async function executeEnrichment(")));
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
@@ -1638,8 +1636,8 @@ test("Previous Final enrichment hydrates only indexed identity candidates", () =
   const database = readFileSync("src/data/database.js", "utf8");
   const identity = readFileSync("src/core/identity.js", "utf8");
   assert.doesNotMatch(app, /loadCompactSnapshot\(/);
-  assert.equal((app.match(/database\.buildPreviousFinalIdentityIndex\(activeSnapshotId, currentDevices\)/g) || []).length, 2);
-  assert.match(database, /async buildPreviousFinalIdentityIndex\(snapshotId, currentDevices = \[\], expectedSignature = ""\)/);
+  assert.equal((app.match(/database\.buildPreviousFinalIdentityIndex\(activeSnapshotId, currentDevices(?:, "", \{ readOnly \})?\)/g) || []).length, 2);
+  assert.match(database, /async buildPreviousFinalIdentityIndex\(snapshotId, currentDevices = \[\], expectedSignature = "", \{ readOnly = false \} = \{\}\)/);
   assert.match(database, /async assertSnapshotSignature\(snapshotId, expectedSignature\)/);
   assert.match(database, /indexed\.forEachCandidate\(\(_device, position\) =>/);
   assert.match(database, /compactPreviousFinalDevice\(device\)/);
@@ -2125,7 +2123,7 @@ test("leaving analytics invalidates pending work and returning recalculates from
 test("extended selected-Final analytics reuses its loaded payload and falls back to IndexedDB chunks", () => {
   const app = readFileSync("src/app.js", "utf8");
   assert.match(app, /if \(state\.analyticsDashboardSettings\.filters\.status !== "all"\) return renderAnalytics\(true\);/);
-  assert.match(app, /createDatasetAnalyticsCollector\(\{ includeTopologyDevices: false, includeTopologySummary: !clusterQueryId, includeClusters: !clusterQueryId, includeRankings: !clusterQueryId, clusterFields \}\)/);
+  assert.match(app, /createDatasetAnalyticsCollector\(\{ includeTopologyDevices: false, includeTopologySummary: !clusterQueryId, includeClusters: !clusterQueryId, includeRankings: !clusterQueryId, countFinalRows: true, clusterFields \}\)/);
   assert.match(app, /if \(dashboardStatus === "missing"\) return chunk\.filter\(\(_device, index\) => missingPositionMask\?\.\[startOffset \+ index\] === 1\)/);
   assert.match(app, /devices: datasetSnapshotId \? undefined : analytics\.devices/);
   assert.match(app, /const expectedStatus = CURRENT_STATUS_MASK\[dashboardStatus\];[\s\S]*?chunk\.filter\(\(_device, index\) => currentStatusMask\?\.\[startOffset \+ index\] === expectedStatus\)/);
@@ -2137,9 +2135,9 @@ test("extended selected-Final analytics reuses its loaded payload and falls back
   assert.match(app, /scheduleAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask, currentStatusMask\)/);
   assert.match(app, /function calculateAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null\)/);
   assert.match(app, /await feedAnalyticsDatasetRows\(\{[\s\S]*?devices: datasetSnapshotId \? undefined : analytics\.devices[\s\S]*?visitChunks: \(snapshotId, visit\) => database\.forEachSnapshotChunk\(snapshotId, visit, \{/);
-    assert.match(app, /selected-final-dataset-v8:/);
-  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 8\)/);
-  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 8, \{[\s\S]*?onProgress/);
+    assert.match(app, /selected-final-dataset-v9:/);
+  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 9\)/);
+  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 9, \{[\s\S]*?onProgress/);
   assert.match(app, /\.\.\.collectTopologyBuckets\(selectedChunk\)/);
   assert.match(app, /analyticsAggregateRankedPage\(clusterQueryId, "topology-switch", \{ limit: 20 \}\)/);
   assert.match(app, /dataset\.summary\.devices !== expectedDevices/);
@@ -2230,7 +2228,7 @@ test("large Dashboard updates show detail progress and clear the previous datase
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
   assert.match(app, /function paintAnalyticsSummary\(analytics\) \{[\s\S]*Подробная сводка выбранного статуса рассчитывается/);
-  assert.match(app, /function calculateAnalyticsDetails\([\s\S]*Расчёт статистики по времени/);
+  assert.match(app, /function calculateAnalyticsDetails\([\s\S]*Подготовка истории выбранных Final/);
   assert.match(app, /Сводки выбранного статуса: \$\{rowsProcessed\.toLocaleString/);
   assert.match(app, /Сохранение агрегатов выбранного статуса: \$\{pendingRowsProcessed\.toLocaleString/);
   assert.match(app, /Чтение чанка \$\{index \+ 1\}\/\$\{chunkCount\} Final/);
@@ -2242,7 +2240,7 @@ test("large Dashboard updates show detail progress and clear the previous datase
   assert.match(app, /Обработка истории Final \$\{index \+ 1\}\/\$\{metadata\.length\}, чанка/);
   assert.match(app, /Worker истории Final \$\{snapshotIndex \+ 1\}\/\$\{snapshotCount\}, чанк \$\{chunkIndex \+ 1\}\/\$\{chunkCount\}/);
   assert.match(app, /const stage = \(message\) => \{ if \(loading && state\.analyticsRequests\.isCurrent\(revision\)\) loading\.textContent = message; \};/);
-  assert.match(app, /await renderTemporalStatistics\(false\)/);
+  assert.match(app, /paintAnalyticsDetails\(pair\);[\s\S]*?renderTemporalStatistics\(false\)\.catch/);
   assert.match(app, /feedAnalyticsDatasetRows\(\{[\s\S]*?isCurrent: \(\) => state\.analyticsRequests\.isCurrent\(revision\)/);
   assert.match(app, /acceptStatusChunk\(chunk, startOffset\)\.filter\(matchesDashboard\)/);
   assert.match(app, /Завершение рейтингов, комнат и топологии/);
@@ -2369,7 +2367,7 @@ test("first and history-backfilled Dashboard comparisons stream both Final sides
   assert.match(comparison, /export async function compareFinalAdditionPage\([\s\S]*?resolveIdentityChunk = null/);
   assert.match(database, /forEachFinalAnalyticsIndexChunk\(snapshotId, signature, schemaVersion = 1, visit\)/);
   assert.match(database, /createIndex\("by_identity_lookup", "identityLookupKeys", \{ unique: false, multiEntry: true \}\)/);
-  assert.match(compact, /FINAL_ANALYTICS_INDEX_SCHEMA_VERSION = 5/);
+  assert.match(compact, /FINAL_ANALYTICS_INDEX_SCHEMA_VERSION = 6/);
 });
 
 test("room analytics computes reconciled descriptors per row without a full descriptor roster", () => {
@@ -2478,7 +2476,7 @@ test("paged comparison details retain only the currently displayed report", () =
 
 test("enrichment resolves the active Previous Final through the bounded identity lookup", () => {
   const app = readFileSync("src/app.js", "utf8");
-  assert.equal((app.match(/database\.buildPreviousFinalIdentityIndex\(activeSnapshotId, currentDevices\)/g) || []).length, 2, "both standalone and full enrichment must use bounded lookups into the active baseline");
+  assert.equal((app.match(/database\.buildPreviousFinalIdentityIndex\(activeSnapshotId, currentDevices(?:, "", \{ readOnly \})?\)/g) || []).length, 2, "both standalone and full enrichment must use bounded lookups into the active baseline");
   assert.match(app, /const activeSnapshotId = await database\.getSetting\("activeSnapshotId", ""\)/);
   assert.doesNotMatch(app, /loadPreviousSnapshotOrEmpty\(activeSnapshotId/);
   assert.doesNotMatch(app, /previous = await database\.activeSnapshot\(\)/);
@@ -2504,7 +2502,7 @@ test("MAC chronology pages saved history events and merges them into calculated 
   const html = readFileSync("index.html", "utf8");
   const renderer = readFileSync("src/ui/render.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
-  assert.match(app, /async function openMacHistory\(\{ includeOptionalHostHistory = false \} = \{\}\)/);
+  assert.match(app, /async function openMacHistory\(\{ includeOptionalHostHistory = false, dialogMac = "" \} = \{\}\)/);
   assert.match(app, /createMacTimelineAccumulator\(mac, \{[\s\S]*?dedupeStableEventIds: false,[\s\S]*?retainEvents: false,[\s\S]*?retainHistoryIndex: false,[\s\S]*?retainSnapshotMetadata: false/);
   assert.match(app, /timeline\.addSnapshot\(metadata, matchCount > 1 \? \[\] : firstMatch \? \[firstMatch\] : \[\], \{ matchCount, candidatesInScratch: matchCount > 1 \}\)/);
   assert.match(app, /database\.macTimelineAttachHistoryEvent\(queryId, lookupKey, item\.id\)/);
@@ -2512,12 +2510,12 @@ test("MAC chronology pages saved history events and merges them into calculated 
   assert.match(app, /database\.macTimelineSnapshotContext\(queryId, item\.snapshotId, \{ deviceId: item\.deviceId \}\)/);
   assert.match(app, /if \(!deviceContainsNormalizedMac\(device, mac\)\) continue;[\s\S]*?matchCount \+= 1;[\s\S]*?pendingCandidates\.push/);
   assert.match(app, /await database\.forEachSnapshotChunk\(metadata\.id, async \(devices\) =>/);
-  assert.doesNotMatch(app.match(/async function openMacHistory\(\{ includeOptionalHostHistory = false \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "", /\.\.\.device\.alternateMacs/);
+  assert.doesNotMatch(app.match(/async function openMacHistory\(\{ includeOptionalHostHistory = false, dialogMac = "" \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "", /\.\.\.device\.alternateMacs/);
   assert.match(comparison, /export function deviceContainsNormalizedMac\(device = \{\}, normalizedMac = ""\)/);
-  assert.doesNotMatch(app.match(/async function openMacHistory\(\{ includeOptionalHostHistory = false \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "", /snapshots\.push\(/);
+  assert.doesNotMatch(app.match(/async function openMacHistory\(\{ includeOptionalHostHistory = false, dialogMac = "" \} = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || "", /snapshots\.push\(/);
   assert.match(comparison, /export function createMacTimelineAccumulator\(mac, \{[\s\S]*?retainEvents = true,[\s\S]*?retainHistoryIndex = true,[\s\S]*?retainSnapshotMetadata = true,[\s\S]*?onEvent = null,[\s\S]*?onEventPatched = null/);
   assert.match(app, /database\.forEachMacHistoryPage\(mac, async \(page\) =>/);
-  assert.match(app, /renderMacHistory\(queryId, summary\)/);
+  assert.match(app, /renderMacHistory\(queryId, summary, \{ dialog, isCurrent \}\)/);
   assert.match(html, /id="macTimelineSummary"/);
   assert.match(html, /id="macAppearancesPanel"/);
   assert.match(renderer, /export function macTimelineSummaryContent\(/);
@@ -2534,8 +2532,8 @@ test("MAC chronology pages saved history events and merges them into calculated 
   assert.match(database, /metric: "candidate-id"/);
   assert.match(app, /database\.macTimelineHasSnapshotStatus\(queryId, snapshotId, expectedStatus\)/);
   assert.match(app, /database\.finalizeMacTimelineQuery\(queryId\)/);
-  assert.match(app, /database\.macTimelinePage\(queryId, \{ page: timelinePage, limit: 100 \}\)/);
-  assert.match(app, /macTimelineContent\(page\.rows, \{ page: timelinePage, pageSize: 100, alreadyOrdered: true, total: page\.total, prePaged: true/);
+  assert.match(app, /database\.macTimelinePage\(queryId, \{ page: timelinePage, limit: pageSize \}\)/);
+  assert.match(app, /macTimelineContent\(events, \{ page: timelinePage, pageSize, alreadyOrdered: true, total: page\.total, prePaged: true/);
   assert.match(app, /pageSize: 100/);
   assert.doesNotMatch(app, /const storedHistory = \[\]/);
 });
@@ -3111,11 +3109,11 @@ test("unassigned analytics details load bounded pages instead of retaining a ful
   const renderer = readFileSync("src/ui/render.js", "utf8");
   assert.doesNotMatch(analytics, /unassignedDevices\s*=\s*devices\.filter/);
   assert.doesNotMatch(app, /analytics\.unassignedDevices/);
-  assert.match(app, /database\.loadSnapshotUnassignedRoomPage\(snapshotId, \{ page, limit: 50, filters: analytics\.dashboardFilters \}\)/);
+  assert.match(app, /database\.loadSnapshotUnassignedRoomPage\(snapshotId, \{\s*page, limit: 50, filters: analytics\.dashboardFilters, positionMask: analytics\.unassignedPositionMask,\s*positionValue: CURRENT_STATUS_MASK\[status\] \|\| 1,\s*\}\)/);
   assert.match(app, /\[data-unassigned-device-page\]/);
   assert.match(database, /async loadSnapshotUnassignedRoomPage/);
   assert.match(database, /const matchesFilters = createDashboardDeviceMatcher\(filters\)/);
-  assert.match(database, /if \(locationKey\(device\) \|\| !matchesFilters\(device\)\) continue/);
+  assert.match(database, /locationKey\(device\) \|\| !matchesFilters\(device\)\) continue/);
   assert.match(renderer, /data-unassigned-device-page=/);
 });
 

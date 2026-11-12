@@ -1,7 +1,7 @@
 export const ENGINEERING_VIEWS = Object.freeze([
   "single", "filecompare", "multicompare", "enrichment", "batch", "data", "rooms", "notifications", "guide",
 ]);
-export const USER_VIEWS = Object.freeze(["search", "analytics", "history"]);
+export const USER_VIEWS = Object.freeze(["search", "analytics", "history", "filepreview"]);
 export const MIN_ENGINEERING_PASSWORD_LENGTH = 8;
 export const DEFAULT_ENGINEERING_SESSION_MINUTES = 30;
 export const MIN_ENGINEERING_SESSION_MINUTES = 1;

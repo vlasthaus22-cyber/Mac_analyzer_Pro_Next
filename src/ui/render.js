@@ -3,7 +3,7 @@ import { formatWeekRangeLabel } from "../core/analytics.js";
 import { isCriticalHistoryChange } from "../core/change-categories.js";
 import { identityTokens } from "../core/identity.js";
 import { inventoryCellText, visibleInventoryColumns } from "../core/inventory-columns.js";
-import { firstMac, keyText, text } from "../core/normalize.js";
+import { firstMac, keyText, normalizeMac, text } from "../core/normalize.js";
 
 export function escapeHtml(value) {
   return String(value ?? "")
@@ -377,6 +377,13 @@ export function dashboardChangeDeviceGroups(events = []) {
 }
 
 export function fullRoomAddress(location = {}) {
+  const path = text(location.locationPath);
+  if (path) {
+    const normalized = keyText(path);
+    const extra = [location.address, location.physicalAddress, location.room].map(text)
+      .filter((value, index, values) => value && !normalized.includes(keyText(value)) && values.indexOf(value) === index);
+    return [path, ...extra].join(" · ");
+  }
   const seen = new Set();
   const parts = [];
   for (const field of ["businessUnit", "city", "site", "address", "physicalAddress", "floor", "room"]) {
@@ -404,7 +411,8 @@ export function dashboardChangeDeviceGroupsContent(events = []) {
       return `<tr><th scope="row">${escapeHtml(field)} ${origin}</th><td>${escapeHtml(before)}</td><td>${escapeHtml(after)}</td><td><span class="severity-badge severity-${isSafeSeverity(change.severity) ? change.severity : severity}">${escapeHtml(severityLabels[change.severity] || severityLabels[severity] || severityLabels.other)}</span></td></tr>`;
     }).join("");
     const fallback = type === "added" ? "Устройство добавлено" : type === "absent" ? "Устройство отсутствует в текущем Final" : `Источник: ${escapeHtml(source || "История Final")}`;
-    return `<details class="change-device-group"><summary class="change-device-columns"><span class="change-device-identity"><strong>${escapeHtml(identity)}</strong>${model ? `<small class="muted">${escapeHtml(model)}</small>` : ""}</span><span>${escapeHtml(fullRoomAddress(device))}</span><span>${escapeHtml(labels[type] || labels.modified)}<small><span class="severity-badge severity-${isSafeSeverity(severity) ? severity : "other"}">${escapeHtml(severityLabels[severity] || severityLabels.other)}</span></small></span><span class="change-device-count">${changes.length.toLocaleString("ru-RU")}</span></summary>${detailRows ? `<div class="table-scroll"><table class="data-table change-device-fields"><thead><tr><th>Поле</th><th>Было</th><th>Стало</th><th>Важность</th></tr></thead><tbody>${detailRows}</tbody></table></div>` : `<p>${fallback}</p>`}</details>`;
+    const history = normalizeMac(device.mac) ? `<button class="button secondary" type="button" data-open-mac-dialog="${escapeHtml(device.mac)}">История MAC</button>` : "";
+    return `<details class="change-device-group"><summary class="change-device-columns"><span class="change-device-identity"><strong>${escapeHtml(identity)}</strong>${model ? `<small class="muted">${escapeHtml(model)}</small>` : ""}</span><span>${escapeHtml(fullRoomAddress(device))}</span><span>${escapeHtml(labels[type] || labels.modified)}<small><span class="severity-badge severity-${isSafeSeverity(severity) ? severity : "other"}">${escapeHtml(severityLabels[severity] || severityLabels.other)}</span></small></span><span class="change-device-count">${changes.length.toLocaleString("ru-RU")}</span></summary>${detailRows ? `<div class="table-scroll"><table class="data-table change-device-fields"><thead><tr><th>Поле</th><th>Было</th><th>Стало</th><th>Важность</th></tr></thead><tbody>${detailRows}</tbody></table></div>` : `<p>${fallback}</p>`}${history}</details>`;
   }).join("");
   return cards ? `<div class="change-device-columns change-device-heading" aria-hidden="true"><span>Устройство</span><span>Полный адрес</span><span>Статус</span><span>Полей</span></div>${cards}` : "";
 }
@@ -963,6 +971,7 @@ const MAC_TIMELINE_FIELDS = Object.freeze([
   ["deviceName", "Название устройства"], ["smartroomId", "Smartroom ID"],
   ["businessUnit", "ТБ"], ["city", "Город"], ["site", "Площадка"], ["floor", "Этаж"],
   ["room", "Помещение"], ["address", "Адрес"], ["physicalAddress", "Физический адрес"],
+  ["locationPath", "Полный путь помещения"],
   ["authenticationTime", "Время аутентификации"], ["observedAt", "Время наблюдения"],
   ["source", "Источник"], ["sources", "Источники"], ["fieldSources", "Источники полей"],
   ["possibleIps", "Возможные IP"], ["possibleIpsTruncated", "Есть другие IP"],
@@ -1068,7 +1077,8 @@ export function macTimelineContent(events = [], { page = 1, pageSize = 100, alre
       ? `<details class="timeline-final-comparison"><summary>Сравнить Final: «${escapeHtml(event.previousSnapshotName || "Final")}» → «${escapeHtml(event.snapshotName || "Final")}»</summary><div class="timeline-final-comparison-grid"><section><h4>Было в предыдущем Final «${escapeHtml(event.previousSnapshotName || "Final")}»</h4><dl>${MAC_TIMELINE_FIELDS.map(([field, label]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(timelineValue(event.before[field]))}</dd>`).join("")}</dl></section><section><h4>Стало в новом Final «${escapeHtml(event.snapshotName || "Final")}»</h4><dl>${MAC_TIMELINE_FIELDS.map(([field, label]) => `<dt>${escapeHtml(label)}</dt><dd class="${changed.has(field) ? "changed-value" : ""}">${escapeHtml(timelineValue(event.after[field]))}</dd>`).join("")}</dl></section></div></details>`
       : "";
     const finalLabels = [event.snapshotName ? `Final: ${event.snapshotName}` : "", event.source || ""].filter(Boolean).map(escapeHtml).join(" · ") || "Источник не указан";
-    return `<details class="timeline-card mac-timeline-item mac-timeline-${tone}"><summary title="Открыть полную информацию о событии"><span class="mac-timeline-marker" aria-hidden="true"></span><span class="mac-timeline-card"><header><time datetime="${escapeHtml(event.date || "")}">${escapeHtml(formatUtcTimelineDate(event.date))}</time>${interval}<span class="mac-event-badge">${escapeHtml(title)}</span></header><div class="mac-timeline-title"><strong>${escapeHtml(device.mac || device.hostname || "Событие")}</strong><span>${finalLabels}</span></div>${changes}</span></summary><div class="mac-timeline-details"><strong>Полная информация</strong>${finalComparison}<dl class="mac-timeline-context">${details}</dl></div></details>`;
+    const inferredAddress = device.inferredAddress ? `<p class="muted">Адрес по истории IP коммутатора: ${escapeHtml(device.inferredAddress)}</p>` : "";
+    return `<details class="timeline-card mac-timeline-item mac-timeline-${tone}"><summary title="Открыть полную информацию о событии"><span class="mac-timeline-marker" aria-hidden="true"></span><span class="mac-timeline-card"><header><time datetime="${escapeHtml(event.date || "")}">${escapeHtml(formatUtcTimelineDate(event.date))}</time>${interval}<span class="mac-event-badge">${escapeHtml(title)}</span></header><div class="mac-timeline-title"><strong>${escapeHtml(device.mac || device.hostname || "Событие")}</strong><span>${finalLabels}</span></div>${inferredAddress}${changes}</span></summary><div class="mac-timeline-details"><strong>Полная информация</strong>${finalComparison}<dl class="mac-timeline-context">${details}</dl></div></details>`;
   }).join("");
   if (pages === 1) return cards;
   return `${cards}<div class="button-row mac-timeline-pagination"><span class="muted">События ${start + 1}–${end} из ${totalEvents.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-mac-timeline-page="${currentPage - 1}" ${currentPage <= 1 ? "disabled" : ""}>Назад</button><span class="muted">Страница ${currentPage} из ${pages}</span><button class="button secondary" type="button" data-mac-timeline-page="${currentPage + 1}" ${currentPage >= pages ? "disabled" : ""}>Дальше</button></div>`;
@@ -1142,7 +1152,8 @@ export function macTimelineAppearancesContent(events = [], { page = 1, pageSize 
   const rows = pageEvents.map((event) => {
     const device = event.after || event.device || {};
     const source = event.snapshotName || event.source || "Выгрузка";
-    return `<tr><td>${escapeHtml(formatUtcTimelineDate(event.date))}</td><td>${escapeHtml(source)}</td><td>${escapeHtml(device.manufacturer || device.vendor || "—")}</td><td>${escapeHtml(device.model || "—")}</td><td>${escapeHtml(device.ip || "—")}</td><td>${escapeHtml(device.address || "—")}</td><td>${escapeHtml(device.room || "—")}</td><td>${escapeHtml(device.smartroomId || "—")}</td></tr>`;
+    const address = device.address || device.physicalAddress || (device.inferredAddress ? `${device.inferredAddress} (по IP коммутатора)` : "—");
+    return `<tr><td>${escapeHtml(formatUtcTimelineDate(event.date))}</td><td>${escapeHtml(source)}</td><td>${escapeHtml(device.manufacturer || device.vendor || "—")}</td><td>${escapeHtml(device.model || "—")}</td><td>${escapeHtml(device.ip || "—")}</td><td>${escapeHtml(address)}</td><td>${escapeHtml(device.room || "—")}</td><td>${escapeHtml(device.smartroomId || "—")}</td></tr>`;
   }).join("");
   return `<p class="muted">Появления ${start + 1}–${end} из ${total.toLocaleString("ru-RU")}</p><div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>Дата</th><th>Выгрузка</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Адрес</th><th>Помещение</th><th>Smartroom ID</th></tr></thead><tbody>${rows}</tbody></table></div><div class="button-row"><button class="button secondary" type="button" data-mac-appearance-page="${currentPage - 1}" ${currentPage <= 1 ? "disabled" : ""}>Назад</button><span class="muted">Страница ${currentPage} из ${pages}</span><button class="button secondary" type="button" data-mac-appearance-page="${currentPage + 1}" ${currentPage >= pages ? "disabled" : ""}>Дальше</button></div>`;
 }

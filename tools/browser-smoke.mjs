@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { compareFinals } from "../src/core/comparison.js";
+import { FINAL_ANALYTICS_INDEX_SCHEMA_VERSION } from "../src/core/compact-final-analytics.js";
 import { createXlsxWorkbookStream } from "../src/core/xlsx-export.js";
 import { createZip } from "../scripts/release-archive.js";
 const port = Number(process.argv[2] || 9333);
@@ -496,8 +497,8 @@ if (process.argv.includes("--dashboard-history-signs-only")) {
   await evaluate(`(()=>{const Original=window.Chart;if(typeof Original!=="function")throw new Error("Chart.js is unavailable");window.__smokeChartConfigs=[];window.Chart=new Proxy(Original,{construct(target,args,newTarget){const config=args[1];if(config?.data?.datasets)window.__smokeChartConfigs.push({canvasId:args[0]?.canvas?.id||"",labels:[...config.data.labels],datasets:config.data.datasets.map(dataset=>({label:dataset.label,data:[...dataset.data]}))});return Reflect.construct(target,args,newTarget)}})})()`);
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
   const runFinal=async({name,rows,count})=>{
-    await assignInput("#mainFileInput",name,`MAC;Device ID;Model\n${rows.join("\n")}`);
-    for(const [field,index] of [["mac",0],["deviceId",1],["model",2]]){
+    await assignInput("#mainFileInput",name,`MAC;Device ID;Model;IP коммутатора;Адрес\n${rows.join("\n")}`);
+    for(const [field,index] of [["mac",0],["deviceId",1],["model",2],["switchIp",3],["address",4]]){
       const selected=await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main ${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
       if(selected!==String(index))throw new Error(`Main ${field} mapping failed for ${name}`);
     }
@@ -514,28 +515,30 @@ if (process.argv.includes("--dashboard-history-signs-only")) {
     const activeCount=await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const deviceCount=chunks.result.filter(chunk=>chunk.snapshotId===active.result?.value).reduce((total,chunk)=>total+(chunk.devices||[]).length,0);db.close();resolve(deviceCount)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
     if(activeCount!==rows.length)throw new Error(`History trend Final ${count} stored ${activeCount} rows instead of ${rows.length}`);
   };
-  const row=(suffix,id,model)=>`02:70:00:00:00:${suffix};${id};${model}`;
-  await runFinal({name:"history_first.csv",rows:[row("01","HISTORY-A","Model A"),row("02","HISTORY-B","Model B")],count:1});
+  const row=(suffix,id,model,address="Москва, ул. Тверская, 8")=>`02:70:00:00:00:${suffix};${id};${model};10.37.0.1;${address}`;
+  await runFinal({name:"history_first.csv",rows:[row("01","HISTORY-A","Model A",""),row("02","HISTORY-B","Model B")],count:1});
   await runFinal({name:"history_second.csv",rows:[row("01","HISTORY-A","Model A"),row("02","HISTORY-B","Model B"),row("03","HISTORY-C","Model C")],count:2});
-  await runFinal({name:"history_third.csv",rows:[row("01","HISTORY-A","Model A"),row("03","HISTORY-C","Model C"),row("04","HISTORY-D","Model D")],count:3});
+  await runFinal({name:"history_third.csv",rows:[row("01","HISTORY-A","Model A2"),row("03","HISTORY-C","Model C"),row("04","HISTORY-D","Model D","")],count:3});
   await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
   let state=null;
   for(let attempt=0;attempt<300;attempt+=1){
     await wait(100);
     state=await evaluate(`(()=>({loading:!document.querySelector('#analyticsLoadingStatus').hidden,history:[...document.querySelectorAll('#analyticsHistoryKpis .kpi')].map(item=>({label:item.querySelector('span')?.textContent.trim()||'',value:item.querySelector('strong')?.textContent.trim()||''})),trendSizes:['presenceChart','totalChart'].map(id=>document.getElementById(id).parentElement.getBoundingClientRect().height),configs:window.__smokeChartConfigs||[],error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if(state.error)throw new Error(`Dashboard history trends failed: ${state.message}`);
-    if(!state.loading&&state.history.length===3&&state.configs.some(item=>item.canvasId==='presenceChart')&&state.configs.some(item=>item.canvasId==='totalChart'))break;
+    if(!state.loading&&state.history.length===2&&state.configs.some(item=>item.canvasId==='presenceChart')&&state.configs.some(item=>item.canvasId==='totalChart'))break;
   }
   const presence=state.configs.find(item=>item.canvasId==='presenceChart');
   const totals=state.configs.find(item=>item.canvasId==='totalChart');
   const added=presence?.datasets.find(item=>item.label==='Добавлено')?.data;
   const absent=presence?.datasets.find(item=>item.label==='Отсутствовало')?.data;
-  if(state.loading||state.history.find(item=>item.label==='Final в истории')?.value!=='3'||state.history.find(item=>item.label==='Наблюдений MAC во всех Final')?.value!=='8'
+  if(state.loading||state.history.find(item=>item.label==='Final в истории')?.value!=='3'||state.history.find(item=>item.label==='Уникальных MAC в Main выбранного Final')?.value!=='3'
     ||presence?.labels.length!==2||presence.labels.some(label=>label.includes('history_first'))
     ||JSON.stringify(added)!==JSON.stringify([1,1])||JSON.stringify(absent)!==JSON.stringify([0,-1])
     ||JSON.stringify(totals?.labels)!==JSON.stringify(['Final history_first.csv','Final history_second.csv','Final history_third.csv'])
     ||JSON.stringify(totals?.datasets?.[0]?.data)!==JSON.stringify([2,3,3])
     ||state.trendSizes.some(height=>height<140||height>200))throw new Error(`Final history trend axes, signs, or full snapshot sequence are incorrect: ${JSON.stringify({state,presence,totals,added,absent})}`);
+  const coverage = state.configs.find((item) => item.canvasId === "pyqtFieldCoverageChart");
+  if (coverage?.datasets[0]?.data[coverage.labels.indexOf("Адрес")] !== 100) throw new Error(`Confirmed switch address missing from Dashboard: ${JSON.stringify(coverage)}`);
   const compactLayout = [];
   for (const width of [1280, 420]) {
     await command("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
@@ -552,6 +555,22 @@ if (process.argv.includes("--dashboard-history-signs-only")) {
     }
     compactLayout.push({ width, charts });
   }
+  await evaluate(`document.querySelector('#analyticsKpis [data-kpi="modified"]').click()`);
+  let changeButton = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    changeButton = await evaluate(`Boolean(document.querySelector('#detailsDialog [data-open-mac-dialog]'))`);
+    if (changeButton) break;
+  }
+  if (!changeButton) throw new Error("Dashboard did not offer a history card for the changed device");
+  await evaluate(`document.querySelector('#detailsDialog [data-open-mac-dialog]').click()`);
+  let comparison = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await wait(50);
+    comparison = await evaluate(`({analytics:document.querySelector('#analyticsView').classList.contains('active'),beforeAfter:document.querySelector('#macHistoryDialog .timeline-final-comparison')?.textContent||'',inferred:document.querySelector('#macHistoryDialog [data-mac-dialog-timeline]')?.textContent.includes('Адрес по истории IP коммутатора: Москва, ул. Тверская, 8')})`);
+    if (comparison.beforeAfter) break;
+  }
+  if (!comparison?.analytics || !comparison.beforeAfter.includes("Model A2") || !comparison.beforeAfter.includes("Было в предыдущем Final") || !comparison.inferred) throw new Error(`Dashboard MAC comparison or inferred historic address is missing: ${JSON.stringify(comparison)}`);
   console.log(JSON.stringify({dashboardHistorySignsOnly:true,history:state.history,presence,totals,compactLayout,ok:true}));
   await command("Browser.close");
   socket.close();
@@ -581,7 +600,7 @@ if (process.argv.includes("--search-doubleclick-only")) {
     const current=await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if(current.error)throw new Error(`Search double-click fixture failed: ${current.message}`);
     finalStatus=current.status;
-    if(finalStatus.includes('1 Final')&&finalStatus.includes('2 в активном Final'))break;
+    if(finalStatus.includes('1 Final')&&finalStatus.includes('3 в активном Final'))break;
   }
   if(!finalStatus.includes('3 в активном Final'))throw new Error(`Search double-click fixture did not save three strong-identity devices: ${finalStatus}`);
   const stored=await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const devices=chunks.result.filter(chunk=>chunk.snapshotId===active.result?.value).flatMap(chunk=>chunk.devices||[]);db.close();resolve(devices.map(({mac,deviceId,model})=>({mac,deviceId,model}))) };tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
@@ -595,8 +614,19 @@ if (process.argv.includes("--search-doubleclick-only")) {
   if(!macChoice?.open||!macChoice.title.includes('Выбор действия')||!macChoice.history||!macChoice.analytics)throw new Error(`Double-click on a MAC result did not offer history and device analytics: ${JSON.stringify(macChoice)}`);
   await evaluate(`document.querySelector('[data-search-result-action="history"]').click()`);
   let history=null;
-  for(let attempt=0;attempt<100;attempt+=1){await wait(50);history=await evaluate(`({active:document.querySelector('#historyView')?.classList.contains('active'),mac:document.querySelector('#macHistorySearch')?.value||'',error:!document.querySelector('#errorBanner').hidden})`);if(history.active&&history.mac)break;}
-  if(!history?.active||history.mac!=='02:40:00:00:00:01'||history.error)throw new Error(`MAC double-click history action did not navigate to the selected device: ${JSON.stringify(history)}`);
+  for(let attempt=0;attempt<100;attempt+=1){await wait(50);history=await evaluate(`({searchActive:document.querySelector('#searchView')?.classList.contains('active'),open:document.querySelector('#macHistoryDialog').open,title:document.querySelector('#macHistoryDialog [data-dialog-title]').textContent,card:document.querySelector('#macHistoryDialog .mac-timeline-item')?.textContent||'',error:!document.querySelector('#errorBanner').hidden})`);if(history.open&&history.card)break;}
+  if(!history?.searchActive||!history.open||!history.title.includes('02:40:00:00:00:01')||!history.card.includes('Context Model A')||history.error)throw new Error(`MAC history did not open over search: ${JSON.stringify(history)}`);
+  await evaluate(`document.querySelector('#macHistoryDialog [data-dialog-close]').click()`);
+  const databaseCounts = () => evaluate(`(()=>new Promise((resolve,reject)=>{const request=indexedDB.open(new URL(location.href).searchParams.get('db'));request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result;const stores=['snapshots','inventory','history','singleAnalyses','originalFiles','finalAnalytics'];const tx=db.transaction(stores,'readonly');const counts=stores.map(store=>tx.objectStore(store).count());tx.oncomplete=()=>{db.close();resolve(counts.map(count=>count.result))};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  const beforePreview = await databaseCounts();
+  await evaluate(`document.querySelector('[data-view="filepreview"]').click()`);
+  await assignInput("#filePreviewInput", "disposable-preview.csv", "MAC\n02:40:00:00:00:01");
+  for(let attempt=0;attempt<100;attempt+=1){await wait(50);if(await evaluate(`!document.querySelector('#filePreviewRun').disabled`))break;}
+  await evaluate(`document.querySelector('#filePreviewRun').click()`);
+  let preview=null;
+  for(let attempt=0;attempt<120;attempt+=1){await wait(50);preview=await evaluate(`({status:document.querySelector('#filePreviewStatus').textContent,row:document.querySelector('#filePreviewResults tbody tr')?.textContent||''})`);if(preview.row)break;}
+  const afterPreview = await databaseCounts();
+  if(!preview?.row.includes('Context Model A')||!preview.status.includes('не записаны')||JSON.stringify(beforePreview)!==JSON.stringify(afterPreview))throw new Error(`Read-only preview did not enrich or changed IndexedDB: ${JSON.stringify({preview,beforePreview,afterPreview})}`);
   await evaluate(`document.querySelector('[data-view="search"]').click()`);
   const modelRow=await evaluate(`(()=>[...document.querySelectorAll('#deviceTable tbody tr[data-device-id]')].find(row=>row.textContent.includes('Context Model B'))?.dataset.deviceId||'')()`);
   if(!modelRow)throw new Error('Search results did not render the model-only fixture row');
@@ -617,7 +647,7 @@ if (process.argv.includes("--search-doubleclick-only")) {
   };
   const partialSearch = await searchPrefix('Context Model');
   const exactSearch = await searchPrefix('Context Model B');
-  console.log(JSON.stringify({searchDoubleClickOnly:true,stored,macChoice,history,modelDialog,prefixAnalytics,partialSearch,exactSearch,ruleSaved,ok:true}));
+  console.log(JSON.stringify({searchDoubleClickOnly:true,stored,macChoice,history,preview,beforePreview,afterPreview,modelDialog,prefixAnalytics,partialSearch,exactSearch,ruleSaved,ok:true}));
   await command("Browser.close");
   socket.close();
   process.exit(0);
@@ -6025,7 +6055,7 @@ if (process.argv.includes("--optional-host-transfer-only")) {
 if (process.argv.includes("--dashboard-cache-reload-only")) {
   let cachedReport = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    cachedReport = await evaluate(`new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('analyticsCache','readonly');const request=tx.objectStore('analyticsCache').openCursor();let found=null;request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;const value=cursor.value.value;if(cursor.value.key.startsWith('selected-final-dataset-v8:')&&value?.dataset?.reportText){found={key:cursor.value.key,reportText:value.dataset.reportText,devices:value.dataset.summary?.devices};return}cursor.continue()};tx.oncomplete=()=>{db.close();resolve(found)};tx.onerror=()=>{db.close();reject(tx.error)}}})`);
+    cachedReport = await evaluate(`new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('analyticsCache','readonly');const request=tx.objectStore('analyticsCache').openCursor();let found=null;request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;const value=cursor.value.value;if(cursor.value.key.startsWith('selected-final-dataset-v9:')&&value?.dataset?.reportText){found={key:cursor.value.key,reportText:value.dataset.reportText,devices:value.dataset.summary?.devices};return}cursor.continue()};tx.oncomplete=()=>{db.close();resolve(found)};tx.onerror=()=>{db.close();reject(tx.error)}}})`);
     if (cachedReport) break;
     await wait(100);
   }
@@ -6289,9 +6319,9 @@ let rebuiltIndex = null;
 for (let attempt = 0; attempt < 40; attempt += 1) {
   await wait(150);
   rebuiltIndex = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['finalAnalyticsMetadata','snapshots'],'readonly');const metadataRequest=tx.objectStore('finalAnalyticsMetadata').get('${staleIndexSeeded}');const snapshotRequest=tx.objectStore('snapshots').get('${staleIndexSeeded}');tx.oncomplete=()=>{const metadata=metadataRequest.result;const snapshot=snapshotRequest.result;db.close();resolve({schemaVersion:metadata?.schemaVersion,deviceCount:metadata?.deviceCount,snapshotCount:snapshot?.deviceCount})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
-  if (rebuiltIndex.schemaVersion === 5) break;
+  if (rebuiltIndex.schemaVersion === FINAL_ANALYTICS_INDEX_SCHEMA_VERSION) break;
 }
-if (rebuiltIndex?.schemaVersion !== 5 || rebuiltIndex.deviceCount !== 4 || rebuiltIndex.snapshotCount !== 4) throw new Error(`Устаревший индекс не перестроился до схемы v5 без потери Final: ${JSON.stringify(rebuiltIndex)}`);
+if (rebuiltIndex?.schemaVersion !== FINAL_ANALYTICS_INDEX_SCHEMA_VERSION || rebuiltIndex.deviceCount !== 4 || rebuiltIndex.snapshotCount !== 4) throw new Error(`Устаревший индекс не перестроился до схемы v${FINAL_ANALYTICS_INDEX_SCHEMA_VERSION} без потери Final: ${JSON.stringify(rebuiltIndex)}`);
 console.log("browser smoke: stale compact analytics index rebuilt to v5 while preserving the full Final");
 await evaluate(`document.querySelector('[data-kpi="switchAnomalyRooms"]').click()`);
 let anomalySummary = "";
@@ -6339,7 +6369,7 @@ await evaluate(`(async()=>{
   ]);
   setFiles('#batchSmartroomInput',[
     ['smartroom_2026-10-15.csv','MAC;Производитель;Модель\\n00:11:22:33:44:51;Vendor;Model A'],
-    ['smartroom_2026-10-17.csv','MAC;Производитель;Модель;ТБ;Город;Площадка;Этаж;Помещение\\n00:11:22:33:44:53;Vendor;Model B;ЦА;Москва;Кутузовский;3;Переговорная 1']
+    ['smartroom_2026-10-17.csv','MAC;Производитель;Модель;ТБ;Город;Площадка;Этаж;Помещение;Адрес локации\\n00:11:22:33:44:53;Vendor;Model B;ЦА;Москва;Кутузовский;3;Переговорная 1;Кутузовский 1']
   ]);
   setFiles('#batchDdIoInput',[
     ['ddio_2026-10-15.csv','Column2;Column3;Column9;Column10\\n192.168.5.51;00-11-22-33-44-51;;'],
@@ -6530,10 +6560,11 @@ if (missingScopedKpis?.error || missingScopedKpis?.loading || missingScopedKpis?
 console.log("browser smoke: missing-status device, manufacturer and room KPIs match the full selected-status roster");
 
 async function resetDashboardDrilldownFilters() {
-  await evaluate(`document.querySelector('#resetAnalyticsDashboardFiltersButton').click()`);
+  await evaluate(`(()=>{document.querySelector('#analyticsKpis [data-kpi="devices"]')?.setAttribute('data-smoke-old-kpi','');document.querySelector('#resetAnalyticsDashboardFiltersButton').click()})()`);
   for (let attempt = 0; attempt < 300; attempt += 1) {
     await wait(100);
     const ready = await evaluate(`document.querySelector('#analyticsLoadingStatus').hidden
+      && !document.querySelector('#analyticsKpis [data-smoke-old-kpi]')
       && document.querySelector('#analyticsDashboardStatus').value === 'all'
       && !document.querySelector('#analyticsDashboardManufacturer').value
       && !document.querySelector('#analyticsDashboardRoom').value`);
@@ -6566,7 +6597,7 @@ await resetDashboardDrilldownFilters();
 const manufacturerKpiDrilldown = await openDashboardAggregateKpi("manufacturers", "Производители выбранного Final");
 await resetDashboardDrilldownFilters();
 const roomKpiDrilldown = await openDashboardAggregateKpi("rooms", "Помещения выбранного Final");
-await evaluate(`document.querySelector('#resetAnalyticsDashboardFiltersButton').click()`);
+await resetDashboardDrilldownFilters();
 console.log(JSON.stringify({ browserSmokeDashboardAggregateKpis: { manufacturers: manufacturerKpiDrilldown, rooms: roomKpiDrilldown } }));
 
 const changedRoomKpi = await evaluate("document.querySelector(\"#analyticsKpis [data-kpi='allChangedRooms'] strong\")?.textContent.trim()||''");

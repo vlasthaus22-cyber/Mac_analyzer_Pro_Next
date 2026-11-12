@@ -194,6 +194,9 @@ body.is-resizing-column, body.is-resizing-column * { cursor: col-resize !importa
 .analytics-chart-details { margin: 0 12px 12px; }
 .analytics-chart-details > summary { cursor: pointer; padding: 8px 0; color: var(--primary-dark); }
 .dashboard-status-charts .chart-frame { height: 194px; }
+.report-scope-settings { margin: 8px 0; }
+.data-section { scroll-margin-top: 16px; margin-block: 18px; }
+.data-section-links { margin-block: 8px 16px; }
 .chart-state { margin: 8px 0 0; }
 #analyticsView .analytics-grid .panel { min-width: 0; padding: 13px; }
 #analyticsView .analytics-grid .panel h3 { margin-bottom: 8px; }

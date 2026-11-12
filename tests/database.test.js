@@ -2440,6 +2440,20 @@ test("topology loads exact switch/port and unassigned device pages from snapshot
   assert.deepEqual(secondUnassignedPage.devices.map(({ id }) => id), ["unassigned-2"]);
 });
 
+test("Main MAC count is available from the Final catalog without its diagnostic payload", async () => {
+  const database = new Database(`mac-analyzer-pro-next-test-${crypto.randomUUID()}`);
+  const devices = [
+    { id: "main-1", mac: "02:11:22:33:44:01" },
+    { id: "smartroom-only", mac: "02:11:22:33:44:02" },
+  ];
+  await database.saveFinal({ id: "old", devices });
+  await database.saveFinal({ id: "new", devices, diagnostics: { counts: { mainUniqueMacs: 1 } } });
+  const catalog = await database.listSnapshots({ catalogOnly: true, includeDiagnostics: false, finalOnly: true });
+  assert.equal(catalog.find(({ id }) => id === "new").mainUniqueMacs, 1);
+  assert.equal(catalog.find(({ id }) => id === "new").deviceCount, 2);
+  assert.equal(catalog.find(({ id }) => id === "old").mainUniqueMacs, undefined);
+});
+
 test("analytics unassigned-room roster is read by exact bounded pages from Final chunks", async () => {
   const database = new Database(`unassigned-room-page-${crypto.randomUUID()}`);
   const devices = [
@@ -2465,6 +2479,10 @@ test("analytics unassigned-room roster is read by exact bounded pages from Final
   });
   assert.equal(filtered.total, 4);
   assert.deepEqual(filtered.devices.map(({ id }) => id), ["no-room-10", "no-room-100", "no-room-101", "no-room-102"]);
+  const statusMask = new Uint8Array(devices.length);
+  statusMask[1] = statusMask[103] = 2;
+  const scoped = await database.loadSnapshotUnassignedRoomPage("unassigned-final", { positionMask: statusMask, positionValue: 2 });
+  assert.deepEqual(scoped.devices.map(({ id }) => id), ["no-room-1"]);
 });
 
 test("streamed added and absent Final pages match exact full comparison across IndexedDB chunks", async () => {
@@ -8001,7 +8019,7 @@ test("concurrent FinalAnalytics rebuilds serialize per snapshot and cannot publi
   (await database.open()).close();
 });
 
-test("FinalAnalytics v2 index is rebuilt as v5 without replacing Final or Inventory", async () => {
+test("FinalAnalytics v2 index is rebuilt as v6 without replacing Final or Inventory", async () => {
   const database = new Database(`final-analytics-v2-upgrade-${crypto.randomUUID()}`);
   const devices = [
     { id: "device-1", mac: "00:11:22:33:44:51", model: "Board A" },
@@ -8014,14 +8032,14 @@ test("FinalAnalytics v2 index is rebuilt as v5 without replacing Final or Invent
   const oldIndex = compactFinalDevices(devices);
   await database.saveFinalAnalyticsIndex(snapshotId, staleSignature, oldIndex, 2);
 
-  assert.equal(FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, 5);
+  assert.equal(FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, 6);
   assert.equal(await database.loadFinalAnalyticsIndex(snapshotId, staleSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION), null);
   const rebuilt = [];
   await database.forEachSnapshotChunk(snapshotId, (chunk) => rebuilt.push(...chunk.map(compactComparisonDevice)));
   const currentSignature = finalAnalyticsIndexSignature(metadata);
   await database.saveFinalAnalyticsIndex(snapshotId, currentSignature, rebuilt, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
 
-  assert.deepEqual(await database.loadFinalAnalyticsIndex(snapshotId, currentSignature, 5), rebuilt);
+  assert.deepEqual(await database.loadFinalAnalyticsIndex(snapshotId, currentSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION), rebuilt);
   assert.equal((await database.activeSnapshotMetadata()).id, snapshotId);
   assert.equal((await database.loadSnapshot(snapshotId)).devices.length, devices.length);
   assert.equal((await readInventory(database)).length, devices.length);
@@ -8035,7 +8053,7 @@ test("FinalAnalytics v2 index is rebuilt as v5 without replacing Final or Invent
   assert.equal(count, 1);
 });
 
-test("FinalAnalytics v3 projection upgrades to v5 without replacing device snapshots", async () => {
+test("FinalAnalytics v3 projection upgrades to v6 without replacing device snapshots", async () => {
   const database = new Database(`final-analytics-v3-upgrade-${crypto.randomUUID()}`);
   const devices = [
     { id: "device-1", mac: "00:11:22:33:44:61", room: "A", model: "Board A", fieldSources: { model: "Main" } },
@@ -8048,14 +8066,14 @@ test("FinalAnalytics v3 projection upgrades to v5 without replacing device snaps
   const oldIndex = compactFinalDevices(devices);
   await database.saveFinalAnalyticsIndex(snapshotId, staleSignature, oldIndex, 3);
 
-  assert.equal(FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, 5);
+  assert.equal(FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, 6);
   assert.equal(await database.loadFinalAnalyticsIndex(snapshotId, staleSignature, 4), null);
   const projected = [];
   await database.forEachSnapshotChunk(snapshotId, (chunk) => projected.push(...chunk.map(compactComparisonDevice)));
   const currentSignature = finalAnalyticsIndexSignature(metadata);
-  await database.saveFinalAnalyticsIndex(snapshotId, currentSignature, projected, 5);
+  await database.saveFinalAnalyticsIndex(snapshotId, currentSignature, projected, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
 
-  assert.deepEqual(await database.loadFinalAnalyticsIndex(snapshotId, currentSignature, 5), projected);
+  assert.deepEqual(await database.loadFinalAnalyticsIndex(snapshotId, currentSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION), projected);
   assert.equal((await database.activeSnapshotMetadata()).id, snapshotId);
   assert.equal((await database.loadSnapshot(snapshotId)).devices.length, devices.length);
   assert.equal((await readInventory(database)).length, devices.length);

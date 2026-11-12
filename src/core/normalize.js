@@ -311,15 +311,29 @@ export function locationKey(device = {}) {
 }
 
 function parseLocationPath(value) {
-  const parts = String(value ?? "").split(",").map(text);
+  const raw = String(value ?? "");
+  const parts = raw.split(raw.includes(" → ") ? /\s+→\s+/ : raw.includes(" > ") ? /\s+>\s+/ : /[;,]/).map(text);
+  if (parts.length < 4) return null;
+  const floorIndex = parts.findIndex((part, index) => index >= 3 && /(?:\b(?:floor|level)\b|этаж|уровень)/iu.test(part));
+  const streetAtThird = /^(?:ул(?:ица)?\b|ул\.|пер\.|проспект|пр-т|шоссе|наб\.|набережная|бульвар|street\b)/iu.test(parts[2]);
+  if (floorIndex >= 4 || (floorIndex === 3 && streetAtThird)) {
+    const tail = parts.slice(floorIndex + 1);
+    const roomIndex = tail.findIndex((part) => /помещени|комнат|переговор|кабинет|\broom\b/iu.test(part));
+    const hasSite = !streetAtThird && floorIndex >= 5;
+    return {
+      businessUnit: parts[0], city: parts[1], site: hasSite ? parts[2] : "",
+      address: parts.slice(hasSite ? 3 : 2, floorIndex).filter(Boolean).join(", "),
+      floor: parts[floorIndex], room: roomIndex >= 0 ? tail[roomIndex] : (tail.length === 1 ? tail[0] : ""),
+    };
+  }
   if (parts.length < 5) return null;
   return {
     businessUnit: parts[0],
     city: parts[1],
-    site: parts[2],
+    site: streetAtThird ? "" : parts[2],
     floor: parts[3],
     room: parts[4],
-    address: parts.slice(5).join(", "),
+    address: [streetAtThird ? parts[2] : "", ...parts.slice(5)].filter(Boolean).join(", "),
   };
 }
 
@@ -338,7 +352,6 @@ function locationInference(input) {
 export function normalizeDevice(input = {}, source = "") {
   const inferredLocation = locationInference(input);
   const inputRoomIsPath = Boolean(inferredLocation && inferredLocation.sourceField === "room");
-  const inputAddressIsPath = Boolean(inferredLocation && inferredLocation.sourceField === "address");
   const macCandidates = [input.mac, input.macAddress, input.mac_address, input.macFormatted, input.mac_formatted, input.CallingStationID]
     .map(normalizeMacField);
   const mac = macCandidates.find((candidate) => candidate && normalizeMac(candidate))
@@ -428,8 +441,11 @@ export function normalizeDevice(input = {}, source = "") {
     site: firstKnown(input.site, inferredLocation?.site),
     floor: firstKnown(input.floor, inferredLocation?.floor),
     room: firstKnown(inputRoomIsPath ? "" : input.room, inferredLocation?.room),
-    address: firstKnown(inputAddressIsPath ? "" : input.address, inferredLocation?.address),
+    address: firstKnown(input.address, input.physicalAddress, inferredLocation?.address),
     physicalAddress: firstKnown(input.physicalAddress),
+    ...(firstKnown(input.locationPath, input.location, inputRoomIsPath ? input.room : "") ? {
+      locationPath: firstKnown(input.locationPath, input.location, inputRoomIsPath ? input.room : ""),
+    } : {}),
     manufacturer: firstKnown(input.manufacturer, input.vendor),
     model: firstKnown(input.model),
     deviceType: firstKnown(input.deviceType, input.type),

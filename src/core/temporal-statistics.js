@@ -201,7 +201,7 @@ export class TemporalStatisticsAccumulator {
 export function* temporalStatisticsCsvChunks(result) {
   const columns = [
     ["period", "Период"], ["periodType", "Шаг"], ["snapshotCount", "Число снимков"],
-    ["deviceTotal", "Сумма устройств по снимкам"], ["maxDevices", "Максимум устройств"],
+    ["latestDeviceCount", "Устройств в последнем снимке"], ["maxDevices", "Максимум устройств"],
     ["uniqueMacs", "Уникальных MAC"], ["added", "Появились MAC"], ["removed", "Исчезли MAC"],
     ["vendors", "Производителей"], ["rooms", "Помещений"], ["sources", "Источники"], ["snapshots", "Снимки"],
   ];

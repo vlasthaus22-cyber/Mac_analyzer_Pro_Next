@@ -1,5 +1,13 @@
 # MAC Analyzer Pro Next engineering guide
 
+## GitHub repository
+
+- The GitHub repository for this project is `vlasthaus22-cyber/Mac_analyzer_Pro_Next`.
+- The expected `origin` is `https://github.com/vlasthaus22-cyber/Mac_analyzer_Pro_Next.git`.
+  Verify the remote before pushing or publishing a release.
+- Publish releases to `https://github.com/vlasthaus22-cyber/Mac_analyzer_Pro_Next/releases`
+  using the checks and packaging rules below.
+
 ## Product and parity
 
 MAC Analyzer Pro Next is a browser-only mirror of MAC Analyzer Pro. The PyQt

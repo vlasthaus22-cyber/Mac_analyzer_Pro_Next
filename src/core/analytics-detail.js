@@ -390,7 +390,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
       if (!unknownVendors.has(vendor.toLowerCase())) add("known-vendor", vendor);
       if (!unknownModels.has(model.toLowerCase())) add("model", model);
       if (room) add("room", room);
-      if (room && !unknownValues.has(room.toLowerCase())) add("occupancy-room", room);
+      if (room || smartroomId) add("occupancy-room", room || `Smartroom ID ${smartroomId}`);
       if (smartroomId) add("smartroom", smartroomId);
       if (switchIp && !unknownValues.has(switchIp.toLowerCase())) add("switch", switchIp);
       if (smartroomId || room) add("room-identity", smartroomId || room);
@@ -421,7 +421,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
 
   function applyAnalyticsAggregateView(dataset, { tops = {}, counts = {} } = {}) {
     const devices = Number(dataset?.summary?.devices || 0);
-    const roomCount = Number(dataset?.summary?.withRoom || 0);
+    const roomCount = Number(dataset?.roomOccupancy?.assignedDevices || 0);
     const makeRanked = (metric) => (tops[metric] || []).map((row) => ({ label: row.data?.label || row.value, value: Number(row.count || 0) }));
     const makeTop = (metric, denominator, limit = 20) => (tops[metric] || []).slice(0, limit).map((row) => ({
       label: row.data?.label || row.value,
@@ -488,11 +488,12 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
     const clusterMap = new Map();
     const topologyMap = new Map();
     const topologyUnassigned = [];
-    const seenDeviceKeys = new Set();
+    const seenDeviceKeys = options.countFinalRows ? null : new Set();
     const includeTopologyDevices = options.includeTopologyDevices !== false;
     const includeTopologySummary = options.includeTopologySummary !== false;
     const includeClusters = options.includeClusters !== false;
     const includeRankings = options.includeRankings !== false;
+    const occupancyCounts = includeRankings ? new Map() : null;
     const clusterFields = Array.isArray(options.clusterFields) && options.clusterFields.length
       ? options.clusterFields
       : ["vendor", "room", "switchIp"];
@@ -503,6 +504,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
     let knownVendors = 0;
     let withIp = 0;
     let withRoom = 0;
+    let assignedRooms = 0;
     let withAddress = 0;
     let withSwitch = 0;
     let withSwitchPort = 0;
@@ -524,7 +526,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
         const mac = normalizeMac(firstMac(device.mac, device.macFormatted, device.mac_formatted));
         const id = text(device.id || device.deviceId || device.serial);
         const uniqueKey = mac ? `mac:${mac}` : id ? `id:${id.toLocaleLowerCase("ru-RU")}` : "";
-        if (uniqueKey) {
+        if (uniqueKey && seenDeviceKeys) {
           if (seenDeviceKeys.has(uniqueKey)) continue;
           seenDeviceKeys.add(uniqueKey);
         }
@@ -542,6 +544,10 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
         if (!unknownVendors.has(vendor.toLowerCase())) knownVendors += 1;
         if (ip && !unknownValues.has(ip.toLowerCase())) withIp += 1;
         if (room && !unknownValues.has(room.toLowerCase())) withRoom += 1;
+        if (room || smartroomId) {
+          assignedRooms += 1;
+          if (occupancyCounts) tally(occupancyCounts, room || `Smartroom ID ${smartroomId}`);
+        }
         if (address && !unknownValues.has(address.toLowerCase())) withAddress += 1;
         if (switchIp && !unknownValues.has(switchIp.toLowerCase())) withSwitch += 1;
         if (switchPortValue && !unknownValues.has(switchPortValue.toLowerCase())) withSwitchPort += 1;
@@ -630,8 +636,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
       const top = (counter, denominator, limit = 20, include = () => true) => topRankedEntries(counter, limit, include).map(({ label, count }) => ({
         label, count, percent: denominator ? Math.round(count / denominator * 1000) / 10 : 0,
       }));
-      let uniqueFilledRooms = 0;
-      for (const label of rooms.keys()) if (!unknownValues.has(label.toLowerCase())) uniqueFilledRooms += 1;
+      const uniqueFilledRooms = occupancyCounts?.size || 0;
       // Smartroom IDs already form the first half of `uniqueRooms`; retain a
       // room-name set only for records without an ID and subtract labels that
       // overlap an ID. This avoids a separate union Set when IDs are present.
@@ -639,7 +644,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
       for (const room of roomsWithoutSmartroomId) if (!smartrooms.has(room)) uniqueRooms += 1;
       let uniqueKnownVendors = 0;
       for (const label of vendors.keys()) if (!unknownVendors.has(label.toLowerCase())) uniqueKnownVendors += 1;
-      const occupancyRooms = top(rooms, withRoom, 50, (label) => !unknownValues.has(label.toLowerCase())).map((item) => ({
+      const occupancyRooms = top(occupancyCounts || new Map(), assignedRooms, 50).map((item) => ({
         ...item,
         percentOfAssigned: item.percent,
         percentOfAll: devices ? Math.round(item.count / devices * 1000) / 10 : 0,
@@ -654,11 +659,11 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
         port: { count: withSwitchPort, percent: devices ? Math.round(withSwitchPort / devices * 1000) / 10 : 0 },
       };
       const roomOccupancy = {
-        assignedDevices: withRoom,
-        unassignedDevices: Math.max(0, devices - withRoom),
-        assignedPercent: coverage.room.percent,
+        assignedDevices: assignedRooms,
+        unassignedDevices: Math.max(0, devices - assignedRooms),
+        assignedPercent: devices ? Math.round(assignedRooms / devices * 1000) / 10 : 0,
         uniqueRooms: uniqueFilledRooms,
-        averageDevicesPerRoom: uniqueFilledRooms ? Math.round(withRoom / uniqueFilledRooms * 10) / 10 : 0,
+        averageDevicesPerRoom: uniqueFilledRooms ? Math.round(assignedRooms / uniqueFilledRooms * 10) / 10 : 0,
         mostOccupied: occupancyRooms[0] || null,
         rooms: occupancyRooms,
       };
@@ -671,7 +676,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
         `  Производитель: ${coverage.uniqueVendors} уникальных`, `  Модель: ${coverage.uniqueModels} уникальных`,
         `  Адрес: ${withAddress} (${coverage.address.percent.toFixed(1)}%)`, `  Помещение: ${withRoom} (${coverage.room.percent.toFixed(1)}%)`,
         `  IP-адрес: ${withIp} (${coverage.ip.percent.toFixed(1)}%)`, `  Коммутатор: ${withSwitch} (${coverage.switch.percent.toFixed(1)}%)`,
-        "", "=== ЗАПОЛНЕННОСТЬ ПОМЕЩЕНИЙ ===", `  Распределено по помещениям: ${withRoom} (${roomOccupancy.assignedPercent.toFixed(1)}%)`,
+        "", "=== ЗАПОЛНЕННОСТЬ ПОМЕЩЕНИЙ ===", `  Распределено по помещениям: ${assignedRooms} (${roomOccupancy.assignedPercent.toFixed(1)}%)`,
         `  Без помещения: ${roomOccupancy.unassignedDevices}`, `  Уникальных помещений: ${roomOccupancy.uniqueRooms}`,
         `  Среднее устройств на помещение: ${roomOccupancy.averageDevicesPerRoom.toFixed(1)}`,
       ];

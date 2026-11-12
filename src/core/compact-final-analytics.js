@@ -3,14 +3,14 @@ import { text } from "./normalize.js";
 const COMPACT_FINAL_FIELDS = Object.freeze([
   "id", "deviceId", "serial", "mac", "alternateMacs", "hostname", "smartroomId", "ip",
   "switchIp", "switchPort", "physicalAddress", "businessUnit", "city", "site", "floor",
-  "room", "address", "manufacturer", "vendor", "model", "deviceType", "deviceName",
+  "room", "address", "locationPath", "manufacturer", "vendor", "model", "deviceType", "deviceName",
   "authenticationTime", "observedAt", "possibleIps", "fieldSources", "source", "sources",
   "historicalEvidence",
 ]);
 const COMPACT_PREVIOUS_FINAL_FIELDS = Object.freeze([
   "id", "deviceId", "serial", "mac", "alternateMacs", "hostname", "smartroomId", "ip",
   "switchIp", "switchPort", "physicalAddress", "businessUnit", "city", "site", "floor",
-  "room", "address", "manufacturer", "vendorConfidence", "vendorSource", "model", "modelConfidence", "modelSource",
+  "room", "address", "locationPath", "manufacturer", "vendorConfidence", "vendorSource", "model", "modelConfidence", "modelSource",
   "deviceType", "deviceName", "authenticationTime", "possibleIps", "fieldSources",
   "customFields", "customFieldSources", "sources", "conflicts",
   "alternateMacsTruncated", "possibleIpsTruncated", "conflictsTruncated",
@@ -19,11 +19,11 @@ const COMPACT_PREVIOUS_FINAL_FIELD_SET = new Set(COMPACT_PREVIOUS_FINAL_FIELDS);
 const COMPARISON_BASELINE_FIELDS = new Set([
   "id", "deviceId", "serial", "mac", "alternateMacs", "hostname", "smartroomId", "ip",
   "switchIp", "switchPort", "physicalAddress", "businessUnit", "city", "site", "floor",
-  "room", "address", "manufacturer", "vendor", "model", "deviceType", "deviceName",
+  "room", "address", "locationPath", "manufacturer", "vendor", "model", "deviceType", "deviceName",
   "authenticationTime", "source",
 ]);
 
-export const FINAL_ANALYTICS_INDEX_SCHEMA_VERSION = 5;
+export const FINAL_ANALYTICS_INDEX_SCHEMA_VERSION = 6;
 
 export function finalAnalyticsIndexSignature(snapshot = {}) {
   return JSON.stringify([

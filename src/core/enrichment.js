@@ -209,6 +209,7 @@ const MERGE_FIELDS = [
   "room",
   "address",
   "physicalAddress",
+  "locationPath",
   "manufacturer",
   "model",
   "deviceType",
@@ -223,12 +224,14 @@ const ENRICHMENT_FIELD_BY_DEVICE_FIELD = Object.freeze({
   model: "model",
   address: "address",
   physicalAddress: "address",
+  locationPath: "room",
   ip: "ip",
   manufacturer: "vendor",
   room: "room",
   switchIp: "switch_ip",
   switchPort: "switch_port",
 });
+const LOCATION_MERGE_FIELDS = new Set(["businessUnit", "city", "site", "floor", "room", "address", "physicalAddress", "locationPath", "smartroomId"]);
 
 function setKnown(target, field, value, source, { overwrite = false } = {}) {
   const next = text(value);
@@ -365,6 +368,7 @@ export function mergeDevice(target, incoming, source, options = {}) {
     ? normalizeEnrichmentFieldSettings(options.enrichmentFieldSettings)
     : DEFAULT_ENRICHMENT_FIELD_SETTINGS;
   for (const field of MERGE_FIELDS) {
+    if (options.skipFields?.has(field)) continue;
     const setting = ENRICHMENT_FIELD_BY_DEVICE_FIELD[field];
     if (!setting || enabled[setting]) {
       const targetWasEmpty = !text(target[field]);
@@ -562,6 +566,7 @@ async function createMainDevicesInStage(rows, mapping, diagnostics, enrichmentFi
   let stagedCount = deviceStore.count;
   let rowIndex = 0;
   let inputBatch = [];
+  const mainMacs = new Set();
   const processBatch = async (batch) => {
     const prepared = [];
     for (const row of batch) {
@@ -580,6 +585,7 @@ async function createMainDevicesInStage(rows, mapping, diagnostics, enrichmentFi
         retainDiagnosticSample(diagnostics, "invalid", { source: "Main", row: rowNumber, reason: "Нет MAC, serial или Device ID" });
         continue;
       }
+      if (normalizeMac(candidate.mac)) mainMacs.add(candidate.mac);
       prepared.push({ candidate, rowNumber });
     }
     if (!prepared.length) return;
@@ -624,6 +630,7 @@ async function createMainDevicesInStage(rows, mapping, diagnostics, enrichmentFi
   }
   if (inputBatch.length) await processBatch(inputBatch);
   if (!rowIndex) throw new Error("Основной файл не содержит данных");
+  diagnostics.counts.mainUniqueMacs = mainMacs.size;
   return { devices: deviceStore, rowCount: rowIndex, identityIndex: { tokens: new Map() } };
 }
 
@@ -632,7 +639,13 @@ function applyPreviousFinal(device, previousIndex, diagnostics, enrichmentFieldS
   if (result.status !== "matched") return false;
   recordIdentityConflicts(diagnostics, "Previous Final", "", result);
   device.id = result.match.id || device.id;
-  mergeDevice(device, result.match, "Previous Final", { enrichmentFieldSettings });
+  const previous = result.match;
+  const differentLocation = ["smartroomId", "city", "site", "floor", "room"].some((field) => {
+    const before = keyText(previous[field]);
+    const after = keyText(device[field]);
+    return before && after && before !== after;
+  }) || (normalizeIp(previous.switchIp) && normalizeIp(device.switchIp) && normalizeIp(previous.switchIp) !== normalizeIp(device.switchIp));
+  mergeDevice(device, previous, "Previous Final", { enrichmentFieldSettings, ...(differentLocation ? { skipFields: LOCATION_MERGE_FIELDS } : {}) });
   if (previousUseCounts) {
     previousUseCounts[result.position] -= 1;
     if (previousUseCounts[result.position] === 0) trimComparisonDeviceInPlace(result.match);
@@ -644,6 +657,7 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
   const devices = [];
   let index = buildIdentityIndex(devices);
   let rowIndex = 0;
+  const mainMacs = new Set();
   throwIfAborted(signal);
   for await (const row of inputRows(rows)) {
     const rowNumber = rowIndex + 2;
@@ -662,6 +676,7 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
       retainDiagnosticSample(diagnostics, "invalid", { source: "Main", row: rowNumber, reason: "Нет MAC, serial или Device ID" });
       continue;
     }
+    if (normalizeMac(candidate.mac)) mainMacs.add(candidate.mac);
     const resolution = findIdentityMatch(candidate, index);
     const strongerIdentityConflict = mainHasUnmatchedStrongerIdentity(candidate, resolution, diagnostics, rowNumber);
     if (resolution.status === "matched" && !strongerIdentityConflict) {
@@ -678,6 +693,7 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
   }
   // Keep the index built while collapsing Main duplicates; SmartRoom can reuse
   // its strong identity tokens instead of rebuilding them from every device.
+  diagnostics.counts.mainUniqueMacs = mainMacs.size;
   if (!retainIdentityIndex) index.tokens.clear();
   return { devices, rowCount: rowIndex, identityIndex: retainIdentityIndex ? index : null };
 }
@@ -1050,6 +1066,16 @@ export async function enrich(options = {}) {
   let currentDeviceCount = deviceCount(devices);
   diagnostics.counts.mainRaw = main.rowCount;
   diagnostics.counts.mainUnique = currentDeviceCount;
+  if (!Number.isInteger(diagnostics.counts.mainUniqueMacs)) {
+    const mainMacs = new Set();
+    await forEachDevicePage(devices, (rows) => {
+      for (const device of rows) {
+        const mac = normalizeMac(device.mac);
+        if (mac) mainMacs.add(mac);
+      }
+    }, { signal, writeBack: false });
+    diagnostics.counts.mainUniqueMacs = mainMacs.size;
+  }
   if (smartroomInputIsEmpty) main.identityIndex?.tokens?.clear();
   if (Array.isArray(mainDevices)) {
     for (let offset = 0; offset < currentDeviceCount; offset += KNOWLEDGE_LOOKUP_BATCH_SIZE) {

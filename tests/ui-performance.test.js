@@ -51,7 +51,7 @@ test("Inventory result double-click offers MAC history or analytics and opens mo
   assert.match(renderRows, /data-search-result-action="analytics"/);
   assert.match(renderRows, /openModelPrefixAnalytics\(target\.model\)\.catch\(showError\)/);
   assert.match(app, /event\.target\.closest\("\[data-search-result-action\]"\)/);
-  assert.match(app, /searchResultAction\.dataset\.searchResultAction === "history"[\s\S]*?openMacHistory\(\)\.catch\(showError\)/);
+  assert.match(app, /searchResultAction\.dataset\.searchResultAction === "history"[\s\S]*?openMacHistory\(\{ dialogMac: device\.mac \}\)\.catch\(showError\)/);
   assert.match(renderRows, /event\.key === "Enter"[\s\S]*?openDeviceAnalytics\(device\)\.catch\(showError\)/);
   assert.match(app, /async function openDeviceAnalytics\(device\)/);
 });

@@ -34,13 +34,14 @@ import { BATCH_DIRECTORY_ROLES, inspectBatchDirectoryHandle, listBatchDirectoryF
 import { assertBrowserHeapCapacity, assertFilePairCapacity, assertSourceFileCapacity } from "./core/import-limits.js";
 import { CHANGE_CATEGORIES, CHANGE_CATEGORY_LABELS, isCriticalHistoryChange, normalizeChangeType, pageComparisonChanges, pageComparisonModificationEvents, pageComparisonModificationGroups, summarizeChangeCategories } from "./core/change-categories.js";
 import { compactComparisonDevice, trimComparisonBaseline, trimComparisonDeviceInPlace, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION, finalAnalyticsIndexSignature } from "./core/compact-final-analytics.js";
-import { enrich } from "./core/enrichment.js";
+import { enrich, mapRow } from "./core/enrichment.js";
+import { filePreviewLookupDevice, fillFromPreviewCatalog } from "./core/file-preview.js";
 import { stageFinalHistoryPlan } from "./core/history-plan.js";
 import { DEFAULT_ENRICHMENT_FIELD_SETTINGS, normalizeEnrichmentFieldSettings } from "./core/enrichment-settings.js";
 import { DEFAULT_COMPARISON_SETTINGS, normalizeComparisonSettings } from "./core/comparison-settings.js";
 import { DEFAULT_HISTORY_ENRICHMENT_SETTINGS, normalizeHistoryEnrichmentSettings, normalizeLegacyWorkspaceFiles } from "./core/history-enrichment-settings.js";
 import { legacyWorkspaceSourceRole, restoreLegacyWorkspaceMapping } from "./core/legacy-workspace-recovery.js";
-import { createHistoricalAddressAccumulator, createHistoricalAddressDeviceSummaryAccumulator, createAppliedSmartroomMappingSummaryAccumulator, createImportedSmartroomRoomIndexAccumulator, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, mappingIndexPage } from "./core/historical-mapping.js";
+import { applyHistoricalAddress, createHistoricalAddressAccumulator, createHistoricalAddressDeviceSummaryAccumulator, createAppliedSmartroomMappingSummaryAccumulator, createImportedSmartroomRoomIndexAccumulator, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, mappingIndexPage } from "./core/historical-mapping.js";
 import { createIpMappingDetector, DEFAULT_IP_ENRICHMENT_SETTINGS, detectIpMappingColumns, ipMappingsCsv, ipMappingsJson, ipMappingsXlsxSheets, normalizeIpEnrichmentSettings, normalizeIpMappings } from "./core/ip-mapping.js";
 import { clusterPyqtFeatureRows, compactPyqtClusterLabels, writePyqtDeviceFeatures } from "./core/pyqt-clustering.js";
 import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/normalize.js";
@@ -2391,9 +2392,7 @@ async function runDeviceContextAction(action, deviceId) {
     return;
   } else if (action === "history") {
     if (!normalizeMac(device?.mac)) throw new Error("У выбранного устройства нет MAC-адреса");
-    activateView("history");
-    $("#macHistorySearch").value = device.mac;
-    await openMacHistory();
+    await openMacHistory({ dialogMac: device.mac });
     return;
   } else if (action === "analytics") {
     await openDeviceAnalytics(device);
@@ -2961,7 +2960,7 @@ async function deleteSingleAnalysisHistory(id) {
   await renderSingleAnalysisHistory();
 }
 
-async function enrichStandaloneDevices(devices, signal, { progressStart = 55, progressEnd = 90 } = {}) {
+async function enrichStandaloneDevices(devices, signal, { progressStart = 55, progressEnd = 90, readOnly = false } = {}) {
   const activeSnapshotId = await database.getSetting("activeSnapshotId", "");
   const vendorDetectorSettings = normalizeVendorDetectorSettings(await database.getSetting("vendorDetectorSettings", DEFAULT_VENDOR_DETECTOR_SETTINGS));
   const historyEnrichmentSettings = normalizeHistoryEnrichmentSettings(await database.getSetting(
@@ -2974,7 +2973,7 @@ async function enrichStandaloneDevices(devices, signal, { progressStart = 55, pr
   const bundledOuiIndex = await loadBundledIeeeIndex();
   const result = await enrich({
     mainDevices: devices,
-    ...(activeSnapshotId ? { loadPreviousIdentityIndex: (currentDevices) => database.buildPreviousFinalIdentityIndex(activeSnapshotId, currentDevices) } : {}),
+    ...(activeSnapshotId ? { loadPreviousIdentityIndex: (currentDevices) => database.buildPreviousFinalIdentityIndex(activeSnapshotId, currentDevices, "", { readOnly }) } : {}),
     loadOuiIndex: async (macs) => vendorDetectorSettings.enabled && vendorDetectorSettings.useOui3
       ? createOuiIndexOverlay(bundledOuiIndex, await database.ouiRulesForMacs(macs))
       : new Map(),
@@ -2993,15 +2992,96 @@ async function enrichStandaloneDevices(devices, signal, { progressStart = 55, pr
     loadHistoricalRoomIndex: (ids, options) => loadHistoricalRoomIndexFromDatabase(database, ids, options),
     loadImportedSmartroomRoomIndex: (ids, options) => loadImportedRoomIndexFromDatabase(database, ids, options),
     ipAddressMappings,
-    ipEnrichmentSettings,
+    ipEnrichmentSettings: readOnly ? { ...ipEnrichmentSettings, overwrite: false } : ipEnrichmentSettings,
     vendorDetectorSettings,
-    historyEnrichmentSettings,
+    historyEnrichmentSettings: readOnly ? { ...historyEnrichmentSettings, priorityHistory: false } : historyEnrichmentSettings,
     enrichmentFieldSettings,
     comparisonSettings,
     signal,
-    onProgress: (value, stage) => progress(progressStart + value * (progressEnd - progressStart) / 100, stage, "Обогащение одного файла"),
+    onProgress: readOnly ? undefined : (value, stage) => progress(progressStart + value * (progressEnd - progressStart) / 100, stage, "Обогащение одного файла"),
   });
   return result;
+}
+
+let filePreview = null;
+
+function resetFilePreview() {
+  const old = filePreview;
+  filePreview = null;
+  old?.controller.abort();
+  old?.iterator?.return().catch(() => {});
+  for (const id of ["filePreviewStatus", "filePreviewResults", "filePreviewMapping"]) $(`#${id}`).replaceChildren();
+  for (const id of ["filePreviewSheetLabel", "filePreviewMappingDetails"]) $(`#${id}`).hidden = true;
+  for (const id of ["filePreviewRun", "filePreviewNext"]) $(`#${id}`).disabled = true;
+}
+
+async function prepareFilePreview(file, requestedSheet = "") {
+  resetFilePreview();
+  if (!file) return;
+  const request = { file, controller: new AbortController(), iterator: null, offset: 0 };
+  filePreview = request;
+  $("#filePreviewStatus").textContent = "Распознаю колонки…";
+  const preview = await readTablePreview(file, { maxRows: 50, sheetName: requestedSheet, signal: request.controller.signal });
+  if (filePreview !== request) return;
+  request.sheetName = preview.sheet || requestedSheet;
+  const sheets = preview.sheets || [];
+  const mapping = detectSingleFileMapping(preview.headers, preview.rows);
+  $("#filePreviewSheetLabel").hidden = sheets.length < 2;
+  $("#filePreviewSheet").innerHTML = sheets.map((sheet) => `<option ${sheet === request.sheetName ? "selected" : ""}>${escapeHtml(sheet)}</option>`).join("");
+  $("#filePreviewMappingDetails").hidden = false;
+  $("#filePreviewMapping").innerHTML = SINGLE_FILE_FIELDS.map((field) => `<label>${escapeHtml(FIELD_LABELS[field] || field)}<select data-preview-field="${field}"><option value="">Не использовать</option>${preview.headers.map((header, index) => `<option value="${index}" ${mapping[field] === index ? "selected" : ""}>${escapeHtml(header || `Колонка ${index + 1}`)}</option>`).join("")}</select></label>`).join("");
+  $("#filePreviewMappingDetails").open = hasSingleFileMappingConflicts(detectMappingReport(preview.headers, preview.rows, "single"));
+  $("#filePreviewRun").disabled = false;
+  $("#filePreviewStatus").textContent = `${file.name} · проверьте сопоставление и запустите проверку.`;
+}
+
+async function loadFilePreviewPage(restart = false) {
+  const request = filePreview;
+  if (!request || request.loading) return;
+  if (restart) {
+    const mapping = Object.fromEntries([...$("#filePreviewMapping").querySelectorAll("[data-preview-field]")]
+      .filter((select) => select.value !== "").map((select) => [select.dataset.previewField, Number(select.value)]));
+    if (!["id", "deviceId", "serial", "mac", "mac2"].some((field) => Number.isInteger(mapping[field]))) {
+      throw new Error("Выберите колонку MAC, внутреннего ID, Device ID или серийного номера.");
+    }
+    if (new Set(Object.values(mapping)).size !== Object.keys(mapping).length) throw new Error("Одна колонка не может быть назначена нескольким полям.");
+    await request.iterator?.return();
+    if (filePreview !== request) return;
+    request.iterator = readTableRowBatches(request.file, { sheetName: request.sheetName, batchSize: 100, signal: request.controller.signal });
+    request.mapping = mapping;
+    request.offset = 0;
+  }
+  request.loading = true;
+  $("#filePreviewRun").disabled = $("#filePreviewNext").disabled = true;
+  const status = $("#filePreviewStatus");
+  status.textContent = "Читаю строки и ищу локальные совпадения…";
+  try {
+    const { value: rows, done } = await request.iterator.next();
+    if (filePreview !== request) return;
+    if (done) {
+      status.textContent = `Файл прочитан. Проверено строк: ${request.offset.toLocaleString("ru-RU")}.`;
+      return;
+    }
+    const devices = rows.map((row) => mapRow(row, request.mapping, "Проверяемый файл"));
+    const lookups = devices.map(filePreviewLookupDevice);
+    const catalog = await database.inventoryCandidatesForDevices(lookups.filter(Boolean), { includeExactAliases: true });
+    const matches = devices.map((device, index) => fillFromPreviewCatalog(device, catalog.get(lookups[index]?.id)?.records));
+    const eligible = matches.filter((item, index) => lookups[index] && item.match !== "review").map((item) => item.device);
+    if (eligible.length) await enrichStandaloneDevices(eligible, request.controller.signal, { readOnly: true });
+    if (filePreview !== request) return;
+    const columns = [
+      ["mac", "MAC"], ["deviceId", "Device ID"], ["serial", "Серийный номер"], ["hostname", "Hostname"],
+      ["manufacturer", "Производитель"], ["model", "Модель"], ["ip", "IP устройства"],
+      ["switchIp", "IP коммутатора"], ["switchPort", "Порт"], ["room", "Помещение"],
+    ];
+    $("#filePreviewResults").innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>Строка</th>${columns.map(([, label]) => `<th>${label}</th>`).join("")}<th>Полный адрес</th><th>Совпадение в каталоге</th></tr></thead><tbody>${matches.map(({ device, match }, index) => `<tr><td>${request.offset + index + 2}</td>${columns.map(([field]) => `<td title="${escapeHtml(device.fieldSources?.[field] || "")}">${escapeHtml(device[field] || "—")}</td>`).join("")}<td>${escapeHtml(fullRoomAddress(device))}</td><td>${match === "found" ? "Найдено" : match === "review" ? "Неоднозначно" : "Не найдено"}</td></tr>`).join("")}</tbody></table></div>`;
+    status.textContent = `Строки ${request.offset + 2}–${request.offset + rows.length + 1}. Данные в базу не записаны.`;
+    request.offset += rows.length;
+    $("#filePreviewNext").disabled = false;
+  } finally {
+    request.loading = false;
+    if (filePreview === request) $("#filePreviewRun").disabled = false;
+  }
 }
 
 async function runSingleFileAnalysis() {
@@ -4828,10 +4908,9 @@ function renderDashboardFilterOptions(devices = [], suppliedOptions = null) {
 function renderSnapshotSelectors() {
   const items = state.snapshotMetadata.map((snapshot) => ({ value: snapshot.id, label: `${snapshot.name} · ${snapshot.deviceCount}` }));
   const defaults = defaultSnapshotSelection(state.snapshotMetadata, { snapshotsAscending: true });
-  renderSelect($("#baseSnapshotSelect"), items, $("#baseSnapshotSelect").value || defaults.baseId, "Нет базового Final");
-  renderSelect($("#currentSnapshotSelect"), items, $("#currentSnapshotSelect").value || defaults.currentId, "Нет текущего Final");
-  renderSelect($("#changeReportBaseSnapshotSelect"), items, $("#changeReportBaseSnapshotSelect").value || defaults.baseId, "Нет базового Final");
-  renderSelect($("#changeReportCurrentSnapshotSelect"), items, $("#changeReportCurrentSnapshotSelect").value || defaults.currentId, "Нет текущего Final");
+  const manual = state.pinnedDashboardPair;
+  renderSelect($("#baseSnapshotSelect"), items, items.some(({ value }) => value === manual?.base) ? manual.base : defaults.baseId, "Нет базового Final");
+  renderSelect($("#currentSnapshotSelect"), items, items.some(({ value }) => value === manual?.current) ? manual.current : defaults.currentId, "Нет текущего Final");
   $("#dashboardComparisonMode").value = state.analyticsDashboardSettings.comparisonMode || "snapshots";
   $("#dashboardComparisonDateFrom").value = state.analyticsDashboardSettings.comparisonDateFrom || "";
   $("#dashboardComparisonDateTo").value = state.analyticsDashboardSettings.comparisonDateTo || "";
@@ -4873,17 +4952,6 @@ async function loadTopologyAggregateNodes(queryId, switchRows, pageSize = 50) {
 async function calculateAnalyticsDetails(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null) {
   const loading = $("#analyticsLoadingStatus");
   const stage = (message) => { if (loading && state.analyticsRequests.isCurrent(revision)) loading.textContent = message; };
-  stage("Расчёт статистики по времени…");
-  // A database refresh can invalidate a temporal render while it is scanning
-  // snapshots (for example, immediately after a large Final is committed).
-  // That render intentionally exits without caching partial results. Retry
-  // against the refreshed metadata before treating temporal analytics as done.
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    await renderTemporalStatistics(false);
-    if (state.temporalStatistics || !state.snapshotMetadata.length || !state.analyticsRequests.isCurrent(revision)) break;
-    stage(`Временная статистика обновилась во время расчёта; повтор ${attempt + 1} из 3…`);
-  }
-  stage("Временная статистика завершена; сверка актуальности Dashboard…");
   if (!state.analyticsRequests.isCurrent(revision)) return null;
   stage("Подготовка истории выбранных Final…");
   const historyFilters = {
@@ -4928,31 +4996,16 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
   const matchesDashboard = createDashboardDeviceMatcher(analytics.dashboardFilters || {});
   const datasetSnapshotId = dashboardStatus === "missing" ? analytics.previous?.id || "" : analytics.current?.id || "";
   const datasetCacheSnapshotId = `${datasetSnapshotId}:dashboard:${dashboardStatus}`;
-  const datasetCacheKey = `selected-final-dataset-v8:${JSON.stringify(analytics.comparisonPairSignature || analytics.dashboardFilters || {})}`;
-  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 8);
+  const datasetCacheKey = `selected-final-dataset-v9:${JSON.stringify([analytics.comparisonPairSignature || analytics.dashboardFilters || {}, state.ipEnrichmentSettings.historicalAddress])}`;
+  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 9);
   if (!state.analyticsRequests.isCurrent(revision)) return null;
   let dataset = cachedDataset?.snapshotId === datasetCacheSnapshotId ? cachedDataset.dataset : null;
   if (!dataset) {
     const clusterFields = ["vendor", "room", "switchIp"];
     const clusterQueryId = datasetSnapshotId ? `analytics-final-v2:${datasetCacheSnapshotId}:${JSON.stringify(analytics.dashboardFilters || {})}` : "";
     if (clusterQueryId) await database.clearAnalyticsAggregateQuery(clusterQueryId);
-    const datasetCollector = createDatasetAnalyticsCollector({ includeTopologyDevices: false, includeTopologySummary: !clusterQueryId, includeClusters: !clusterQueryId, includeRankings: !clusterQueryId, clusterFields });
-    const seenAnalyticsDeviceKeys = new Set();
+    const datasetCollector = createDatasetAnalyticsCollector({ includeTopologyDevices: false, includeTopologySummary: !clusterQueryId, includeClusters: !clusterQueryId, includeRankings: !clusterQueryId, countFinalRows: true, clusterFields });
     let rowsProcessed = 0;
-    const uniqueAnalyticsRows = (rows) => {
-      const unique = [];
-      for (const device of rows) {
-        const mac = normalizeMac(device?.mac || device?.macFormatted || device?.mac_formatted);
-        const fallbackId = text(device?.id || device?.deviceId || device?.serial);
-        const key = mac ? `mac:${mac}` : fallbackId ? `id:${fallbackId.toLocaleLowerCase("ru-RU")}` : "";
-        if (key) {
-          if (seenAnalyticsDeviceKeys.has(key)) continue;
-          seenAnalyticsDeviceKeys.add(key);
-        }
-        unique.push(device);
-      }
-      return unique;
-    };
     const acceptStatusChunk = (chunk = [], startOffset = 0) => {
       if (dashboardStatus === "missing") return chunk.filter((_device, index) => missingPositionMask?.[startOffset + index] === 1);
       if (dashboardStatus !== "changed" && dashboardStatus !== "unchanged") return chunk;
@@ -4970,8 +5023,9 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       }),
       isCurrent: () => state.analyticsRequests.isCurrent(revision),
       accept: async (chunk, startOffset = 0) => {
-        const selectedChunk = uniqueAnalyticsRows(acceptStatusChunk(chunk, startOffset).filter(matchesDashboard));
+        const selectedChunk = acceptStatusChunk(chunk, startOffset).filter(matchesDashboard);
         if (!selectedChunk.length) return;
+        await projectConfirmedAddresses(selectedChunk);
         datasetCollector.accept(selectedChunk);
         const pendingRowsProcessed = rowsProcessed + selectedChunk.length;
         if (clusterQueryId) {
@@ -5034,7 +5088,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       };
       stage("Сохранение рассчитанной сводки Dashboard…");
     }
-    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 8, {
+    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 9, {
       onProgress: ({ phase }) => {
         const labels = {
           started: "Сохранение сводки: открыта транзакция…",
@@ -5080,6 +5134,10 @@ function scheduleAnalyticsDetails(analytics, revision, metadata, historySignatur
       paintAnalyticsDetails(pair);
       $("#analyticsLoadingStatus").hidden = true;
       finishProgress("Аналитика рассчитана");
+      renderTemporalStatistics(false).catch((error) => {
+        if (state.analytics !== pair) return;
+        $("#temporalTable").textContent = error?.message || "Не удалось рассчитать статистику по времени.";
+      });
     },
     schedule: scheduleIdleAnalytics,
     onError: (error) => {
@@ -5374,6 +5432,7 @@ async function renderAnalytics(force = false) {
       : dashboardFilters.status === "unchanged" ? analytics.comparison.unchangedCount
         : analytics.kpis.devices;
   analytics.dashboardFilters = dashboardFilters;
+  analytics.unassignedPositionMask = missingPositionMask || currentStatusMask;
   analytics.comparisonPairSignature = JSON.stringify([historySignature, previousMetadata?.id || "", currentMetadata?.id || "", dashboardFilters]);
   analytics.totals = buildSnapshotTotalSeries(metadata, { snapshotsAscending: true });
   state.analyticsClusterPage = 0;
@@ -5600,7 +5659,7 @@ function paintTemporalStatistics(result) {
   const { summary, periods } = result;
   const summaries = [
     ["Периодов", summary.periods], ["Снимков", summary.snapshots], ["Уникальных MAC", summary.uniqueMacs],
-    ["Сумма устройств по снимкам", summary.deviceTotal], ["Последний снимок", summary.latestDeviceCount], ["Максимум", summary.maxDevices],
+    ["Последний снимок", summary.latestDeviceCount], ["Максимум", summary.maxDevices],
   ];
   $("#temporalSummary").innerHTML = summaries.map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number(value).toLocaleString("ru-RU")}</strong></article>`).join("");
   const chart = $("#temporalChart");
@@ -5608,7 +5667,7 @@ function paintTemporalStatistics(result) {
   drawBars(chart, periods.map((row) => ({ label: row.period, value: row.uniqueMacs })));
   $("#temporalTable").classList.remove("empty");
   const columns = [
-    ["period", "Период"], ["snapshotCount", "Снимков"], ["deviceTotal", "Сумма устройств"], ["maxDevices", "Максимум"],
+    ["period", "Период"], ["snapshotCount", "Снимков"], ["latestDeviceCount", "Последний снимок"], ["maxDevices", "Максимум"],
     ["uniqueMacs", "Уникальных MAC"], ["added", "Новые MAC"], ["removed", "Исчезли MAC"], ["vendors", "Производителей"], ["rooms", "Помещений"],
   ];
   $("#temporalTable").innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr>${columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}<th>Источники</th><th>История запусков</th></tr></thead><tbody>${periods.map((row) => `<tr>${columns.map(([field]) => `<td>${escapeHtml(row[field])}</td>`).join("")}<td>${escapeHtml(row.sources.join("; ") || "—")}</td><td>${row.snapshots.map((snapshot) => `<div>${escapeHtml(snapshot.createdAt ? new Date(snapshot.createdAt).toLocaleString("ru-RU") : "Без даты")} · ${escapeHtml(snapshot.name || snapshot.id)} · ${snapshot.deviceCount} устройств · ${(snapshot.processingTimeMs / 1000).toFixed(2)} с</div>`).join("")}</td></tr>`).join("")}</tbody></table></div>`;
@@ -6083,22 +6142,25 @@ async function loadRoomCoveragePage(analytics, roomKey, page) {
 }
 
 async function showUnassignedAnalyticsPage(analytics, page = 1, open = false) {
-  const snapshotId = analytics.current?.id;
+  const status = analytics.dashboardFilters?.status;
+  const snapshotId = (status === "missing" ? analytics.previous : analytics.current)?.id;
   if (!snapshotId) throw new Error("Не выбран текущий Final для списка устройств без помещения");
   const requestId = ++state.analyticsUnassignedDeviceRequest;
   const dialog = $("#detailsDialog");
   if (open) showDialog(dialog, "Устройства без помещения", '<p class="muted" role="status">Загрузка страницы устройств…</p>');
-  const result = await database.loadSnapshotUnassignedRoomPage(snapshotId, { page, limit: 50, filters: analytics.dashboardFilters });
-  if (requestId !== state.analyticsUnassignedDeviceRequest || state.analytics !== analytics || state.analytics.current?.id !== snapshotId) return;
-  if (result.total !== Number(analytics.kpis.withoutRoom || 0)) {
-    throw new Error("Число устройств без помещения не совпало с полным выбранным Final");
-  }
+  const result = await database.loadSnapshotUnassignedRoomPage(snapshotId, {
+    page, limit: 50, filters: analytics.dashboardFilters, positionMask: analytics.unassignedPositionMask,
+    positionValue: CURRENT_STATUS_MASK[status] || 1,
+  });
+  if (requestId !== state.analyticsUnassignedDeviceRequest || state.analytics !== analytics) return;
+  await projectConfirmedAddresses(result.devices);
+  if (requestId !== state.analyticsUnassignedDeviceRequest || state.analytics !== analytics) return;
   dialog.querySelector("[data-dialog-title]").textContent = "Устройства без помещения";
   dialog.querySelector("[data-dialog-content]").innerHTML = unassignedDevicesContent({
     devices: result.devices,
     count: result.total,
-    vendors: analytics.unassignedVendors,
-    models: analytics.unassignedModels,
+    vendors: status === "all" ? analytics.unassignedVendors : [],
+    models: status === "all" ? analytics.unassignedModels : [],
     page: result.page,
     pageCount: result.pageCount,
   });
@@ -6384,6 +6446,8 @@ async function showAnalyticsModificationPage(analytics, offset = 0, codecOnly = 
   if (!codecOnly) {
     const page = await loadDashboardChangeGroupPage(analytics, "modified", offset, 100);
     if (!page || state.analytics !== analytics) return;
+    await projectConfirmedAddresses(page.groups.map(({ device }) => device));
+    if (state.analytics !== analytics) return;
     const diagnostics = await loadIdentityDiagnosticsMarkup(analytics);
     if (state.analytics !== analytics) return;
     const cards = dashboardChangeDeviceGroupsContent(page.groups);
@@ -6401,7 +6465,7 @@ async function showAnalyticsModificationPage(analytics, offset = 0, codecOnly = 
 
 function paintAnalyticsSummary(analytics) {
   paintHistoryBackfill(analytics);
-  $("#analyticsHistoryKpis").innerHTML = "";
+  paintSelectedMainMacs(analytics);
   $("#datasetOverview").textContent = "Подробная сводка выбранного статуса рассчитывается…";
   for (const selector of ["#vendorRanking", "#modelRanking", "#churnRanking", "#roomOccupancyRanking", "#clusterSummary", "#changeTable"]) {
     const host = $(selector);
@@ -6454,16 +6518,19 @@ function drawDashboardStatusCharts(analytics) {
   }
 }
 
+function paintSelectedMainMacs(analytics) {
+  const mainCount = analytics.current?.mainUniqueMacs;
+  const legacyCount = analytics.detailsReady ? analytics.totals?.find((item) => item.id === analytics.current?.id)?.value : undefined;
+  $("#analyticsHistoryKpis").innerHTML = [
+    ["Final в истории", state.snapshotMetadata.length],
+    ["Уникальных MAC в Main выбранного Final", mainCount],
+    ...(!Number.isInteger(mainCount) && Number.isInteger(legacyCount) ? [["Уникальных MAC в старом Final · число из Main не сохранено", legacyCount]] : []),
+  ].map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number.isInteger(value) ? value.toLocaleString("ru-RU") : "—"}</strong></article>`).join("");
+}
+
 function paintAnalyticsDetails(analytics) {
   paintHistoryBackfill(analytics);
-  const history = analytics.history || { snapshots: 0, deviceTotal: 0, uniqueMacs: 0 };
-  const selectedMacCount = Number(analytics.totals?.find((item) => item.id === analytics.current?.id)?.value
-    ?? history.selectedSnapshotUniqueMacs ?? 0);
-  $("#analyticsHistoryKpis").innerHTML = [
-    ["Final в истории", history.snapshots],
-    ["Наблюдений MAC во всех Final", history.deviceTotal],
-    ["Уникальных MAC в выбранном Final", selectedMacCount],
-  ].map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number(value).toLocaleString("ru-RU")}</strong></article>`).join("");
+  paintSelectedMainMacs(analytics);
   renderKpis($("#analyticsKpis"), analytics.kpis, {
     devices: () => {
       selectDashboardKpiStatus("devices", analytics);
@@ -6480,9 +6547,7 @@ function paintAnalyticsDetails(analytics) {
     switchAnomalyRooms: () => openRoomAnomalyDialog(analytics),
     codecChanges: () => showAnalyticsModificationPage(analytics, 0, true).catch(showError),
   }, activeDashboardWidgetKeys(), {
-    devices: Number(analytics.dashboardFilters?.status === "all"
-      ? selectedMacCount
-      : analytics.dashboardFilteredDeviceCount ?? analytics.kpis.devices ?? selectedMacCount).toLocaleString("ru-RU"),
+    devices: Number(analytics.dashboardFilteredDeviceCount ?? analytics.kpis.devices).toLocaleString("ru-RU"),
     manufacturers: Number(analytics.dataset?.summary?.uniqueVendors ?? analytics.kpis.manufacturers).toLocaleString("ru-RU"),
     rooms: Number(analytics.dataset?.roomOccupancy?.uniqueRooms ?? analytics.dataset?.summary?.uniqueRooms ?? analytics.kpis.rooms).toLocaleString("ru-RU"),
     withoutRoom: Number(analytics.dataset?.roomOccupancy?.unassignedDevices ?? analytics.kpis.withoutRoom).toLocaleString("ru-RU"),
@@ -7080,12 +7145,41 @@ async function exportSearchXlsx() {
   globalThis.setTimeout(() => { if (button.isConnected) button.textContent = "Excel / XLSX"; }, 4_000);
 }
 
-async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
-  const mac = normalizeMac($("#macHistorySearch").value);
+async function projectConfirmedAddresses(devices) {
+  if (!state.ipEnrichmentSettings.historicalAddress) return;
+  const ips = new Set(devices.filter((device) => device && !text(device.address) && !text(device.physicalAddress)).map((device) => normalizeIp(device.switchIp)).filter(Boolean));
+  if (!ips.size) return;
+  const accumulator = createHistoricalAddressAccumulator();
+  await database.forEachSwitchAddressEvidenceForIps([...ips], (record) => accumulator.add(record));
+  const index = accumulator.finish();
+  for (const device of devices) if (device) applyHistoricalAddress(device, index);
+}
+
+async function projectTimelineAddresses(events) {
+  const copies = new Map();
+  for (const event of events) for (const device of [event.before, event.after]) {
+    if (device) copies.set(device, { switchIp: device.switchIp, address: device.address, physicalAddress: device.physicalAddress });
+  }
+  await projectConfirmedAddresses([...copies.values()]);
+  return events.map((event) => {
+    const withSuggestion = (device) => {
+      const suggestion = copies.get(device);
+      return suggestion?.addressConfidence === undefined ? device : { ...device, inferredAddress: suggestion.address };
+    };
+    return { ...event, before: withSuggestion(event.before), after: withSuggestion(event.after) };
+  });
+}
+
+async function openMacHistory({ includeOptionalHostHistory = false, dialogMac = "" } = {}) {
+  const mac = normalizeMac(dialogMac || $("#macHistorySearch").value);
   if (!mac) throw new Error("Введите корректный MAC-адрес");
-  const previousQueryId = state.activeMacTimelineQueryId;
+  const queryProperty = dialogMac ? "dialogMacTimelineQueryId" : "activeMacTimelineQueryId";
+  const previousQueryId = state[queryProperty];
   const queryId = `mac-timeline:${globalThis.crypto.randomUUID()}`;
-  state.activeMacTimelineQueryId = queryId;
+  state[queryProperty] = queryId;
+  const dialog = dialogMac ? $("#macHistoryDialog") : null;
+  if (dialog) showDialog(dialog, `История MAC · ${mac}`, '<div data-mac-dialog-summary></div><div data-mac-dialog-timeline role="region" aria-label="Снимки MAC"><p role="status">Загрузка истории…</p></div>');
+  const isCurrent = () => state[queryProperty] === queryId && (!dialog || dialog.open);
   const orderedSnapshots = state.snapshotMetadata;
   const pendingRows = [];
   const pendingSnapshots = [];
@@ -7150,6 +7244,7 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
     if (previousQueryId) await database.clearMacTimelineQuery(previousQueryId);
     await database.clearExpiredMacTimelineQueries();
     for (const metadata of orderedSnapshots) {
+      if (!isCurrent()) { await database.clearMacTimelineQuery(queryId); return; }
       pendingSnapshots.push({ id: metadata.id, data: { name: metadata.name || metadata.id, createdAt: metadata.createdAt || "" } });
       let matchCount = 0;
       let firstMatch = null;
@@ -7261,34 +7356,41 @@ async function openMacHistory({ includeOptionalHostHistory = false } = {}) {
       status.textContent = `History optional host: ${hostHistoryCount.toLocaleString("ru-RU")} событий из ${total.toLocaleString("ru-RU")}; данные показаны вместе с историей браузера.`;
     }
     await database.finalizeMacTimelineQuery(queryId);
-    if (state.activeMacTimelineQueryId !== queryId) {
+    if (!isCurrent()) {
       await database.clearMacTimelineQuery(queryId);
       return;
     }
     const summary = await database.macTimelineSummary(queryId, stats);
-    renderMacHistory(queryId, summary);
+    if (isCurrent()) renderMacHistory(queryId, summary, { dialog, isCurrent });
     finishProgress("Хронология построена");
   } catch (error) {
-    if (state.activeMacTimelineQueryId === queryId) state.activeMacTimelineQueryId = "";
+    const reportError = isCurrent();
+    if (state[queryProperty] === queryId) state[queryProperty] = "";
     await database.clearMacTimelineQuery(queryId).catch(() => {});
-    throw error;
+    if (reportError) {
+      if (dialog) dialog.querySelector("[data-mac-dialog-timeline]").textContent = error.message || "Не удалось открыть историю";
+      throw error;
+    }
   }
 }
 
-function renderMacHistory(queryId, summary) {
-  const timeline = $("#macTimeline");
+function renderMacHistory(queryId, summary, { dialog, isCurrent }) {
+  const timeline = dialog?.querySelector("[data-mac-dialog-timeline]") || $("#macTimeline");
+  const summaryHost = dialog?.querySelector("[data-mac-dialog-summary]") || $("#macTimelineSummary");
   const appearancesPanel = $("#macAppearancesPanel");
   let timelinePage = 1;
   let appearancePage = 1;
   let timelineRequest = 0;
   let appearanceRequest = 0;
-  $("#macTimelineSummary").innerHTML = macTimelineSummaryStatsContent(summary);
-  $("#macTimelineSummary").hidden = summary.eventCount === 0;
+  summaryHost.innerHTML = macTimelineSummaryStatsContent(summary);
+  summaryHost.hidden = summary.eventCount === 0;
+  const pageSize = dialog ? 12 : 100;
   const renderTimelinePage = async () => {
     const requestId = ++timelineRequest;
-    const page = await database.macTimelinePage(queryId, { page: timelinePage, limit: 100 });
-    if (requestId !== timelineRequest || state.activeMacTimelineQueryId !== queryId) return;
-    timeline.innerHTML = macTimelineContent(page.rows, { page: timelinePage, pageSize: 100, alreadyOrdered: true, total: page.total, prePaged: true, previousEvent: page.previous });
+    const page = await database.macTimelinePage(queryId, { page: timelinePage, limit: pageSize });
+    const events = await projectTimelineAddresses(page.rows);
+    if (requestId !== timelineRequest || !isCurrent()) return;
+    timeline.innerHTML = macTimelineContent(events, { page: timelinePage, pageSize, alreadyOrdered: true, total: page.total, prePaged: true, previousEvent: page.previous });
   };
   renderTimelinePage().catch(showError);
   timeline.classList.toggle("empty", summary.eventCount === 0);
@@ -7298,7 +7400,7 @@ function renderMacHistory(queryId, summary) {
       candidateButton.disabled = true;
       const offset = Number(candidateButton.dataset.offset) || 0;
       database.macTimelineCandidatePage(queryId, candidateButton.dataset.macCandidateLoad, { offset, limit: 100 }).then((page) => {
-        if (state.activeMacTimelineQueryId !== queryId) return;
+        if (!isCurrent()) return;
         const block = candidateButton.closest(".mac-timeline-candidates");
         const list = block?.querySelector("ul");
         if (!block || !list) return;
@@ -7320,12 +7422,14 @@ function renderMacHistory(queryId, summary) {
     timelinePage = Number(button.dataset.macTimelinePage) || 1;
     renderTimelinePage().catch(showError);
   };
+  if (dialog) return;
   $("#macAppearancesPanel").hidden = summary.appearanceCount === 0;
   const renderAppearancePage = async () => {
     const requestId = ++appearanceRequest;
     const page = await database.macTimelinePage(queryId, { page: appearancePage, limit: 100, appearances: true });
-    if (requestId !== appearanceRequest || state.activeMacTimelineQueryId !== queryId) return;
-    $("#macAppearancesTable").innerHTML = macTimelineAppearancesContent(page.rows, { page: appearancePage, pageSize: 100, total: page.total, prePaged: true });
+    const events = await projectTimelineAddresses(page.rows);
+    if (requestId !== appearanceRequest || !isCurrent()) return;
+    $("#macAppearancesTable").innerHTML = macTimelineAppearancesContent(events, { page: appearancePage, pageSize: 100, total: page.total, prePaged: true });
   };
   renderAppearancePage().catch(showError);
   appearancesPanel.onclick = (event) => {
@@ -9977,6 +10081,37 @@ async function exportJsonFile(filename, valueOrFactory) {
 function bindEvents() {
   // Keep error recovery available even if a later UI binding fails during bootstrap.
   bindErrorBannerDismiss($("#errorBanner"));
+  const reportPreviewError = (error) => {
+    if (error?.name !== "AbortError") $("#filePreviewStatus").textContent = error?.message || "Не удалось проверить файл.";
+  };
+  $("#filePreviewInput").addEventListener("change", (event) => prepareFilePreview(event.target.files[0]).catch(reportPreviewError));
+  $("#filePreviewSheet").addEventListener("change", (event) => prepareFilePreview(filePreview?.file, event.target.value).catch(reportPreviewError));
+  $("#filePreviewRun").addEventListener("click", () => loadFilePreviewPage(true).catch(reportPreviewError));
+  $("#filePreviewNext").addEventListener("click", () => loadFilePreviewPage().catch(reportPreviewError));
+  $("#filePreviewReset").addEventListener("click", () => { resetFilePreview(); $("#filePreviewInput").value = ""; });
+  const macDialog = $("#macHistoryDialog");
+  macDialog.querySelector("[data-dialog-close]").addEventListener("click", () => macDialog.close());
+  macDialog.addEventListener("close", () => {
+    if (macDialog.open) return;
+    const queryId = state.dialogMacTimelineQueryId;
+    state.dialogMacTimelineQueryId = "";
+    if (queryId) database.clearMacTimelineQuery(queryId).catch(() => {});
+  });
+  document.addEventListener("dblclick", (event) => {
+    if (event.target.closest?.("button, a, input, select, textarea, summary")) return;
+    const row = event.target.closest?.("#analyticsView [data-device-context-row], #detailsDialog [data-device-context-row]");
+    const mac = row ? contextDeviceFromRow(row).mac : "";
+    if (normalizeMac(mac)) openMacHistory({ dialogMac: mac }).catch(showError);
+  });
+  document.addEventListener("click", (event) => {
+    const historyButton = event.target.closest?.("[data-open-mac-dialog]");
+    if (historyButton) openMacHistory({ dialogMac: historyButton.dataset.openMacDialog }).catch(showError);
+    const dataButton = event.target.closest?.("[data-data-section]");
+    if (dataButton) document.getElementById(dataButton.dataset.dataSection)?.scrollIntoView({ block: "start" });
+  });
+  $$(".analytics-chart-details").forEach((section) => section.addEventListener("toggle", () => {
+    if (section.open && state.analytics?.detailsReady && section.querySelector(".dashboard-status-charts")) drawDashboardStatusCharts(state.analytics);
+  }));
   bindInventoryColumnResizing();
   const optionalHostDatabaseExport = $("#optionalHostDatabaseExportLink");
   const optionalHostDatabaseExportPath = optionalHostDatabaseExportHref(globalThis.location);
@@ -10562,17 +10697,12 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     saveAnalyticsDashboardSettings({ ...state.analyticsDashboardSettings, filters: { query: "", manufacturer: "", room: "", status: "all" } })
       .then(() => renderAnalytics(true)).catch((error) => showAnalyticsFallback(error, state.analytics));
   });
-  $("#applyChangeSnapshotButton").addEventListener("click", () => {
-    $("#baseSnapshotSelect").value = $("#changeReportBaseSnapshotSelect").value;
-    $("#currentSnapshotSelect").value = $("#changeReportCurrentSnapshotSelect").value;
-    saveAnalyticsDashboardSettings({ ...state.analyticsDashboardSettings, comparisonMode: "snapshots" })
-      .then(() => renderAnalytics(true)).catch((error) => showAnalyticsFallback(error, state.analytics));
-  });
   $("#applyDashboardPeriodButton").addEventListener("click", () => {
     saveAnalyticsDashboardSettings({ ...state.analyticsDashboardSettings, comparisonMode: "period", comparisonDateFrom: $("#dashboardComparisonDateFrom").value, comparisonDateTo: $("#dashboardComparisonDateTo").value })
       .then(() => renderAnalytics(true)).catch((error) => showAnalyticsFallback(error, state.analytics));
   });
   $("#applyComparisonButton").addEventListener("click", () => {
+    state.pinnedDashboardPair = { base: $("#baseSnapshotSelect").value, current: $("#currentSnapshotSelect").value };
     saveAnalyticsDashboardSettings({ ...state.analyticsDashboardSettings, comparisonMode: "snapshots" })
       .then(() => renderAnalytics(true)).catch((error) => showAnalyticsFallback(error, state.analytics));
   });
@@ -10787,8 +10917,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     if (event.target.closest("input, button, a, summary")) return;
     const row = event.target.closest("[data-history-event-row]");
     if (!row) return;
-    $("#macHistorySearch").value = row.dataset.historyEventMac || "";
-    openMacHistory().catch(showError);
+    openMacHistory({ dialogMac: row.dataset.historyEventMac }).catch(showError);
   });
   $("#deleteHistoryEventsButton").addEventListener("click", () => deleteSelectedHistoryEvents().catch(showError));
   $("#deleteFilteredHistoryEventsButton").addEventListener("click", () => deleteFilteredHistoryEvents().catch(showError));
@@ -11149,11 +11278,9 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     if (searchResultAction) {
       const device = state.inventory.find((item) => String(item.id) === String(searchResultAction.dataset.deviceId));
       if (!device) return showError(new Error("Устройство больше не найдено в текущем результате поиска"));
-      $("#detailsDialog").close();
       if (searchResultAction.dataset.searchResultAction === "history") {
-        activateView("history");
-        $("#macHistorySearch").value = device.mac;
-        openMacHistory().catch(showError);
+        $("#detailsDialog").close();
+        openMacHistory({ dialogMac: device.mac }).catch(showError);
       } else {
         openDeviceAnalytics(device).catch(showError);
       }
@@ -11283,10 +11410,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     if (event.target.closest("[data-open-device-timeline]")) {
       const mac = state.deviceAnalytics?.device?.mac;
       if (!normalizeMac(mac)) return showError(new Error("У устройства нет MAC для построения хронологии"));
-      $("#detailsDialog").close();
-      activateView("history");
-      $("#macHistorySearch").value = mac;
-      openMacHistory().catch(showError);
+      openMacHistory({ dialogMac: mac }).catch(showError);
       return;
     }
     const roomButton = event.target.closest("[data-open-room-history]");

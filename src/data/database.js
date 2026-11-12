@@ -49,7 +49,7 @@ const MAX_INDEXED_SMARTROOM_EVIDENCE_LOCATIONS = 32;
 const SNAPSHOT_ROOM_INDEX_VERSION = 2;
 const SNAPSHOT_CATALOG_FIELDS = Object.freeze([
   "id", "snapshotType", "name", "createdAt", "processingTimeMs", "sourceKey",
-  "deviceCount", "chunkCount", "dataRevision",
+  "deviceCount", "mainUniqueMacs", "chunkCount", "dataRevision",
 ]);
 const COMPARISON_BACKFILL_INDEX_PREFIX = "__mac_analyzer_comparison_backfill__:";
 const FINAL_ANALYTICS_IDENTITY_POSITION_WIDTH = 12;
@@ -3728,7 +3728,7 @@ export class Database {
   }
 
   /** Resolve only matching Previous Final rows, preserving merge fields without loading the whole snapshot. */
-  async buildPreviousFinalIdentityIndex(snapshotId, currentDevices = [], expectedSignature = "") {
+  async buildPreviousFinalIdentityIndex(snapshotId, currentDevices = [], expectedSignature = "", { readOnly = false } = {}) {
     if (!snapshotId || !Array.isArray(currentDevices)) throw new TypeError("Для Previous Final нужны ID снимка и текущие устройства");
     const db = await this.open();
     const metadataTx = db.transaction("snapshots", "readonly");
@@ -3744,6 +3744,34 @@ export class Database {
     if (expectedSignature && signature !== expectedSignature) throw snapshotIntegrityError("Previous Final изменился во время обогащения");
     const schemaVersion = FINAL_ANALYTICS_INDEX_SCHEMA_VERSION;
     if (!await this.hasFinalAnalyticsIndex(snapshotId, signature, schemaVersion)) {
+      if (readOnly) {
+        const keys = new Map();
+        for (const device of currentDevices) for (const token of identityTokens(device)) {
+          if (!token.strong) continue;
+          keys.set(token.key, 0);
+          if (token.type === "mac") keys.set(`alternateMac:${token.value}`, 0);
+          if (token.type === "alternateMac") keys.set(`mac:${token.value}`, 0);
+        }
+        const result = createPositionedIdentityIndex(deviceCount);
+        result.overflowTokenKeys = new Set();
+        let position = 0;
+        await this.forEachSnapshotChunk(snapshotId, (rows) => {
+          for (const device of rows) {
+            let include = false;
+            for (const token of identityTokens(device)) {
+              if (!keys.has(token.key)) continue;
+              const count = keys.get(token.key);
+              keys.set(token.key, count + 1);
+              if (count < 3) include = true;
+              if (count >= 2) result.overflowTokenKeys.add(token.key);
+            }
+            if (include) result.addCandidate(position, compactPreviousFinalDevice(device));
+            position += 1;
+          }
+        });
+        result.snapshotSignature = signature;
+        return result;
+      }
       await this.saveFinalAnalyticsIndexFromSnapshot(
         snapshotId,
         signature,
@@ -4228,23 +4256,25 @@ export class Database {
     };
   }
 
-  async loadSnapshotUnassignedRoomPage(id, { page = 1, limit = 50, filters = {} } = {}) {
+  async loadSnapshotUnassignedRoomPage(id, { page = 1, limit = 50, filters = {}, positionMask = null, positionValue = 1 } = {}) {
     const pageSize = Math.max(1, Math.min(100, Math.floor(Number(limit) || 50)));
     const selectedPage = Math.max(1, Math.floor(Number(page) || 1));
     const offset = (selectedPage - 1) * pageSize;
     const matchesFilters = createDashboardDeviceMatcher(filters);
     const devices = [];
     let total = 0;
+    let position = 0;
     await this.forEachSnapshotChunk(id, (chunk) => {
       for (const device of chunk) {
-        if (locationKey(device) || !matchesFilters(device)) continue;
+        const currentPosition = position++;
+        if ((positionMask && positionMask[currentPosition] !== positionValue) || locationKey(device) || !matchesFilters(device)) continue;
         total += 1;
         if (total > offset && devices.length < pageSize) devices.push(device);
       }
     });
     const pageCount = Math.max(1, Math.ceil(total / pageSize));
     const boundedPage = Math.min(selectedPage, pageCount);
-    if (boundedPage !== selectedPage) return this.loadSnapshotUnassignedRoomPage(id, { page: boundedPage, limit: pageSize, filters });
+    if (boundedPage !== selectedPage) return this.loadSnapshotUnassignedRoomPage(id, { page: boundedPage, limit: pageSize, filters, positionMask, positionValue });
     return {
       devices,
       total,
@@ -4954,6 +4984,8 @@ export class Database {
       processingTimeMs: Math.max(0, Number(processingTimeMs || 0)),
       sourceKey,
       deviceCount: finalDeviceCount,
+      ...(Number.isSafeInteger(diagnostics?.counts?.mainUniqueMacs) && diagnostics.counts.mainUniqueMacs >= 0
+        ? { mainUniqueMacs: diagnostics.counts.mainUniqueMacs } : {}),
       chunkCount: Math.ceil(finalDeviceCount / CHUNK_SIZE),
       dataRevision: 0,
       diagnostics: serializable(diagnostics),
@@ -5134,9 +5166,9 @@ export class Database {
       const roomObservations = new Map();
       for (const device of cleanChunk) {
         const switchIp = String(device.switchIp || "").trim();
-        const address = String(device.address || "").trim();
-        const addressSource = String(device.fieldSources?.address || "").trim();
-        if (switchIp && address && addressSource !== "Historical switch IP mapping") {
+        const address = text(device.address) || text(device.physicalAddress);
+        const addressSource = text(device.fieldSources?.address || device.fieldSources?.physicalAddress);
+        if (isFinalSnapshot(metadata) && switchIp && address && !["Historical switch IP mapping", "Previous Final"].includes(addressSource)) {
           const key = `${switchIp}\u0000${address}`;
           if (!addressEvidence.has(key)) addressEvidence.set(key, { switchIp, address, deviceCount: 0, sampleMacs: [] });
           const evidence = addressEvidence.get(key);

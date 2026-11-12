@@ -62,6 +62,7 @@ function roomDescriptor(device) {
     floor: text(device.floor),
     room: text(device.room),
     address: text(device.address || device.physicalAddress),
+    ...(text(device.locationPath) ? { locationPath: text(device.locationPath) } : {}),
   };
 }
 

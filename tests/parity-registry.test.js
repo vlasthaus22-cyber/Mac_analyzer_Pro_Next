@@ -279,7 +279,7 @@ test("full Dashboard cache reload and metadata-only trend close the autonomous a
   assert.match(row.status, /^Полностью подтверждено:/);
   assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
   assert.match(browserSmoke, /--dashboard-cache-reload-only/);
-  assert.match(browserSmoke, /selected-final-dataset-v8:/);
+  assert.match(browserSmoke, /selected-final-dataset-v9:/);
   assert.match(browserSmoke, /complete cached dashboard\/report did not recover after reopening/);
   assert.match(analyticsTests, /snapshot totals build an exact chronological trend from metadata without opening device rows/);
   assert.match(databaseTests, /snapshot history analytics cache is signed, readable, and invalidated on new Final/);

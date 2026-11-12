@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+## v2.3.9 — 2026-11-12
+
+- Dashboard shows distinct MAC addresses from the selected Main file separately from Final analytics. Room counts use the same assignment rules as the drilldown.
+- Full location paths survive import and enrichment. Analytics and MAC history can display addresses inferred from repeated switch-IP evidence.
+- Device history opens in a dialog with before/after Final values. Database tools are grouped, and the external notifications button was removed.
+- Read-only file enrichment fills missing fields from the local catalog and rules without saving the file, the result, or history.
+
 ## v2.3.8 — 2026-11-11
 
 - The Dashboard drilldown lists one row per changed device with aligned columns, the full recorded location, and expandable before/after field values.

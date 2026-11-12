@@ -174,7 +174,7 @@ export function buildHistoricalAddressIndex(records = []) {
 export function applyHistoricalAddress(device, index) {
   const switchIp = normalizeIp(device.switchIp);
   const suggestion = switchIp ? index.get(switchIp) : null;
-  if (!suggestion || suggestion.status !== "confirmed" || text(device.address)) return null;
+  if (!suggestion || suggestion.status !== "confirmed" || text(device.address) || text(device.physicalAddress)) return null;
   device.address = suggestion.address;
   device.fieldSources ||= {};
   device.fieldSources.address = "Historical switch IP mapping";

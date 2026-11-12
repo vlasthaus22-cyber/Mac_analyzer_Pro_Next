@@ -34,7 +34,7 @@ const MAC_IDENTITY_FIELDS = Object.freeze([
 const MAC_TIMELINE_DEVICE_FIELDS = Object.freeze([
   "id", "mac", "alternateMacs", "ip", "switchIp", "switchPort", "manufacturer", "vendor", "model", "deviceType",
   "hostname", "serial", "deviceId", "deviceName", "smartroomId", "businessUnit", "city", "site", "floor", "room",
-  "address", "physicalAddress", "authenticationTime", "observedAt", "source", "sources", "fieldSources", "possibleIps",
+  "address", "physicalAddress", "locationPath", "authenticationTime", "observedAt", "source", "sources", "fieldSources", "possibleIps",
   "possibleIpsTruncated", "alternateMacsTruncated", "conflicts", "conflictsTruncated",
 ]);
 
