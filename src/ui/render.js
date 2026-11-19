@@ -61,9 +61,9 @@ export function finalHistoryComparisonDetails(summary = null) {
     return `<tr><td>${escapeHtml(type)}</td><td>${escapeHtml(sample.identity || "—")}</td><td>${escapeHtml(relatedText)}</td></tr>`;
   }).join("");
   const details = sampleRows
-    ? `<details><summary>Примеры unresolved identity: ${samples.length.toLocaleString("ru-RU")}${truncated ? ` · ещё ${truncated.toLocaleString("ru-RU")} не показано` : ""}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>Диагностика</th><th>Текущая запись</th><th>Кандидаты Previous Final</th></tr></thead><tbody>${sampleRows}</tbody></table></div></details>`
+    ? `<details><summary>Примеры unresolved identity: ${samples.length.toLocaleString("ru-RU")}${truncated ? ` · ещё ${truncated.toLocaleString("ru-RU")} не показано` : ""}</summary><div class="table-scroll"><table class="data-table"><thead><tr><th>Диагностика</th><th>Текущая запись</th><th>Кандидаты Previous снимок объединения</th></tr></thead><tbody>${sampleRows}</tbody></table></div></details>`
     : "";
-  return `<section class="notice"><p>Сверка с предыдущим Final: неоднозначных идентичностей ${ambiguousCount.toLocaleString("ru-RU")}, конфликтов сильных идентификаторов ${identityConflictCount.toLocaleString("ru-RU")}. Эти строки не создали ложные события добавления или отсутствия.</p>${details}</section>`;
+  return `<section class="notice"><p>Сверка с предыдущим снимком объединения: неоднозначных идентичностей ${ambiguousCount.toLocaleString("ru-RU")}, конфликтов сильных идентификаторов ${identityConflictCount.toLocaleString("ru-RU")}. Эти строки не создали ложные события добавления или отсутствия.</p>${details}</section>`;
 }
 
 export function excelColumnLabel(index) {
@@ -324,7 +324,7 @@ export function dashboardFleetDialogContent(fleet, { offset = 0, limit = 100 } =
   const pager = series.length > pageSize
     ? `<div class="action-row"><span class="muted">Показано ${start + 1}–${end} из ${series.length.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-dashboard-fleet-page="${Math.max(0, start - pageSize)}" ${start ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-dashboard-fleet-page="${start + pageSize}" ${end < series.length ? "" : "disabled"}>Дальше</button></div>`
     : `<p class="muted">Выгрузок: ${series.length.toLocaleString("ru-RU")}</p>`;
-  return `<div class="kpi-grid"><article class="kpi"><span>Уникальных MAC во всех Final</span><strong>${Number(fleet?.uniqueMacs || 0).toLocaleString("ru-RU")}</strong></article><article class="kpi"><span>Устройств в последнем Final</span><strong>${Number(fleet?.latestCount || 0).toLocaleString("ru-RU")}</strong></article></div><div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>Дата</th><th>Final</th><th>Устройств</th><th>Изменение к предыдущему</th></tr></thead><tbody>${body || '<tr><td colspan="4" class="empty">Сохранённых Final пока нет.</td></tr>'}</tbody></table></div>${series.length ? pager : ""}`;
+  return `<div class="kpi-grid"><article class="kpi"><span>Уникальных MAC во всех снимках объединения</span><strong>${Number(fleet?.uniqueMacs || 0).toLocaleString("ru-RU")}</strong></article><article class="kpi"><span>Устройств в последнем снимке объединения</span><strong>${Number(fleet?.latestCount || 0).toLocaleString("ru-RU")}</strong></article></div><div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>Дата</th><th>снимок объединения</th><th>Устройств</th><th>Изменение к предыдущему</th></tr></thead><tbody>${body || '<tr><td colspan="4" class="empty">Сохранённых снимок объединения пока нет.</td></tr>'}</tbody></table></div>${series.length ? pager : ""}`;
 }
 
 export function renderRanked(container, items, empty = "Нет данных") {
@@ -410,7 +410,7 @@ export function dashboardChangeDeviceGroupsContent(events = []) {
       const origin = change.source ? `<small class="muted">Источник: ${escapeHtml(change.source)}</small>` : "";
       return `<tr><th scope="row">${escapeHtml(field)} ${origin}</th><td>${escapeHtml(before)}</td><td>${escapeHtml(after)}</td><td><span class="severity-badge severity-${isSafeSeverity(change.severity) ? change.severity : severity}">${escapeHtml(severityLabels[change.severity] || severityLabels[severity] || severityLabels.other)}</span></td></tr>`;
     }).join("");
-    const fallback = type === "added" ? "Устройство добавлено" : type === "absent" ? "Устройство отсутствует в текущем Final" : `Источник: ${escapeHtml(source || "История Final")}`;
+    const fallback = type === "added" ? "Устройство добавлено" : type === "absent" ? "Устройство отсутствует в текущем снимке объединения" : `Источник: ${escapeHtml(source || "История снимков объединения")}`;
     const history = normalizeMac(device.mac) ? `<button class="button secondary" type="button" data-open-mac-dialog="${escapeHtml(device.mac)}">История MAC</button>` : "";
     return `<details class="change-device-group"><summary class="change-device-columns"><span class="change-device-identity"><strong>${escapeHtml(identity)}</strong>${model ? `<small class="muted">${escapeHtml(model)}</small>` : ""}</span><span>${escapeHtml(fullRoomAddress(device))}</span><span>${escapeHtml(labels[type] || labels.modified)}<small><span class="severity-badge severity-${isSafeSeverity(severity) ? severity : "other"}">${escapeHtml(severityLabels[severity] || severityLabels.other)}</span></small></span><span class="change-device-count">${changes.length.toLocaleString("ru-RU")}</span></summary>${detailRows ? `<div class="table-scroll"><table class="data-table change-device-fields"><thead><tr><th>Поле</th><th>Было</th><th>Стало</th><th>Важность</th></tr></thead><tbody>${detailRows}</tbody></table></div>` : `<p>${fallback}</p>`}${history}</details>`;
   }).join("");
@@ -453,8 +453,8 @@ export function churnContent(items = [], { query = "", page = 1, pageSize = 100 
 export function modelPrefixAnalyticsContent(result) {
   const metrics = result?.metrics || {};
   const prefixes = result?.prefixes || [];
-  return `<p class="muted">Правила определения модели по точному имени или совпадению по названию. Число вхождений подсчитано по всем сохранённым Final.</p><div class="action-row"><button class="button secondary" type="button" data-export-model-prefix-analytics-xlsx>Экспорт префиксов XLSX</button></div>
-    <div class="kpi-grid"><article class="kpi"><span>Префиксов</span><strong>${Number(metrics.prefixes || 0).toLocaleString("ru-RU")}</strong></article><article class="kpi"><span>Устройств в выбранном Final</span><strong>${Number(metrics.matchedDevices || 0).toLocaleString("ru-RU")}</strong></article><article class="kpi"><span>Производителей</span><strong>${Number(metrics.vendors || 0).toLocaleString("ru-RU")}</strong></article></div>
+  return `<p class="muted">Правила определения модели по точному имени или совпадению по названию. Число вхождений подсчитано по всем сохранённым снимкам объединения.</p><div class="action-row"><button class="button secondary" type="button" data-export-model-prefix-analytics-xlsx>Экспорт префиксов XLSX</button></div>
+    <div class="kpi-grid"><article class="kpi"><span>Префиксов</span><strong>${Number(metrics.prefixes || 0).toLocaleString("ru-RU")}</strong></article><article class="kpi"><span>Устройств в выбранном снимке объединения</span><strong>${Number(metrics.matchedDevices || 0).toLocaleString("ru-RU")}</strong></article><article class="kpi"><span>Производителей</span><strong>${Number(metrics.vendors || 0).toLocaleString("ru-RU")}</strong></article></div>
     <div class="table-scroll"><table class="data-table"><thead><tr><th>Префикс MAC</th><th>Форматированный</th><th>Модель</th><th>Источник</th><th>Количество вхождений</th></tr></thead><tbody>${prefixes.length
       ? prefixes.map((item) => `<tr><td>${escapeHtml(item.prefix)}</td><td>${escapeHtml(item.formattedPrefix)}</td><td>${escapeHtml(item.model)}</td><td>${escapeHtml(item.source)}</td><td>${Number(item.occurrences || 0).toLocaleString("ru-RU")}</td></tr>`).join("")
       : '<tr><td colspan="5" class="empty">Префиксы для этой модели не найдены.</td></tr>'}</tbody></table></div>`;
@@ -751,7 +751,7 @@ export const DEVICE_COLUMNS = Object.freeze([
   ["source", "Источник"],
 ]);
 
-export function deviceTable(devices, { anomaly = false, columnConfig = null, rowNumberOffset = 0 } = {}) {
+export function deviceTable(devices, { anomaly = false, columnConfig = null, rowNumberOffset = 0, wrapAddresses = false } = {}) {
   const columns = columnConfig
     ? visibleInventoryColumns(columnConfig).map(({ key, label, width }) => ({ key, label, width, value: (device, index) => inventoryCellText(device, key, Math.max(0, Number(rowNumberOffset) || 0) + index + 1) }))
     : DEVICE_COLUMNS.map(([key, label]) => ({ key, label, value: (device) => device[key] || "—" }));
@@ -759,9 +759,9 @@ export function deviceTable(devices, { anomaly = false, columnConfig = null, row
   const resizeHandle = (key, label, width, index) => columnConfig
     ? `<span class="column-resize-handle" role="separator" aria-orientation="vertical" aria-valuemin="70" aria-valuemax="600" aria-valuenow="${width}" tabindex="0" aria-label="Изменить ширину столбца ${escapeHtml(label)}" title="Изменить ширину столбца" data-inventory-column-resize="${escapeHtml(key)}" data-column-index="${index + Number(anomaly)}"></span>`
     : "";
-  return `<div class="table-scroll"><table class="data-table${columnConfig ? " inventory-data-table" : ""}" data-virtual-scroll="true">${columnGroup}<thead><tr>${anomaly ? "<th>Статус</th>" : ""}${columns.map(({ key, label, width }, index) => `<th data-device-column="${escapeHtml(key)}">${escapeHtml(label)}${resizeHandle(key, label, width, index)}</th>`).join("")}</tr></thead><tbody>${devices.map((device, index) => `<tr data-device-context-row data-device-id="${escapeHtml(device.id || "")}" tabindex="0" aria-label="Контекстные действия для ${escapeHtml(device.mac || device.deviceId || device.serial || "устройства")}" class="${device.anomaly ? "danger-row" : ""}">${anomaly ? `<td>${device.anomaly ? "Отклонение" : escapeHtml(device.anomalyStatus || "Основной")}</td>` : ""}${columns.map(({ key, value }) => {
+  return `<div class="table-scroll"><table class="data-table${columnConfig ? " inventory-data-table" : ""}${wrapAddresses ? " readable-address-table" : ""}"${wrapAddresses ? "" : ' data-virtual-scroll="true"'}>${columnGroup}<thead><tr>${anomaly ? "<th>Статус</th>" : ""}${columns.map(({ key, label, width }, index) => `<th data-device-column="${escapeHtml(key)}">${escapeHtml(label)}${resizeHandle(key, label, width, index)}</th>`).join("")}</tr></thead><tbody>${devices.map((device, index) => `<tr data-device-context-row data-device-id="${escapeHtml(device.id || "")}" tabindex="0" aria-label="Контекстные действия для ${escapeHtml(device.mac || device.deviceId || device.serial || "устройства")}" class="${device.anomaly ? "danger-row" : ""}">${anomaly ? `<td>${device.anomaly ? "Отклонение" : escapeHtml(device.anomalyStatus || "Основной")}</td>` : ""}${columns.map(({ key, value }) => {
     const cell = value(device, index);
-    return `<td data-device-field="${escapeHtml(key)}">${key === "mac" && anomaly && device.mac ? `<a href="#search" data-search-mac="${escapeHtml(device.mac)}">${escapeHtml(cell || "—")}</a>` : escapeHtml(cell || "—")}</td>`;
+    return `<td title="${escapeHtml(cell || "—")}" data-device-field="${escapeHtml(key)}">${key === "mac" && anomaly && device.mac ? `<a href="#search" data-search-mac="${escapeHtml(device.mac)}">${escapeHtml(cell || "—")}</a>` : escapeHtml(cell || "—")}</td>`;
   }).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 
@@ -774,7 +774,7 @@ export function unassignedDevicesContent({ devices = [], count = devices.length,
     : "";
   return `<p class="detail-count">Устройств без помещения: <strong>${Number(count).toLocaleString("ru-RU")}</strong></p>
     <div class="detail-grid">${ranking("Производители", vendors)}${ranking("Модели", models)}</div>
-    <h3>Список устройств</h3>${devices.length ? deviceTable(devices) : '<p class="empty">Устройств без помещения нет.</p>'}${pagination}`;
+    <h3>Список устройств</h3>${devices.length ? deviceTable(devices, { wrapAddresses: true }) : '<p class="empty">Устройств без помещения нет.</p>'}${pagination}`;
 }
 
 export function absentDevicesPageContent({ devices = [], total = 0, offset = 0, limit = 100 } = {}) {
@@ -810,10 +810,10 @@ export function roomCoverageContent(rooms, onlyAllChanged = false, pages = {}, l
     const page = pages[room.key];
     const roster = page?.devices;
     const rosterContent = Array.isArray(roster)
-      ? `<p class="muted">Состав Final · страница ${Number(page.page).toLocaleString("ru-RU")} из ${Number(page.pageCount).toLocaleString("ru-RU")} · ${Number(page.total).toLocaleString("ru-RU")} устройств</p>${roomPageControls(page.page, page.total, 100, `data-room-coverage-page="${escapeHtml(room.key)}"`)}${deviceTable(roster)}`
+      ? `<p class="muted">Состав снимка объединения · страница ${Number(page.page).toLocaleString("ru-RU")} из ${Number(page.pageCount).toLocaleString("ru-RU")} · ${Number(page.total).toLocaleString("ru-RU")} устройств</p>${roomPageControls(page.page, page.total, 100, `data-room-coverage-page="${escapeHtml(room.key)}"`)}${deviceTable(roster)}`
       : Number(room.rosterCount || 0) > 0
-        ? `<button class="button secondary" type="button" data-room-coverage-page="${escapeHtml(room.key)}" data-page="1" ${page?.loading ? "disabled" : ""}>${page?.loading ? "Загрузка состава…" : `Загрузить состав Final · ${Number(room.rosterCount).toLocaleString("ru-RU")} устройств`}</button>`
-        : '<p class="muted">В текущем Final устройств этого помещения нет.</p>';
+        ? `<button class="button secondary" type="button" data-room-coverage-page="${escapeHtml(room.key)}" data-page="1" ${page?.loading ? "disabled" : ""}>${page?.loading ? "Загрузка состава…" : `Загрузить состав снимка объединения · ${Number(room.rosterCount).toLocaleString("ru-RU")} устройств`}</button>`
+        : '<p class="muted">В текущем снимке объединения устройств этого помещения нет.</p>';
     return `<details class="room-card" ${page?.loading || Array.isArray(roster) ? "open" : ""}><summary><strong>${escapeHtml(fullRoomAddress(room))}</strong><span>${room.changedCount}/${room.deviceCount} изменено</span></summary>
       <button class="button secondary" type="button" data-open-room-history="${escapeHtml(JSON.stringify(details))}">Открыть хронологию помещения</button>
       ${rosterContent}</details>`;
@@ -837,7 +837,7 @@ export function roomTimelineIndexContent(room, entries, page, selectedId) {
     const { id, name, createdAt, devices, added, absent, modified } = entries[index];
     const date = new Date(createdAt);
     const label = Number.isFinite(date.getTime()) ? date.toLocaleString("ru-RU") : "Без даты";
-    rows.push(`<tr><th scope="row"><button class="link-button" type="button" data-room-timeline-open="${escapeHtml(id)}"${id === selectedId ? ' aria-current="true"' : ""}>${escapeHtml(label)}</button><small class="muted">${escapeHtml(name || "Final")}</small></th><td>${devices}</td><td>${added ?? "—"}</td><td>${absent ?? "—"}</td><td>${modified ?? "—"}</td></tr>`);
+    rows.push(`<tr><th scope="row"><button class="link-button" type="button" data-room-timeline-open="${escapeHtml(id)}"${id === selectedId ? ' aria-current="true"' : ""}>${escapeHtml(label)}</button><small class="muted">${escapeHtml(name || "снимок объединения")}</small></th><td>${devices}</td><td>${added ?? "—"}</td><td>${absent ?? "—"}</td><td>${modified ?? "—"}</td></tr>`);
   }
   return `<h3>${escapeHtml(fullRoomAddress(room))}</h3><p class="muted">Снимков: ${entries.length.toLocaleString("ru-RU")}. Выберите дату, чтобы открыть состав помещения и изменения.</p>
     <div class="table-scroll"><table class="data-table room-timeline-index"><thead><tr><th>Дата и выгрузка</th><th>Устройств</th><th>Добавлено</th><th>Отсутствует</th><th>Изменено</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>
@@ -871,9 +871,9 @@ export function roomTimelineObservationContent(snapshot, devices, comparison = n
       ${changeCount ? `<h4>Изменения и диагностика идентичности</h4>${comparisonContent({ ...comparison, absent: [], absentCount: 0 }, { offset: changesStart, limit: 20, viewId: `room-${snapshotId}`, showMore: false })}${roomPageControls(changesPage, changeCount, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="changes"`)}` : ""}
       ${addedCount ? `<details ${pages.added ? "open" : ""}><summary>Добавлены (${addedCount})</summary>${deviceTable(pageData ? comparison.added : comparison.added.slice((addedPage - 1) * 20, addedPage * 20))}${roomPageControls(addedPage, addedCount, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="added"`)}</details>` : ""}
       ${absentCount ? `<details ${pages.absent ? "open" : ""}><summary>Отсутствуют (${absentCount})</summary>${deviceTable(pageData ? comparison.absent : comparison.absent.slice((absentPage - 1) * 20, absentPage * 20))}${roomPageControls(absentPage, absentCount, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="absent"`)}</details>` : ""}`
-    : '<p>Первый сохранённый Final для выбранной комнаты.</p>';
-  return `<article class="room-card" data-room-timeline-id="${escapeHtml(snapshotId)}"><h3>${escapeHtml(snapshot.name || "Final")}</h3>${title ? `<p>${escapeHtml(title)}</p>` : ""}<p>${rosterTotal.toLocaleString("ru-RU")} устройств · ${escapeHtml(time)}</p>
-    ${transitionSummary}<h4>Состав комнаты в этом Final</h4>${rosterTotal ? `${roomPageControls(rosterPage, rosterTotal, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="roster"`)}${deviceTable(roster)}` : '<p class="empty">Помещение отсутствует в этом Final.</p>'}</article>`;
+    : '<p>Первый сохранённый снимок объединения для выбранной комнаты.</p>';
+  return `<article class="room-card" data-room-timeline-id="${escapeHtml(snapshotId)}"><h3>${escapeHtml(snapshot.name || "снимок объединения")}</h3>${title ? `<p>${escapeHtml(title)}</p>` : ""}<p>${rosterTotal.toLocaleString("ru-RU")} устройств · ${escapeHtml(time)}</p>
+    ${transitionSummary}<h4>Состав комнаты в этом снимке объединения</h4>${rosterTotal ? `${roomPageControls(rosterPage, rosterTotal, 20, `data-room-timeline-snapshot="${escapeHtml(snapshotId)}" data-room-timeline-section="roster"`)}${deviceTable(roster)}` : '<p class="empty">Помещение отсутствует в этом снимке объединения.</p>'}</article>`;
 }
 
 export function roomPairComparisonContent(comparison, baseSnapshot, currentSnapshot, requestedPage = 1) {
@@ -893,7 +893,7 @@ export function roomPairComparisonContent(comparison, baseSnapshot, currentSnaps
   const allChangedStatus = ambiguousCount
     ? `Не подтверждено · неоднозначных: ${ambiguousCount.toLocaleString("ru-RU")}`
     : comparedDeviceCount === 0 ? "Нет данных" : allChanged ? "Да" : "Нет";
-  const dateLabel = (snapshot) => `${escapeHtml(snapshot?.name || "Final")} · ${escapeHtml(snapshot?.createdAt ? new Date(snapshot.createdAt).toLocaleString("ru-RU") : "Без даты")}`;
+  const dateLabel = (snapshot) => `${escapeHtml(snapshot?.name || "снимок объединения")} · ${escapeHtml(snapshot?.createdAt ? new Date(snapshot.createdAt).toLocaleString("ru-RU") : "Без даты")}`;
   const rows = [
     ...added.map((device) => ({ status: "Добавлено", before: null, after: device, changes: [] })),
     ...absent.map((device) => ({ status: "Отсутствует", before: device, after: null, changes: [] })),
@@ -1033,13 +1033,13 @@ export function macTimelineCandidateRowsContent(candidates = []) {
   const rows = Array.isArray(candidates) ? candidates : [];
   return {
     count: rows.length,
-    html: rows.map((device) => `<li>${escapeHtml([device.mac, device.deviceId, device.serial, device.hostname].filter(Boolean).join(" · ") || "Без различимых идентификаторов")}</li>`).join(""),
+    html: rows.map((device) => `<li><details><summary>${escapeHtml([device.mac, device.deviceId, device.serial, device.hostname].filter(Boolean).join(" · ") || "Без различимых идентификаторов")}</summary><dl class="mac-timeline-context">${MAC_TIMELINE_FIELDS.map(([field, label]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(timelineValue(device[field]))}</dd></div>`).join("")}</dl></details></li>`).join(""),
   };
 }
 
 export function macTimelineContent(events = [], { page = 1, pageSize = 100, alreadyOrdered = false, total = events.length, prePaged = false, previousEvent = null } = {}) {
   const totalEvents = Math.max(0, Number(total) || 0);
-  if (!totalEvents) return '<p class="empty">MAC не найден в Final-снимках.</p>';
+  if (!totalEvents) return '<p class="empty">MAC не найден в снимках.</p>';
   const ordered = alreadyOrdered ? events : chronologicalMacEvents(events);
   const size = Math.max(1, Math.min(100, Number(pageSize) || 100));
   const pages = Math.max(1, Math.ceil(totalEvents / size));
@@ -1062,7 +1062,7 @@ export function macTimelineContent(events = [], { page = 1, pageSize = 100, alre
       const candidateList = candidateCount > candidateRows.count && event.snapshotId
         ? `<div class="mac-timeline-candidates" data-mac-candidate-snapshot="${escapeHtml(event.snapshotId)}"><ul>${candidateRows.html}</ul><button class="button secondary" type="button" data-mac-candidate-load="${escapeHtml(event.snapshotId)}" data-offset="${candidateRows.count}">Загрузить кандидатов · ${candidateRows.count.toLocaleString("ru-RU")} из ${candidateCount.toLocaleString("ru-RU")}</button></div>`
         : `<ul>${candidateRows.html}</ul>`;
-      return `<article class="timeline-card mac-timeline-item mac-timeline-ambiguous"><p class="eyebrow">${escapeHtml(formatUtcTimelineDate(event.date))}</p>${interval}<h3>Неоднозначно: MAC найден у нескольких устройств · кандидатов: ${candidateCount.toLocaleString("ru-RU")}</h3>${candidateList}</article>`;
+      return `<article class="timeline-card mac-timeline-item mac-timeline-ambiguous"><p class="eyebrow">${escapeHtml(formatUtcTimelineDate(event.date))}</p>${interval}<p>${escapeHtml(event.snapshotName || event.snapshotId || "")}</p><h3>Неоднозначно: MAC найден у нескольких устройств · кандидатов: ${candidateCount.toLocaleString("ru-RU")}</h3><p class="muted">Раскройте кандидатов, чтобы сравнить идентификаторы, адреса и модели.</p>${candidateList}</article>`;
     }
     const device = event.after || event.before || {};
     const changesList = Array.isArray(event.changes) ? event.changes : [];
@@ -1074,9 +1074,9 @@ export function macTimelineContent(events = [], { page = 1, pageSize = 100, alre
     const details = MAC_TIMELINE_FIELDS.map(([field, label]) => `<div class="${changed.has(field) ? "mac-context-changed" : ""}"><dt>${escapeHtml(label)}</dt><dd class="${changed.has(field) ? "changed-value" : ""}">${escapeHtml(timelineValue(device[field]))}</dd></div>`).join("");
     const changes = changesList.length ? `<div class="mac-timeline-change-list">${changesList.map((item) => `<p><strong>${escapeHtml(item.label || item.field || "Изменение")}</strong>: <span class="mac-value-before">${escapeHtml(item.oldValue || "Не заполнено")}</span> → <span class="mac-value-after">${escapeHtml(item.newValue || "Не заполнено")}</span>${item.historyEventIds?.length ? ` <small>· сохранённых событий: ${item.historyEventIds.length}</small>` : ""}</p>`).join("")}</div>` : "";
     const finalComparison = event.status === "changed" && event.before && event.after
-      ? `<details class="timeline-final-comparison"><summary>Сравнить Final: «${escapeHtml(event.previousSnapshotName || "Final")}» → «${escapeHtml(event.snapshotName || "Final")}»</summary><div class="timeline-final-comparison-grid"><section><h4>Было в предыдущем Final «${escapeHtml(event.previousSnapshotName || "Final")}»</h4><dl>${MAC_TIMELINE_FIELDS.map(([field, label]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(timelineValue(event.before[field]))}</dd>`).join("")}</dl></section><section><h4>Стало в новом Final «${escapeHtml(event.snapshotName || "Final")}»</h4><dl>${MAC_TIMELINE_FIELDS.map(([field, label]) => `<dt>${escapeHtml(label)}</dt><dd class="${changed.has(field) ? "changed-value" : ""}">${escapeHtml(timelineValue(event.after[field]))}</dd>`).join("")}</dl></section></div></details>`
+      ? `<details class="timeline-final-comparison"><summary>Сравнить снимок объединения: «${escapeHtml(event.previousSnapshotName || "снимок объединения")}» → «${escapeHtml(event.snapshotName || "снимок объединения")}»</summary><div class="timeline-final-comparison-grid"><section><h4>Было в предыдущем снимке объединения «${escapeHtml(event.previousSnapshotName || "снимок объединения")}»</h4><dl>${MAC_TIMELINE_FIELDS.map(([field, label]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(timelineValue(event.before[field]))}</dd>`).join("")}</dl></section><section><h4>Стало в новом снимке объединения «${escapeHtml(event.snapshotName || "снимок объединения")}»</h4><dl>${MAC_TIMELINE_FIELDS.map(([field, label]) => `<dt>${escapeHtml(label)}</dt><dd class="${changed.has(field) ? "changed-value" : ""}">${escapeHtml(timelineValue(event.after[field]))}</dd>`).join("")}</dl></section></div></details>`
       : "";
-    const finalLabels = [event.snapshotName ? `Final: ${event.snapshotName}` : "", event.source || ""].filter(Boolean).map(escapeHtml).join(" · ") || "Источник не указан";
+    const finalLabels = [event.snapshotName ? `снимок объединения: ${event.snapshotName}` : "", event.source || ""].filter(Boolean).map(escapeHtml).join(" · ") || "Источник не указан";
     const inferredAddress = device.inferredAddress ? `<p class="muted">Адрес по истории IP коммутатора: ${escapeHtml(device.inferredAddress)}</p>` : "";
     return `<details class="timeline-card mac-timeline-item mac-timeline-${tone}"><summary title="Открыть полную информацию о событии"><span class="mac-timeline-marker" aria-hidden="true"></span><span class="mac-timeline-card"><header><time datetime="${escapeHtml(event.date || "")}">${escapeHtml(formatUtcTimelineDate(event.date))}</time>${interval}<span class="mac-event-badge">${escapeHtml(title)}</span></header><div class="mac-timeline-title"><strong>${escapeHtml(device.mac || device.hostname || "Событие")}</strong><span>${finalLabels}</span></div>${inferredAddress}${changes}</span></summary><div class="mac-timeline-details"><strong>Полная информация</strong>${finalComparison}<dl class="mac-timeline-context">${details}</dl></div></details>`;
   }).join("");
@@ -1103,8 +1103,8 @@ export function macTimelineSummaryStatsContent(stats = {}) {
 export function macTimelineSummaryContent(events = [], { alreadyOrdered = false } = {}) {
   if (!events.length) return "";
   const ordered = alreadyOrdered ? events : chronologicalMacEvents(events);
-  const appearances = ordered.filter((event) => !event.historyOnly && ["first", "present", "changed", "observation"].includes(event.status));
-  const sources = new Set(ordered.filter((event) => event.status !== "absent" && event.status !== "ambiguous")
+  const appearances = ordered.filter((event) => !event.historyOnly && ["first", "present", "changed", "observation", "ambiguous"].includes(event.status));
+  const sources = new Set(ordered.filter((event) => event.status !== "absent")
     .map((event) => String(event.source || event.snapshotName || "").trim()).filter(Boolean));
   const movementCount = ordered.reduce((sum, event) => sum + (Array.isArray(event.changes) ? event.changes.length : 0), 0);
   let firstTimestamp = null;
@@ -1130,7 +1130,7 @@ export function macTimelineAppearancesContent(events = [], { page = 1, pageSize 
   const size = Math.max(1, Math.min(100, Number(pageSize) || 100));
   let total = 0;
   if (prePaged) total = Math.max(0, Number(providedTotal) || 0);
-  else for (const event of events) if (!event.historyOnly && ["first", "present", "changed", "observation"].includes(event.status)) total += 1;
+  else for (const event of events) if (!event.historyOnly && ["first", "present", "changed", "observation", "ambiguous"].includes(event.status)) total += 1;
   if (!total) return '<p class="empty">История появлений MAC пока пуста.</p>';
   const pages = Math.max(1, Math.ceil(total / size));
   const currentPage = Math.max(1, Math.min(pages, Number(page) || 1));
@@ -1143,7 +1143,7 @@ export function macTimelineAppearancesContent(events = [], { page = 1, pageSize 
     let appearanceIndex = 0;
     for (let index = events.length - 1; index >= 0; index -= 1) {
       const event = events[index];
-      if (event.historyOnly || !["first", "present", "changed", "observation"].includes(event.status)) continue;
+      if (event.historyOnly || !["first", "present", "changed", "observation", "ambiguous"].includes(event.status)) continue;
       if (appearanceIndex >= start && appearanceIndex < pageLimitEnd) pageEvents.push(event);
       appearanceIndex += 1;
     }
@@ -1152,6 +1152,7 @@ export function macTimelineAppearancesContent(events = [], { page = 1, pageSize 
   const rows = pageEvents.map((event) => {
     const device = event.after || event.device || {};
     const source = event.snapshotName || event.source || "Выгрузка";
+    if (event.status === "ambiguous") return `<tr><td>${escapeHtml(formatUtcTimelineDate(event.date))}</td><td>${escapeHtml(source)}</td><td colspan="6">MAC найден у нескольких устройств · кандидатов ${Number(event.candidateCount || event.candidates?.length || 0)}. Полные данные кандидатов доступны в карточке хронологии.</td></tr>`;
     const address = device.address || device.physicalAddress || (device.inferredAddress ? `${device.inferredAddress} (по IP коммутатора)` : "—");
     return `<tr><td>${escapeHtml(formatUtcTimelineDate(event.date))}</td><td>${escapeHtml(source)}</td><td>${escapeHtml(device.manufacturer || device.vendor || "—")}</td><td>${escapeHtml(device.model || "—")}</td><td>${escapeHtml(device.ip || "—")}</td><td>${escapeHtml(address)}</td><td>${escapeHtml(device.room || "—")}</td><td>${escapeHtml(device.smartroomId || "—")}</td></tr>`;
   }).join("");

@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## v2.3.10 — 2026-11-19
+
+- SmartRoom keeps the complete imported address, including city, street, building and floor. Recognized location paths no longer turn a floor into a room, and complete SmartRoom addresses can repair an existing matching address fragment.
+- The Devices card opens a paged list of distinct Main MACs. Detailed chart aggregates deduplicate MACs, and the Without Room card and its list both require an actual room name.
+- MAC chronology shows candidate details immediately, counts ambiguous observations as observed snapshots, and uses a compact grid. Disappearance/return details include the preceding source and device values in the same dialog.
+- Local archives can be included in analytics with one action while preserving the active snapshot and stable record IDs. Unchanged folder backups are skipped on restart, and full historical validation runs after the stored data appears.
+- User-facing Final labels now say “снимок объединения”. The temporary file tool is named “Объединение файла без сохранения в историю”.
 
 ## v2.3.9 — 2026-11-12
 

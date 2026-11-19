@@ -310,19 +310,25 @@ export function locationKey(device = {}) {
   return smartroomId ? `sr:${keyText(smartroomId)}` : physicalLocationKey(device);
 }
 
+export function hasKnownRoom(device = {}) {
+  return Boolean(identityText(device.room || device.room_name));
+}
+
 function parseLocationPath(value) {
   const raw = String(value ?? "");
   const parts = raw.split(raw.includes(" → ") ? /\s+→\s+/ : raw.includes(" > ") ? /\s+>\s+/ : /[;,]/).map(text);
   if (parts.length < 4) return null;
   const floorIndex = parts.findIndex((part, index) => index >= 3 && /(?:\b(?:floor|level)\b|этаж|уровень)/iu.test(part));
-  const streetAtThird = /^(?:ул(?:ица)?\b|ул\.|пер\.|проспект|пр-т|шоссе|наб\.|набережная|бульвар|street\b)/iu.test(parts[2]);
-  if (floorIndex >= 4 || (floorIndex === 3 && streetAtThird)) {
+  const streetIndex = parts.findIndex((part, index) => index > 0 && /(?:^|[\s.])(?:ул(?:ица)?|пер(?:еулок)?|проспект|пр-т|шоссе|наб(?:ережная)?|бульвар|street)(?=[\s.]|$)/iu.test(part));
+  const streetAtThird = streetIndex === 2;
+  if (floorIndex >= 4 || (floorIndex >= 3 && streetIndex > 0 && streetIndex < floorIndex)) {
     const tail = parts.slice(floorIndex + 1);
     const roomIndex = tail.findIndex((part) => /помещени|комнат|переговор|кабинет|\broom\b/iu.test(part));
-    const hasSite = !streetAtThird && floorIndex >= 5;
+    const addressStart = streetIndex === 1 ? 0 : streetIndex > 1 ? streetIndex : floorIndex >= 5 ? 3 : 2;
     return {
-      businessUnit: parts[0], city: parts[1], site: hasSite ? parts[2] : "",
-      address: parts.slice(hasSite ? 3 : 2, floorIndex).filter(Boolean).join(", "),
+      businessUnit: streetIndex === 1 ? "" : parts[0], city: streetIndex === 1 ? parts[0] : parts[1],
+      site: addressStart === 3 ? parts[2] : "",
+      address: parts.slice(addressStart, floorIndex).filter(Boolean).join(", "),
       floor: parts[floorIndex], room: roomIndex >= 0 ? tail[roomIndex] : (tail.length === 1 ? tail[0] : ""),
     };
   }
@@ -349,9 +355,18 @@ function locationInference(input) {
   return null;
 }
 
+export function isAddressFragment(value, fullAddress) {
+  const fragment = keyText(value);
+  const parts = String(fullAddress || "").split(/[;,]/).map(keyText).filter(Boolean);
+  return Boolean(fragment && parts.length >= 3 && parts.includes(fragment));
+}
+
 export function normalizeDevice(input = {}, source = "") {
   const inferredLocation = locationInference(input);
   const inputRoomIsPath = Boolean(inferredLocation && inferredLocation.sourceField === "room");
+  const locationPath = firstKnown(input.locationPath, input.location, inputRoomIsPath ? input.room : "");
+  const inputAddress = firstKnown(input.address, input.physicalAddress);
+  const smartRoomPathAddress = source === "SmartRoom" && inferredLocation ? locationPath : "";
   const macCandidates = [input.mac, input.macAddress, input.mac_address, input.macFormatted, input.mac_formatted, input.CallingStationID]
     .map(normalizeMacField);
   const mac = macCandidates.find((candidate) => candidate && normalizeMac(candidate))
@@ -441,11 +456,9 @@ export function normalizeDevice(input = {}, source = "") {
     site: firstKnown(input.site, inferredLocation?.site),
     floor: firstKnown(input.floor, inferredLocation?.floor),
     room: firstKnown(inputRoomIsPath ? "" : input.room, inferredLocation?.room),
-    address: firstKnown(input.address, input.physicalAddress, inferredLocation?.address),
+    address: firstKnown(isAddressFragment(inputAddress, smartRoomPathAddress) ? "" : inputAddress, smartRoomPathAddress, inferredLocation?.address),
     physicalAddress: firstKnown(input.physicalAddress),
-    ...(firstKnown(input.locationPath, input.location, inputRoomIsPath ? input.room : "") ? {
-      locationPath: firstKnown(input.locationPath, input.location, inputRoomIsPath ? input.room : ""),
-    } : {}),
+    ...(locationPath ? { locationPath } : {}),
     manufacturer: firstKnown(input.manufacturer, input.vendor),
     model: firstKnown(input.model),
     deviceType: firstKnown(input.deviceType, input.type),

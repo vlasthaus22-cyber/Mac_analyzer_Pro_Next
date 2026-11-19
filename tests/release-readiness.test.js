@@ -123,7 +123,7 @@ test("two-Final analytics reuse has real Edge runtime heap evidence", () => {
   const app = readFileSync("src/app.js", "utf8");
   assert.match(smoke, /Runtime\.getHeapUsage/);
   assert.match(smoke, /--stress-rows=/);
-  assert.match(app, /Worker истории Final \$\{snapshotIndex \+ 1\}\/\$\{snapshotCount\}/);
+  assert.match(app, /Worker истории снимков объединения \$\{snapshotIndex \+ 1\}\/\$\{snapshotCount\}/);
 });
 
 test("vendor/model upload history parity is backed by Edge UI rebuild, exports and deletion", () => {

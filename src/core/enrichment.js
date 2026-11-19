@@ -1,6 +1,7 @@
 import {
   firstKnown,
   hasStrongIdentity,
+  isAddressFragment,
   keyText,
   MAX_DEVICE_ALTERNATIVES,
   MAX_DEVICE_CONFLICTS,
@@ -372,7 +373,9 @@ export function mergeDevice(target, incoming, source, options = {}) {
     const setting = ENRICHMENT_FIELD_BY_DEVICE_FIELD[field];
     if (!setting || enabled[setting]) {
       const targetWasEmpty = !text(target[field]);
-      setKnown(target, field, incoming[field], source, options);
+      const expandsSmartRoomAddress = field === "address" && source === "SmartRoom"
+        && isAddressFragment(target.address, incoming.address);
+      setKnown(target, field, incoming[field], source, expandsSmartRoomAddress ? { ...options, overwrite: true } : options);
       if (targetWasEmpty && text(target[field])) {
         const vendor = field === "manufacturer";
         const model = field === "model";
@@ -413,6 +416,12 @@ export function mergeDevice(target, incoming, source, options = {}) {
   target.possibleIpsTruncated = Boolean(target.possibleIpsTruncated || incoming.possibleIpsTruncated || possibleIps.truncated);
   for (const conflict of incoming.conflicts || []) addDeviceConflict(target, conflict);
   target.conflictsTruncated = Boolean(target.conflictsTruncated || incoming.conflictsTruncated);
+  if (source === "Main") {
+    const originalMacs = [...new Set([...(target.mainMacs || [target.mac]), ...(incoming.mainMacs || [incoming.mac])].map(normalizeMac).filter(Boolean))];
+    if (originalMacs.length > 1 || (originalMacs.length === 1 && originalMacs[0] !== normalizeMac(target.mac))) {
+      target.mainMacs = originalMacs;
+    }
+  }
   target.sources = unique([...(target.sources || []), ...(incoming.sources || []), source]);
   return target;
 }

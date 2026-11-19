@@ -76,8 +76,8 @@ test("MAC timeline parity is closed with previous/new Final browser evidence", (
   const browserSmoke = readFileSync("tools/browser-smoke.mjs", "utf8");
   assert.match(browserSmoke, /--room-history-parity-only/);
   assert.match(browserSmoke, /macTimeline\?\.count !== 3/);
-  assert.match(browserSmoke, /Было в предыдущем Final/);
-  assert.match(browserSmoke, /Стало в новом Final/);
+  assert.match(browserSmoke, /Было в предыдущем снимке объединения/);
+  assert.match(browserSmoke, /Стало в новом снимке объединения/);
 });
 
 test("MAC browser and optional-host History merge parity has Edge evidence", () => {
@@ -279,7 +279,7 @@ test("full Dashboard cache reload and metadata-only trend close the autonomous a
   assert.match(row.status, /^Полностью подтверждено:/);
   assert.ok(row.tests.split("; ").includes("tools/browser-smoke.mjs"));
   assert.match(browserSmoke, /--dashboard-cache-reload-only/);
-  assert.match(browserSmoke, /selected-final-dataset-v9:/);
+  assert.match(browserSmoke, /selected-final-dataset-v10:/);
   assert.match(browserSmoke, /complete cached dashboard\/report did not recover after reopening/);
   assert.match(analyticsTests, /snapshot totals build an exact chronological trend from metadata without opening device rows/);
   assert.match(databaseTests, /snapshot history analytics cache is signed, readable, and invalidated on new Final/);
@@ -448,7 +448,7 @@ test("saved Final and Inventory counters remain visible during a real IndexedDB 
   assert.match(browserSmoke, /--database-unavailable-cache-only/);
   assert.match(browserSmoke, /cachedCounts\?\.snapshotCount !== 1/);
   assert.match(browserSmoke, /injected:\s*Boolean\(window\.__smokeIDBFailureInstalled\)/i);
-  assert.match(browserSmoke, /unavailableState\.status\.includes\("1 в активном Final"\)/);
+  assert.match(browserSmoke, /unavailableState\.status\.includes\("1 в активном снимке объединения"\)/);
 });
 
 test("all-changed room KPI opens the exact positive room roster in real-browser smoke", () => {

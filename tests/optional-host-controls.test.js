@@ -306,7 +306,7 @@ test("optional-host UI exposes only explicit same-origin Inventory, Final, and b
   assert.match(html, /optionalHostInventoryUploadNote" class="muted" hidden>Накопленный Inventory передаётся локальному optional host курсорными страницами и пакетами/);
   assert.match(app, /uploadInventoryToOptionalHost\(database\.iterateInventoryPages\(\{ pageSize: 250 \}\)/);
   assert.match(app, /optionalHostInventoryUploadButton"\)\.addEventListener\("click"/);
-  assert.match(html, /id="optionalHostSnapshotUploadNote" class="muted" hidden>Final и связанные события History отправляются одному локальному optional host как NDJSON-копия размером до 256 МиБ/);
+  assert.match(html, /id="optionalHostSnapshotUploadNote" class="muted" hidden>снимок объединения и связанные события History отправляются одному локальному optional host как NDJSON-копия размером до 256 МиБ/);
   assert.match(app, /uploadFinalSnapshotToOptionalHost\(metadata, database\.iterateSnapshotDevices\(metadata\.id\)\)/);
   assert.match(app, /uploadSnapshotHistoryToOptionalHost\([\s\S]*?database\.iterateSnapshotHistoryEvents\(metadata\.id\)/);
   assert.match(app, /result\.alreadyExists[\s\S]*уже скопирован без изменений/);
@@ -317,7 +317,7 @@ test("optional-host UI exposes only explicit same-origin Inventory, Final, and b
   assert.match(app, /listOptionalHostHistoryForMac\(mac, \{ after: cursor, limit: 250 \}\)/);
   assert.match(app, /loadOptionalHostMacHistoryButton"\)\.addEventListener\("click", \(\) => openMacHistory\(\{ includeOptionalHostHistory: true \}\)/);
   assert.match(controls, /export async function listOptionalHostHistoryForMac/);
-  assert.match(html, /атомарно удаляет каждый выбранный Final вместе с его History; Inventory и остальные снимки сохраняются/);
+  assert.match(html, /атомарно удаляет каждый выбранный снимок объединения вместе с его History; Inventory и остальные снимки сохраняются/);
   assert.match(app, /deleteOptionalHostSnapshotFromUi\(remove\)/);
   assert.match(controls, /method: "DELETE"/);
   assert.match(controls, /export async function listOptionalHostSnapshots/);
@@ -529,7 +529,7 @@ test("optional host snapshot list selects the current bounded page and deletes o
   assert.match(app, /data-optional-host-snapshot-select-page/);
   assert.match(app, /data-optional-host-snapshot-select="\$\{escapeHtml\(snapshot\.id\)\}"/);
   assert.match(app, /selected = optionalHostSnapshotPage\.items\.filter\(\(\{ id \}\) => optionalHostSnapshotPage\.selected\.has\(id\)\)/);
-  assert.match(app, /Each Final is deleted in a separate transaction|Каждый Final удаляется отдельной транзакцией/);
+  assert.match(app, /Each Final is deleted in a separate transaction|Каждый снимок объединения удаляется отдельной транзакцией/);
   assert.match(app, /deleteOptionalHostSnapshots\(selected\.map\(\(\{ id \}\) => id\)\)/);
   assert.match(app, /result\.failures\.map\(\(\{ snapshotId, message \}\)/);
   assert.match(app, /updateOptionalHostSnapshotSelectionUi\(\)/);

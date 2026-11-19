@@ -1403,7 +1403,7 @@ export function createMacTimelineAccumulator(mac, {
       if (retainSnapshotMetadata && snapshotId && !historyIndex.snapshotsById.has(snapshotId)) historyIndex.snapshotsById.set(snapshotId, snapshot);
       const candidateTotal = Math.max(matches.length, Math.floor(Number(matchCount) || 0));
       if (candidateTotal > 1) {
-        emit({ date: snapshot.createdAt, snapshotId: snapshot.id, snapshotName: snapshot.name, status: "ambiguous", candidateCount: candidateTotal, ...(candidatesInScratch ? {} : { candidates: matches }), changes: [] });
+        emit({ date: snapshot.createdAt, snapshotId: snapshot.id, snapshotName: snapshot.name, status: "ambiguous", candidateCount: candidateTotal, candidates: candidatesInScratch ? matches.slice(0, 10) : matches, changes: [] });
         previous = null;
         previousSnapshot = null;
         lastKnown = new Map();

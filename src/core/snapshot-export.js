@@ -3,19 +3,19 @@ import { csvQuote } from "./csv-cell.js";
 import { createTextBlobStreamSink } from "./stream-writer.js";
 
 export function createSnapshotXlsxSheets(database, snapshot, columns, { maxDataRowsPerSheet = MAX_SHEET_DATA_ROWS } = {}) {
-  if (!snapshot?.id || typeof database?.iterateSnapshotDevices !== "function") throw new TypeError("Для экспорта XLSX нужен Final и потоковое чтение его строк");
+  if (!snapshot?.id || typeof database?.iterateSnapshotDevices !== "function") throw new TypeError("Для экспорта XLSX нужен снимок объединения и потоковое чтение его строк");
   if (!Array.isArray(columns) || !columns.length) throw new TypeError("Для экспорта XLSX нужен список колонок");
   const deviceCount = Number(snapshot.deviceCount);
-  if (!Number.isSafeInteger(deviceCount) || deviceCount < 0) throw new TypeError("Для экспорта XLSX нужно точное число устройств Final");
+  if (!Number.isSafeInteger(deviceCount) || deviceCount < 0) throw new TypeError("Для экспорта XLSX нужно точное число устройств снимка объединения");
   const maximum = Math.max(1, Math.min(MAX_SHEET_DATA_ROWS, Math.floor(Number(maxDataRowsPerSheet) || MAX_SHEET_DATA_ROWS)));
   const metadata = [
-    ["ID Final", snapshot.id], ["Название", snapshot.name || ""], ["Источник", snapshot.source || ""],
+    ["ID снимка объединения", snapshot.id], ["Название", snapshot.name || ""], ["Источник", snapshot.source || ""],
     ["Дата наблюдения", snapshot.createdAt || ""], ["Тип снимка", snapshot.snapshotType || "final"],
     ["Устройств", deviceCount], ["Некорректных строк", Number(snapshot.invalidCount || 0)],
     ["Время обработки, мс", Number(snapshot.processingTimeMs || 0)],
   ];
   const sheets = [{
-    name: "Сведения о Final",
+    name: "Сведения о снимке объединения",
     headings: ["Поле", "Значение"],
     rows: (async function* rows() { for (const row of metadata) yield row; })(),
   }];
@@ -75,7 +75,7 @@ async function writeSnapshotRows(snapshot, visitSnapshotChunks, writable, format
 }
 
 function writableOrThrow(snapshot, visitSnapshotChunks, writable, format) {
-  if (!snapshot?.id || typeof visitSnapshotChunks !== "function") throw new TypeError(`Для экспорта ${format} нужен Final и поток его чанков`);
+  if (!snapshot?.id || typeof visitSnapshotChunks !== "function") throw new TypeError(`Для экспорта ${format} нужен снимок объединения и поток его чанков`);
   if (!writable || typeof writable.write !== "function") throw new TypeError(`Для потокового экспорта ${format} нужен файловый поток`);
 }
 
@@ -93,11 +93,11 @@ export async function writeSnapshotCsv(snapshot, visitSnapshotChunks, columns = 
 
 function snapshotTextHeader(snapshot, columns) {
   const metadata = [
-    ["ID Final", snapshot.id], ["Название", snapshot.name || ""], ["Источник", snapshot.source || ""],
+    ["ID снимка объединения", snapshot.id], ["Название", snapshot.name || ""], ["Источник", snapshot.source || ""],
     ["Дата", snapshot.createdAt || ""], ["Устройств", Number(snapshot.deviceCount || 0)],
     ["Некорректных строк", Number(snapshot.invalidCount || 0)],
   ];
-  return `Final MAC Analyzer Pro Next\n${metadata.map(([label, value]) => `${label}: ${JSON.stringify(value ?? "")}`).join("\n")}\n\nУстройства\n${columns.map(({ label }) => label).join("\t")}`;
+  return `Снимок объединения MAC Analyzer Pro Next\n${metadata.map(([label, value]) => `${label}: ${JSON.stringify(value ?? "")}`).join("\n")}\n\nУстройства\n${columns.map(({ label }) => label).join("\t")}`;
 }
 
 export async function snapshotTextBlob(snapshot, visitSnapshotChunks, columns = []) {
@@ -120,7 +120,7 @@ export async function snapshotJsonBlob(snapshot, visitSnapshotChunks) {
 export async function writeSnapshotJson(snapshot, visitSnapshotChunks, writable) {
   writableOrThrow(snapshot, visitSnapshotChunks, writable, "JSON");
   const metadata = JSON.stringify(snapshot, null, 2);
-  if (!metadata || metadata[0] !== "{" || metadata.at(-1) !== "}") throw new TypeError("Метаданные Final имеют некорректный формат");
+  if (!metadata || metadata[0] !== "{" || metadata.at(-1) !== "}") throw new TypeError("Метаданные снимка объединения имеют некорректный формат");
   await writable.write(`${metadata.slice(0, -1)},\n  "devices": [\n`);
   const hasRows = await writeSnapshotRows(snapshot, visitSnapshotChunks, writable,
     (device) => JSON.stringify(device, null, 2).split("\n").map((line) => `    ${line}`).join("\n"),
@@ -183,7 +183,7 @@ function htmlRow(device, columns) {
 }
 
 export async function writeSnapshotHtml(snapshot, visitSnapshotChunks, columns = [], writable) {
-  if (!snapshot?.id || typeof visitSnapshotChunks !== "function") throw new TypeError("Для экспорта HTML нужен Final и поток его чанков");
+  if (!snapshot?.id || typeof visitSnapshotChunks !== "function") throw new TypeError("Для экспорта HTML нужен снимок объединения и поток его чанков");
   if (!Array.isArray(columns)) throw new TypeError("Для экспорта HTML нужен список колонок");
   if (!writable || typeof writable.write !== "function") throw new TypeError("Для потокового HTML-экспорта нужен файловый поток");
   const metadata = Object.entries(snapshot).filter(([key, value]) => key !== "devices" && value !== undefined);

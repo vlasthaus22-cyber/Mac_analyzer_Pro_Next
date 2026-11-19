@@ -1,5 +1,5 @@
 import { tsvQuote } from "./core/csv-cell.js";
-import { aggregateSnapshotHistory, buildAnalyticsPairFromChunks, buildSnapshotTotalSeries, collectPresenceTransitions, defaultSnapshotSelection, releaseDashboardCurrentDevices, snapshotHistorySignature } from "./core/analytics.js";
+import { aggregateSnapshotHistory, buildAnalyticsPairFromChunks, buildSnapshotTotalSeries, collectPresenceTransitions, createUniqueAnalyticsDeviceFilter, defaultSnapshotSelection, releaseDashboardCurrentDevices, snapshotHistorySignature } from "./core/analytics.js";
 import { createDashboardDeviceMatcher, dashboardFilterOptions, dashboardStatusForKpi } from "./core/dashboard-filter.js";
 import { buildDashboardFleetSeries } from "./core/dashboard-fleet.js";
 import { createSnapshotTimeCache } from "./core/snapshot-time-cache.js";
@@ -168,6 +168,7 @@ const scheduledBatchQueue = createSerialQueue();
 const workspaceStateQueue = createSerialQueue();
 let ieeeOuiIndex = null;
 let bundledIeeeRegistry = null;
+let bundledOuiInitialization = Promise.resolve();
 let macHistoryOptionsTimer = 0;
 let macHistoryOptionsRequest = 0;
 
@@ -789,7 +790,7 @@ async function enrichActiveFinalWithExternalVendorApi() {
   }
   const baseline = state.activeSnapshot || await database.activeSnapshotMetadata();
   if (!baseline || baseline.snapshotType !== FINAL_SNAPSHOT_TYPE || !baseline.deviceCount) {
-    throw new Error("Нет активного Final для обогащения.");
+    throw new Error("Нет активного снимка объединения для обогащения.");
   }
   const status = $("#externalVendorApiStatus");
   const stageId = "final-device-stage:external-vendor:" + Date.now() + ":" + crypto.randomUUID();
@@ -838,7 +839,7 @@ async function enrichActiveFinalWithExternalVendorApi() {
     await database.finalizeFinalDeviceStage(stageId, baseline.deviceCount);
     if (!updated) {
       await database.clearAnalyticsAggregateQuery(stageId);
-      status.textContent = "Новых производителей не найдено. Активный Final не изменён.";
+      status.textContent = "Новых производителей не найдено. Активный снимок объединения не изменён.";
       await refreshExternalVendorCacheStatus();
       return null;
     }
@@ -875,15 +876,15 @@ async function enrichActiveFinalWithExternalVendorApi() {
       updateInventory: true,
       consumeDevices: true,
       onProgress: ({ completedDevices, totalDevices }) => {
-        status.textContent = "Сохраняю новый Final: " + Number(completedDevices || 0).toLocaleString("ru-RU")
+        status.textContent = "Сохраняю новый снимок объединения: " + Number(completedDevices || 0).toLocaleString("ru-RU")
           + " / " + Number(totalDevices || baseline.deviceCount).toLocaleString("ru-RU") + " устройств.";
       },
     });
-    status.textContent = "Создан новый активный Final. Кандидатов: " + candidates.toLocaleString("ru-RU")
+    status.textContent = "Создан новый активный снимок объединения. Кандидатов: " + candidates.toLocaleString("ru-RU")
       + "; найдено: " + updated.toLocaleString("ru-RU") + "; из кэша: " + cached.toLocaleString("ru-RU")
       + "; внешних запросов: " + lookups.toLocaleString("ru-RU") + ".";
     await refreshDatabaseState();
-    sendAnalysisNotification("API-обогащение завершено", "Создан новый Final; заполнено производителей: " + updated.toLocaleString("ru-RU") + ".");
+    sendAnalysisNotification("API-обогащение завершено", "Создан новый снимок объединения; заполнено производителей: " + updated.toLocaleString("ru-RU") + ".");
     await refreshExternalVendorCacheStatus();
     return metadata;
   } finally {
@@ -1325,7 +1326,7 @@ async function refreshDataDirectoryControls() {
   status.textContent = controls.status;
 }
 
-async function restoreDataDirectoryArchive() {
+async function restoreDataDirectoryArchive({ skipUnchanged = false } = {}) {
   state.dataDirectoryArchiveWritable = false;
   state.dataDirectoryWriteFailed = false;
   state.dataDirectoryHandle = await database.dataDirectoryHandle();
@@ -1344,7 +1345,15 @@ async function restoreDataDirectoryArchive() {
       state.dataDirectoryIssue = "Архив в выбранной папке отсутствует; будет создан после сверки с IndexedDB.";
       return false;
     }
+    const stamp = JSON.stringify([state.dataDirectoryHandle.name, file.name, file.size, file.lastModified]);
+    const previousStamp = await database.getSetting("dataDirectoryArchiveStamp", "");
+    if (skipUnchanged && previousStamp === stamp) {
+      state.dataDirectoryArchiveWritable = true;
+      state.dataDirectoryIssue = "";
+      return false;
+    }
     await importPortableArchiveFile(file);
+    await database.setSetting("dataDirectoryArchiveStamp", stamp);
     state.dataDirectoryArchiveWritable = true;
     state.dataDirectoryIssue = "";
     state.analytics = null;
@@ -1358,7 +1367,25 @@ async function restoreDataDirectoryArchive() {
 }
 
 function portableDatabaseArchiveStream() {
-  return database.exportArchiveStream(portableDatabaseArchiveOptions());
+  let reader = null;
+  let cancelled = false;
+  return new globalThis.ReadableStream({
+    async pull(controller) {
+      try {
+        await bundledOuiInitialization;
+        if (cancelled) return;
+        reader ||= database.exportArchiveStream(portableDatabaseArchiveOptions()).getReader();
+        const result = await reader.read();
+        if (cancelled) return;
+        if (result.done) controller.close();
+        else controller.enqueue(result.value);
+      } catch (error) { if (!cancelled) controller.error(error); }
+    },
+    async cancel(reason) {
+      cancelled = true;
+      if (reader) await reader.cancel(reason);
+    },
+  });
 }
 
 function portableDatabaseArchiveOptions() {
@@ -1382,6 +1409,8 @@ async function synchronizeDataDirectoryArchiveOnce() {
       return;
     }
     state.dataDirectoryWriteFailed = false;
+    const writtenFile = await getDirectoryArchiveFile(handle);
+    if (writtenFile) await database.setSetting("dataDirectoryArchiveStamp", JSON.stringify([handle.name, writtenFile.name, writtenFile.size, writtenFile.lastModified]));
     state.dataDirectoryIssue = "";
     $("#dataDirectoryStatus").textContent = `Portable archive синхронизирован · ${new Date().toLocaleString("ru-RU")}.`;
   } catch (error) {
@@ -1391,7 +1420,7 @@ async function synchronizeDataDirectoryArchiveOnce() {
     }
     state.dataDirectoryArchiveWritable = false;
     state.dataDirectoryWriteFailed = true;
-    state.dataDirectoryIssue = `Запись архива не выполнена: ${error.message}. Final сохранён в IndexedDB; выберите папку с правом записи.`;
+    state.dataDirectoryIssue = `Запись архива не выполнена: ${error.message}. снимок объединения сохранён в IndexedDB; выберите папку с правом записи.`;
     try { state.dataDirectoryPermission = await queryDirectoryPermission(handle); } catch { state.dataDirectoryPermission = "prompt"; }
     await refreshDataDirectoryControls();
     $("#dataDirectoryStatus").textContent = state.dataDirectoryIssue;
@@ -1411,11 +1440,11 @@ async function autoSaveActiveFinal() {
   const status = $("#autoSaveStatus");
   const handle = state.dataDirectoryHandle;
   if (!state.activeSnapshot || !(state.activeSnapshot.deviceCount > 0)) {
-    status.textContent = "Автосохранение Final ожидает успешный снимок с устройствами.";
+    status.textContent = "Автосохранение снимок объединения ожидает успешный снимок с устройствами.";
     return;
   }
   if (!handle) {
-    status.textContent = "Автосохранение Final: выберите папку данных, чтобы сохранять XLSX каждые 5 минут.";
+    status.textContent = "Автосохранение снимок объединения: выберите папку данных, чтобы сохранять XLSX каждые 5 минут.";
     return;
   }
   if (state.dataDirectoryWriteFailed) {
@@ -1440,14 +1469,14 @@ async function autoSaveActiveFinal() {
       result = await writeDirectoryFile(handle, fileName, createXlsxWorkbookStream(sheets));
     } catch (error) {
       state.dataDirectoryWriteFailed = true;
-      state.dataDirectoryIssue = `Автосохранение не выполнено: ${error.message}. Final остаётся в IndexedDB; выберите другую папку.`;
+      state.dataDirectoryIssue = `Автосохранение не выполнено: ${error.message}. снимок объединения остаётся в IndexedDB; выберите другую папку.`;
       try { state.dataDirectoryPermission = await queryDirectoryPermission(handle); } catch { state.dataDirectoryPermission = "prompt"; }
       await refreshDataDirectoryControls();
       throw error;
     }
-    status.textContent = `Final сохранён в ${result.fileName} · ${date.toLocaleString("ru-RU")}.`;
+    status.textContent = `снимок объединения сохранён в ${result.fileName} · ${date.toLocaleString("ru-RU")}.`;
   } catch (error) {
-    status.textContent = `Автосохранение не выполнено: ${error.message}. Final остаётся в IndexedDB.`;
+    status.textContent = `Автосохранение не выполнено: ${error.message}. снимок объединения остаётся в IndexedDB.`;
   } finally {
     state.autoSaveRunning = false;
   }
@@ -1458,9 +1487,9 @@ function startFinalAutoSave() {
   state.autoSaveLastAttemptAt = Date.now();
   $("#autoSaveStatus").textContent = state.activeSnapshot?.deviceCount > 0
     ? (state.dataDirectoryHandle && state.dataDirectoryPermission === "granted"
-      ? "Автосохранение Final включено · первый XLSX будет создан через 5 минут."
-      : "Автосохранение Final ожидает выбранную папку с разрешением на запись.")
-    : "Автосохранение Final ожидает успешный снимок с устройствами.";
+      ? "Автосохранение снимок объединения включено · первый XLSX будет создан через 5 минут."
+      : "Автосохранение снимок объединения ожидает выбранную папку с разрешением на запись.")
+    : "Автосохранение снимок объединения ожидает успешный снимок с устройствами.";
   state.autoSaveTimer = globalThis.setInterval(requestFinalAutoSaveIfDue, AUTO_SAVE_INTERVAL_MS);
 }
 
@@ -1629,7 +1658,7 @@ function handleGlobalShortcut(event) {
   action();
 }
 
-async function refreshDatabaseState() {
+async function refreshDatabaseState({ synchronizeArchive = true, verifyFinalIntegrity = true } = {}) {
   invalidateAnalyticsRequests();
   state.analytics = null;
   state.analyticsComparisonPageCache.clear();
@@ -1637,7 +1666,7 @@ async function refreshDatabaseState() {
   const staleMacTimelineQueryId = state.activeMacTimelineQueryId;
   state.activeMacTimelineQueryId = "";
   if (staleMacTimelineQueryId) database.clearMacTimelineQuery(staleMacTimelineQueryId).catch(() => {});
-  state.snapshotMetadata = await database.listSnapshots({ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true });
+  state.snapshotMetadata = await database.listSnapshots({ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity });
   state.snapshotMetadataCanonical = isCanonicalUploadHistoryOrder(state.snapshotMetadata);
   state.snapshotTimeCache.clear();
   state.roomCatalogRevision += 1;
@@ -1656,9 +1685,9 @@ async function refreshDatabaseState() {
   state.inventoryTotal = await database.inventoryCount();
   const optionalInventoryUploadButton = $("#optionalHostInventoryUploadButton");
   if (optionalInventoryUploadButton) optionalInventoryUploadButton.disabled = state.inventoryTotal === 0;
-  const activeFinalCount = Number(state.activeSnapshot?.deviceCount || 0);
+  const activeFinalCount = Number(state.activeSnapshot?.mainUniqueMacs ?? state.activeSnapshot?.deviceCount ?? 0);
   writeDatabaseStatusCache({ snapshotCount: state.snapshotMetadata.length, activeFinalCount, inventoryCount: state.inventoryTotal });
-  $("#databaseStatus").textContent = `${state.snapshotMetadata.length} Final · ${activeFinalCount.toLocaleString("ru-RU")} в активном Final`;
+  $("#databaseStatus").textContent = `${state.snapshotMetadata.length} снимок объединения · ${activeFinalCount.toLocaleString("ru-RU")} в активном снимке объединения`;
   renderSnapshotSelectors();
   // The catalogue is authoritative now. Restart active Dashboard work before
   // slower, unrelated page refreshes so cancellation cannot strand its UI.
@@ -1670,7 +1699,7 @@ async function refreshDatabaseState() {
   await renderIpMappings();
   await renderLocalArchiveList(true);
   await refreshDataDirectoryControls();
-  await synchronizeDataDirectoryArchive();
+  if (synchronizeArchive) await synchronizeDataDirectoryArchive();
 }
 
 async function renderLocalArchiveList(reset = false) {
@@ -1688,7 +1717,7 @@ async function renderLocalArchiveList(reset = false) {
   catalog.result = page;
   const archives = page.rows;
   host.innerHTML = archives.length
-    ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Архив</th><th>Создан</th><th>Final</th><th>Записей</th><th>Действия</th></tr></thead><tbody>${archives.map((archive) => `<tr><td>${escapeHtml(archive.name)}</td><td>${escapeHtml(new Date(archive.createdAt).toLocaleString("ru-RU"))}</td><td>${Number(archive.snapshotCount || 0).toLocaleString("ru-RU")}</td><td>${Number(archive.recordCount || 0).toLocaleString("ru-RU")}</td><td><button type="button" class="button secondary" data-restore-local-archive="${escapeHtml(archive.id)}">Восстановить</button> <button type="button" class="button secondary" data-export-local-archive="${escapeHtml(archive.id)}">Выгрузить</button> <button type="button" class="button secondary" data-delete-local-archive="${escapeHtml(archive.id)}">Удалить</button></td></tr>`).join("")}</tbody></table></div>`
+    ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Архив</th><th>Создан</th><th>снимок объединения</th><th>Записей</th><th>Действия</th></tr></thead><tbody>${archives.map((archive) => `<tr><td>${escapeHtml(archive.name)}</td><td>${escapeHtml(new Date(archive.createdAt).toLocaleString("ru-RU"))}</td><td>${Number(archive.snapshotCount || 0).toLocaleString("ru-RU")}</td><td>${Number(archive.recordCount || 0).toLocaleString("ru-RU")}</td><td><button type="button" class="button secondary" data-restore-local-archive="${escapeHtml(archive.id)}">Восстановить</button> <button type="button" class="button secondary" data-export-local-archive="${escapeHtml(archive.id)}">Выгрузить</button> <button type="button" class="button secondary" data-delete-local-archive="${escapeHtml(archive.id)}">Удалить</button></td></tr>`).join("")}</tbody></table></div>`
     : '<p class="empty">Локальные архивы ещё не сохранены.</p>';
   host.insertAdjacentHTML("beforeend", `<div class="action-row"><button type="button" class="button secondary" data-local-archive-previous${catalog.previous.length ? "" : " disabled"}>Назад</button><span class="muted">Страница ${catalog.previous.length + 1}</span><button type="button" class="button secondary" data-local-archive-next${page.hasMore ? "" : " disabled"}>Дальше</button></div>`);
   host.querySelector("[data-local-archive-previous]")?.addEventListener("click", () => {
@@ -1706,7 +1735,7 @@ async function renderLocalArchiveList(reset = false) {
     const result = await database.restoreLocalArchive(button.dataset.restoreLocalArchive);
     state.analytics = null;
     await refreshDatabaseState();
-    $("#localArchiveStatus").textContent = `Архив объединён с базой. Final: ${result.snapshotCount}; активный: ${result.activeSnapshotId || "не выбран"}.`;
+    $("#localArchiveStatus").textContent = `Архив объединён с базой. снимок объединения: ${result.snapshotCount}; активный: ${result.activeSnapshotId || "не выбран"}.`;
   })().catch(showError)));
   host.querySelectorAll("[data-export-local-archive]").forEach((button) => button.addEventListener("click", () => (async () => {
     const archive = archives.find((item) => item.id === button.dataset.exportLocalArchive);
@@ -1748,12 +1777,12 @@ async function renderLegacyAutosaveRestoreList() {
     host.innerHTML = '<p class="muted">Импортированные автосохранения не найдены.</p>';
     return;
   }
-  host.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>Слот</th><th>Сохранено</th><th>Final</th><th>Действие</th></tr></thead><tbody>${page.rows.map((record) => {
+  host.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>Слот</th><th>Сохранено</th><th>снимок объединения</th><th>Действие</th></tr></thead><tbody>${page.rows.map((record) => {
     const value = record.value && typeof record.value === "object" ? record.value : {};
     const slot = String(record.key || "").slice("legacyAutosave:".length);
     const snapshot = state.snapshotMetadata.find((item) => item.id === value.snapshotId && isFinalSnapshot(item));
-    const snapshotStatus = snapshot ? `${escapeHtml(snapshot.name || snapshot.id)} · ${Number(snapshot.deviceCount || 0).toLocaleString("ru-RU")} устройств` : "Связанный импортированный Final не найден";
-    const action = `<div class="action-row">${snapshot ? `<button class="button secondary" type="button" data-activate-legacy-autosave="${escapeHtml(record.key)}">Сделать Final активным</button>` : ""}<button class="button secondary" type="button" data-restore-legacy-autosave-settings="${escapeHtml(record.key)}">Восстановить настройки</button></div>`;
+    const snapshotStatus = snapshot ? `${escapeHtml(snapshot.name || snapshot.id)} · ${Number(snapshot.deviceCount || 0).toLocaleString("ru-RU")} устройств` : "Связанный импортированный снимок объединения не найден";
+    const action = `<div class="action-row">${snapshot ? `<button class="button secondary" type="button" data-activate-legacy-autosave="${escapeHtml(record.key)}">Сделать снимок объединения активным</button>` : ""}<button class="button secondary" type="button" data-restore-legacy-autosave-settings="${escapeHtml(record.key)}">Восстановить настройки</button></div>`;
     return `<tr><td>${escapeHtml(slot || "—")}</td><td>${escapeHtml(value.updatedAt ? new Date(value.updatedAt).toLocaleString("ru-RU") : "—")}</td><td>${snapshotStatus}</td><td>${action}</td></tr>`;
   }).join("")}</tbody></table></div><div class="pagination-controls"><button class="button secondary" type="button" data-legacy-autosave-page="previous"${pageIndex === 0 ? " disabled" : ""}>Назад</button><span class="muted">Страница ${pageIndex + 1} · ${page.rows.length} автосохранений</span><button class="button secondary" type="button" data-legacy-autosave-page="next"${!page.hasMore || !page.nextCursor ? " disabled" : ""}>Далее</button></div>`;
   host.querySelectorAll("[data-legacy-autosave-page]").forEach((button) => button.addEventListener("click", () => {
@@ -1771,12 +1800,12 @@ async function renderLegacyAutosaveRestoreList() {
     const record = page.rows.find((item) => item.key === button.dataset.activateLegacyAutosave);
     const snapshotId = record?.value?.snapshotId;
     const snapshot = state.snapshotMetadata.find((item) => item.id === snapshotId && isFinalSnapshot(item));
-    if (!snapshot) throw new Error("Связанный Final больше не доступен");
-    if (!globalThis.confirm(`Сделать Final «${snapshot.name || snapshot.id}» активным? Текущие снимки и история сохранятся. Исходные файлы и незавершённые строки старого рабочего пространства не восстанавливаются.`)) return;
+    if (!snapshot) throw new Error("Связанный снимок объединения больше не доступен");
+    if (!globalThis.confirm(`Сделать снимок объединения «${snapshot.name || snapshot.id}» активным? Текущие снимки и история сохранятся. Исходные файлы и незавершённые строки старого рабочего пространства не восстанавливаются.`)) return;
     await database.activateSnapshot(snapshot.id);
     state.analytics = null;
     await refreshDatabaseState();
-    $("#legacyAutosaveRestoreStatus").textContent = `Импортированный Final «${snapshot.name || snapshot.id}» активирован; существующие снимки и история сохранены.`;
+    $("#legacyAutosaveRestoreStatus").textContent = `Импортированный снимок объединения «${snapshot.name || snapshot.id}» активирован; существующие снимки и история сохранены.`;
   })().catch(showError)));
   host.querySelectorAll("[data-restore-legacy-autosave-settings]").forEach((button) => button.addEventListener("click", () => (async () => {
     const key = button.dataset.restoreLegacyAutosaveSettings;
@@ -1831,7 +1860,7 @@ async function renderLegacyAutosaveRestoreList() {
       await renderDeviceTable();
     }
     if (mergedSourceMappingPreferences) state.sourceMappingPreferences = mergedSourceMappingPreferences;
-    $("#legacyAutosaveRestoreStatus").textContent = `Настройки восстановлены: ${labels}. Результаты и Final не менялись.`;
+    $("#legacyAutosaveRestoreStatus").textContent = `Настройки восстановлены: ${labels}. Результаты и снимок объединения не менялись.`;
   })().catch(showError)));
 }
 
@@ -2489,7 +2518,7 @@ async function deleteDeviceHistory() {
   const current = state.deviceAnalytics;
   if (!current?.device?.id || !current.historyTotal) return;
   const count = Number(current.historyTotal);
-  if (!globalThis.confirm(`Удалить ${count.toLocaleString("ru-RU")} событий журнала этого устройства? Появления в Final, снимки Final и Inventory сохранятся.`)) return;
+  if (!globalThis.confirm(`Удалить ${count.toLocaleString("ru-RU")} событий журнала этого устройства? Появления в снимок объединения, снимки снимок объединения и Inventory сохранятся.`)) return;
   const deleted = await database.deleteDeviceHistoryEvents(current.device.id);
   if (state.deviceAnalytics !== current) return;
   const page = await database.historyPage(current.device.id, { limit: 100 });
@@ -2498,7 +2527,7 @@ async function deleteDeviceHistory() {
   if (state.deviceAnalytics !== current) return;
   state.deviceAnalytics = buildDeviceAnalytics(current.device, current.appearances, events, page);
   state.macHistoryCache.clear();
-  $("#detailsDialog [data-dialog-content]").innerHTML = `<p class="muted" role="status">Удалено событий журнала: ${deleted.toLocaleString("ru-RU")}. Final и Inventory сохранены.</p>${deviceAnalyticsContent(state.deviceAnalytics)}`;
+  $("#detailsDialog [data-dialog-content]").innerHTML = `<p class="muted" role="status">Удалено событий журнала: ${deleted.toLocaleString("ru-RU")}. снимок объединения и Inventory сохранены.</p>${deviceAnalyticsContent(state.deviceAnalytics)}`;
 }
 
 async function exportDeviceAnalytics() {
@@ -3284,7 +3313,7 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
         consumeDevices: true,
         onProgress: ({ phase, completedDevices = 0, totalDevices = 0, completed = 0, total = 0 }) => {
           if (phase === "history") progress(82 + (total ? completed / total : 1) * 4, `История: ${completed.toLocaleString("ru-RU")} / ${total.toLocaleString("ru-RU")} событий`, "Анализ одного файла");
-          else if (phase === "chunk" || phase === "complete") progress(86 + (totalDevices ? completedDevices / totalDevices : 1) * 13, `Сохранение Final: ${completedDevices.toLocaleString("ru-RU")} / ${totalDevices.toLocaleString("ru-RU")} устройств`, "Анализ одного файла");
+          else if (phase === "chunk" || phase === "complete") progress(86 + (totalDevices ? completedDevices / totalDevices : 1) * 13, `Сохранение снимок объединения: ${completedDevices.toLocaleString("ru-RU")} / ${totalDevices.toLocaleString("ru-RU")} устройств`, "Анализ одного файла");
         },
       });
     } finally {
@@ -3318,8 +3347,8 @@ async function runSingleFileAnalysisTask({ table, file, mapping, startedAt, revi
       $("#exportSingleCsvButton").disabled = false;
       $("#exportSingleJsonButton").disabled = false;
       const context = savedFinalSnapshot
-        ? `Final сохранён, но завершающий шаг не выполнен: ${error.message}`
-        : `Снимок Final не сохранён: ${error.message}`;
+        ? `снимок объединения сохранён, но завершающий шаг не выполнен: ${error.message}`
+        : `Снимок снимок объединения не сохранён: ${error.message}`;
       $("#singleAnalysisPersistenceStatus").textContent = `Полный результат анализа сохранён в истории и доступен для экспорта. ${context}`;
     } else {
       $("#singleAnalysisPersistenceStatus").textContent = `Результат показан, но не сохранён в истории: ${error.message}`;
@@ -3956,7 +3985,7 @@ function renderWorkspaceSourceHandleStatus(role, detail = "") {
       : "Постоянный доступ к файлу этим браузером не поддерживается; обычный выбор файла работает без изменений.");
 }
 
-async function readAndApplySourceFile(role, file, { restored = false, restoredFrom = "сохранённого Final", persisted = false, beforeApply = null } = {}) {
+async function readAndApplySourceFile(role, file, { restored = false, restoredFrom = "сохранённого снимка объединения", persisted = false, beforeApply = null } = {}) {
   clearError();
   progress(5, `Чтение ${file.name}`, "Импорт файла");
   const table = await readSourceTable(file);
@@ -4156,7 +4185,7 @@ async function readSourceTable(file, { sheetName = "" } = {}) {
     : readTable(file, { sheetName });
 }
 
-function setSourceTable(role, file, table, { restored = false, restoredFrom = "сохранённого Final" } = {}) {
+function setSourceTable(role, file, table, { restored = false, restoredFrom = "сохранённого снимка объединения" } = {}) {
   state.sourceFiles[role] = file;
   state.sourceTables[role] = table;
   const detected = detectMappingReport(table.headers, table.rows, role).mapping;
@@ -4237,7 +4266,7 @@ async function restoreOriginalSources(snapshotId, button) {
 
   button.disabled = true;
   clearError();
-  progress(5, "Подготовка исходных файлов из Final", "Восстановление исходников");
+  progress(5, "Подготовка исходных файлов из снимок объединения", "Восстановление исходников");
   try {
     const prepared = await prepareOriginalSourceRecovery(snapshotId, {
       database,
@@ -4408,7 +4437,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   const historicalAddressSummary = includeSwitchIpReport ? createHistoricalAddressDeviceSummaryAccumulator() : null;
   const appliedSmartroomSummary = includeSwitchIpReport ? createAppliedSmartroomMappingSummaryAccumulator() : null;
   const sourceKey = buildSourceKey({ strategy, files, mappings, sourceDigests });
-  progress(start + 0.96 * (end - start), "Атомарное сохранение Final", "Обогащение");
+  progress(start + 0.96 * (end - start), "Атомарное сохранение снимок объединения", "Обогащение");
   const finalDeviceCount = Number(result.deviceCount ?? result.devices.length);
   let historyPlan = null;
   let metadata;
@@ -4471,7 +4500,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     });
     result.diagnostics.historyComparison = historyPlan.historyComparison;
     metadata = await database.saveFinal({
-      name: name || `Final ${files.main.name}`,
+      name: name || `снимок объединения ${files.main.name}`,
       sourceKey,
       createdAt,
       processingTimeMs: Math.max(0, Math.round(performance.now() - processingStartedAt)),
@@ -4488,7 +4517,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
       originalFiles: Object.entries(files).filter(([, file]) => file).map(([role, file]) => ({ role, file })),
       signal: state.controller?.signal,
     }).catch(async (error) => {
-      error.batchStage = "атомарное сохранение Final";
+      error.batchStage = "атомарное сохранение снимок объединения";
       if (historicalSwitchChangeQueryId) await database.clearAnalyticsAggregateQuery(historicalSwitchChangeQueryId).catch(() => {});
       throw error;
     });
@@ -4504,7 +4533,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     result.historicalRoomIndex = null;
     result.importedSmartroomRoomIndex = null;
   }
-  sendAnalysisNotification("Объединение данных завершено", `Сохранён Final: ${finalDeviceCount.toLocaleString("ru-RU")} устройств.`, { snapshotId: metadata.id, fileName: Object.entries(files).filter(([, file]) => file).map(([role, file]) => role + ": " + file.name).join(", "), deviceCount: finalDeviceCount, processingTimeMs: metadata.processingTimeMs });
+  sendAnalysisNotification("Объединение данных завершено", `Сохранён снимок объединения: ${finalDeviceCount.toLocaleString("ru-RU")} устройств.`, { snapshotId: metadata.id, fileName: Object.entries(files).filter(([, file]) => file).map(([role, file]) => role + ": " + file.name).join(", "), deviceCount: finalDeviceCount, processingTimeMs: metadata.processingTimeMs });
   return { ...result, presentation, metadata, historicalSwitchChangeQueryId, historicalSwitchChangeTotal };
 }
 
@@ -4585,7 +4614,7 @@ function historicalAddressDetails(appliedCount, page) {
   const pager = page.total > page.limit
     ? `<div class="action-row"><span class="muted">Показано ${page.offset + 1}–${end} из ${page.total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-historical-address-offset="${Math.max(0, page.offset - page.limit)}" ${page.offset > 0 ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-historical-address-offset="${page.offset + page.limit}" ${end < page.total ? "" : "disabled"}>Дальше</button></div>`
     : "";
-  return `<div data-historical-address-details><details><summary>IP коммутатора → адрес по прошлым Final: применено ${appliedCount}, кандидатов ${page.total.toLocaleString("ru-RU")}</summary><div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>IP коммутатора</th><th>Решение</th><th>Адрес</th><th>Уверенность</th><th>Основания</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</details></div>`;
+  return `<div data-historical-address-details><details><summary>IP коммутатора → адрес по прошлым снимок объединения: применено ${appliedCount}, кандидатов ${page.total.toLocaleString("ru-RU")}</summary><div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>IP коммутатора</th><th>Решение</th><th>Адрес</th><th>Уверенность</th><th>Основания</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</details></div>`;
 }
 
 function bindHistoricalAddressPager(container, appliedCount, candidateIps) {
@@ -4632,7 +4661,7 @@ function historicalSmartroomDetails(index, appliedCount, offset = 0, expanded = 
   const pager = page.total > page.limit
     ? `<div class="action-row"><span class="muted">Показано ${page.offset + 1}–${end} из ${page.total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-historical-smartroom-page="${Math.max(0, page.offset - page.limit)}" ${page.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-historical-smartroom-page="${page.offset + page.limit}" ${page.hasNext ? "" : "disabled"}>Дальше</button></div>`
     : "";
-  return `<div data-historical-smartroom-details><details ${expanded ? "open" : ""}><summary>Smartroom ID → помещение по последнему успешному Final: применено ${appliedCount}, ID ${page.total.toLocaleString("ru-RU")}</summary><div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>Smartroom ID</th><th>Решение</th><th>Помещение</th><th>Источник Final</th><th>MAC примеры</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</details></div>`;
+  return `<div data-historical-smartroom-details><details ${expanded ? "open" : ""}><summary>Smartroom ID → помещение по последнему успешному снимок объединения: применено ${appliedCount}, ID ${page.total.toLocaleString("ru-RU")}</summary><div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>Smartroom ID</th><th>Решение</th><th>Помещение</th><th>Источник снимок объединения</th><th>MAC примеры</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</details></div>`;
 }
 
 function importedSmartroomDetails(index, appliedCount, offset = 0, expanded = false) {
@@ -4653,7 +4682,7 @@ function historicalSwitchChangeDetails(page) {
   if (!page.total) return "";
   const rows = page.rows.map((item) => `<tr><td>${escapeHtml(item.mac || item.id)}</td><td>${escapeHtml(item.previousIp)}</td><td>${escapeHtml(item.currentIp)}</td><td>${escapeHtml(item.deviceIp || "—")}</td><td>${escapeHtml(item.possibleIps.join(", ") || "—")}</td><td>${escapeHtml(item.identityConflicts.join(", ") || "—")}</td><td>${escapeHtml(item.lastSeen || "—")}</td></tr>`).join("");
   const pager = page.total > page.limit ? `<div class="action-row"><span class="muted">Показано ${page.offset + 1}–${Math.min(page.offset + page.rows.length, page.total)} из ${page.total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-switch-ip-change-offset="${Math.max(0, page.offset - page.limit)}" ${page.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-switch-ip-change-offset="${page.offset + page.limit}" ${page.hasNext ? "" : "disabled"}>Дальше</button></div>` : `<p class="muted">Устройств: ${page.total.toLocaleString("ru-RU")}</p>`;
-  return `<details open><summary>Изменения IP коммутатора по сохранённой истории: ${page.total.toLocaleString("ru-RU")}</summary><p class="notice">Сравнение выполнено с последним сохранённым состоянием устройства до записи этого Final. IP устройства и возможные IP из DDIO показаны отдельно; подсказки не меняют данные. Совпадения по Device ID, serial или MAC с другими конфликтующими сильными идентификаторами отмечены в последнем столбце.</p><div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>MAC</th><th>IP коммутатора ранее</th><th>IP коммутатора сейчас</th><th>IP устройства</th><th>Possible IPs (DDIO)</th><th>Несогласованные идентификаторы</th><th>Последнее наблюдение</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</details>`;
+  return `<details open><summary>Изменения IP коммутатора по сохранённой истории: ${page.total.toLocaleString("ru-RU")}</summary><p class="notice">Сравнение выполнено с последним сохранённым состоянием устройства до записи этого снимок объединения. IP устройства и возможные IP из DDIO показаны отдельно; подсказки не меняют данные. Совпадения по Device ID, serial или MAC с другими конфликтующими сильными идентификаторами отмечены в последнем столбце.</p><div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>MAC</th><th>IP коммутатора ранее</th><th>IP коммутатора сейчас</th><th>IP устройства</th><th>Possible IPs (DDIO)</th><th>Несогласованные идентификаторы</th><th>Последнее наблюдение</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</details>`;
 }
 
 async function loadSwitchIpChangeReportPage(host, offset) {
@@ -4701,7 +4730,7 @@ async function runEnrichment() {
       tables: state.sourceTables,
       mappings: state.mappings,
       files: state.sourceFiles,
-      name: `Final ${state.sourceFiles.main.name}`,
+      name: `снимок объединения ${state.sourceFiles.main.name}`,
       strategy,
       includeSwitchIpReport: true,
     });
@@ -4737,7 +4766,7 @@ async function runEnrichment() {
   let historicalAddressPage = null;
   try { historicalAddressPage = await loadHistoricalAddressDetailsPage(historicalAddressCandidates); }
   catch (error) { showError(error); }
-  $("#enrichmentSummary").innerHTML = `<h3>${result.metadata.reused ? "Этот набор файлов уже объединён" : "Final успешно сохранён"}</h3><p>Main raw: <strong>${result.diagnostics.counts.mainRaw}</strong> · Main unique: <strong>${result.diagnostics.counts.mainUnique}</strong> · после SmartRoom: <strong>${result.diagnostics.counts.afterSmartroom}</strong> · DDIO IP: <strong>${result.diagnostics.counts.ddioMatchedIp}</strong> · адрес из истории: <strong>${result.diagnostics.counts.historicalAddressFilled}</strong> · помещение по Smartroom ID из истории: <strong>${result.diagnostics.counts.historicalSmartroomRoomFilled}</strong> · Final: <strong>${result.diagnostics.counts.finalUnique}</strong></p><p>Автоопределение: производитель заполнен у <strong>${detectedVendors}</strong> устройств (OUI, текст или похожие MAC); модель — у <strong>${detectedModels}</strong> (локальная база, MAC5 или похожие MAC). Определение модели ограничено доступными локальными правилами и данными Final.</p><p>Несопоставленных: ${result.diagnostics.counts.unmatchedTotal ?? result.diagnostics.unmatched.length} (примеры ${result.diagnostics.unmatched.length}, пропущено ${result.diagnostics.counts.unmatchedTruncated || 0}) · конфликтов: ${result.diagnostics.counts.conflictsTotal ?? result.diagnostics.conflicts.length} (примеры ${result.diagnostics.conflicts.length}, пропущено ${result.diagnostics.counts.conflictsTruncated || 0}) · некорректных: ${result.diagnostics.counts.invalidTotal ?? result.diagnostics.invalid.length} (примеры ${result.diagnostics.invalid.length}, пропущено ${result.diagnostics.counts.invalidTruncated || 0})</p>${identityConflictDetails(result.diagnostics.conflicts, result.diagnostics.counts.identityConflictsTotal)}${finalHistoryComparisonDetails(result.diagnostics.historyComparison)}<div data-switch-ip-change-container>${historicalSwitchChangeDetails(switchIpChangePage)}</div>${historicalAddressDetails(appliedHistoricalAddressIps, historicalAddressPage)}${historicalSmartroomDetails(result.historicalRoomIndex, appliedSmartroomSummary.historicalCount)}${importedSmartroomDetails(result.importedSmartroomRoomIndex, appliedSmartroomSummary.importedCount)}`;
+  $("#enrichmentSummary").innerHTML = `<h3>${result.metadata.reused ? "Этот набор файлов уже объединён" : "Снимок объединения успешно сохранён"}</h3><p>Main raw: <strong>${result.diagnostics.counts.mainRaw}</strong> · Main unique: <strong>${result.diagnostics.counts.mainUnique}</strong> · после SmartRoom: <strong>${result.diagnostics.counts.afterSmartroom}</strong> · DDIO IP: <strong>${result.diagnostics.counts.ddioMatchedIp}</strong> · адрес из истории: <strong>${result.diagnostics.counts.historicalAddressFilled}</strong> · помещение по Smartroom ID из истории: <strong>${result.diagnostics.counts.historicalSmartroomRoomFilled}</strong> · снимок объединения: <strong>${result.diagnostics.counts.finalUnique}</strong></p><p>Автоопределение: производитель заполнен у <strong>${detectedVendors}</strong> устройств (OUI, текст или похожие MAC); модель — у <strong>${detectedModels}</strong> (локальная база, MAC5 или похожие MAC). Определение модели ограничено доступными локальными правилами и данными снимок объединения.</p><p>Несопоставленных: ${result.diagnostics.counts.unmatchedTotal ?? result.diagnostics.unmatched.length} (примеры ${result.diagnostics.unmatched.length}, пропущено ${result.diagnostics.counts.unmatchedTruncated || 0}) · конфликтов: ${result.diagnostics.counts.conflictsTotal ?? result.diagnostics.conflicts.length} (примеры ${result.diagnostics.conflicts.length}, пропущено ${result.diagnostics.counts.conflictsTruncated || 0}) · некорректных: ${result.diagnostics.counts.invalidTotal ?? result.diagnostics.invalid.length} (примеры ${result.diagnostics.invalid.length}, пропущено ${result.diagnostics.counts.invalidTruncated || 0})</p>${identityConflictDetails(result.diagnostics.conflicts, result.diagnostics.counts.identityConflictsTotal)}${finalHistoryComparisonDetails(result.diagnostics.historyComparison)}<div data-switch-ip-change-container>${historicalSwitchChangeDetails(switchIpChangePage)}</div>${historicalAddressDetails(appliedHistoricalAddressIps, historicalAddressPage)}${historicalSmartroomDetails(result.historicalRoomIndex, appliedSmartroomSummary.historicalCount)}${importedSmartroomDetails(result.importedSmartroomRoomIndex, appliedSmartroomSummary.importedCount)}`;
   const rekeyedIds = Number(result.diagnostics.counts.duplicateInternalIdsRekeyed) || 0;
   if (rekeyedIds) {
     const note = document.createElement("p");
@@ -4759,7 +4788,7 @@ async function runEnrichment() {
     (offset) => importedSmartroomDetails(result.importedSmartroomRoomIndex, appliedSmartroomSummary.importedCount, offset, true),
   );
   await refreshDatabaseState();
-  finishProgress("Final сохранён");
+  finishProgress("снимок объединения сохранён");
 }
 
 function dashboardFilterSettingsFromControls() {
@@ -4782,14 +4811,19 @@ function syncDashboardFilterControls(filters = state.analyticsDashboardSettings.
 function selectDashboardKpiStatus(key, analytics = state.analytics) {
   const status = dashboardStatusForKpi(key);
   if (!status || !analytics?.comparison) return;
+  const requestId = (state.dashboardKpiRequest || 0) + 1;
+  state.dashboardKpiRequest = requestId;
   const filters = { ...dashboardFilterSettingsFromControls(), status };
   $("#analyticsDashboardStatus").value = status;
   return saveAnalyticsDashboardSettings({ ...state.analyticsDashboardSettings, filters }).then(async () => {
-    if (state.analytics !== analytics) return;
-    if (key === "modified") await showAnalyticsModificationPage(analytics, 0, false, true);
-    if (key === "absent") await showAnalyticsAbsencePage(analytics, 0, true);
-    if (key === "unchanged") await renderAnalyticsUnchangedPage(analytics, 0, true);
-    return renderAnalytics(true);
+    if (state.dashboardKpiRequest !== requestId) return null;
+    await renderAnalytics(true);
+    const selected = state.analytics;
+    if (state.dashboardKpiRequest !== requestId || !selected || selected.dashboardFilters?.status !== status) return null;
+    if (key === "modified") await showAnalyticsModificationPage(selected, 0, false, true);
+    if (key === "absent") await showAnalyticsAbsencePage(selected, 0, true);
+    if (key === "unchanged") await renderAnalyticsUnchangedPage(selected, 0, true);
+    return selected;
   }).catch(showError);
 }
 
@@ -4801,7 +4835,7 @@ async function showDashboardAggregateDialog(key, analytics) {
   }
   if (!analytics) return;
   const dialog = $("#detailsDialog");
-  dialog.querySelector("[data-dialog-title]").textContent = field === "manufacturer" ? "Производители выбранного Final" : "Помещения выбранного Final";
+  dialog.querySelector("[data-dialog-title]").textContent = field === "manufacturer" ? "Производители выбранного снимка объединения" : "Помещения выбранного снимка объединения";
   dialog.querySelector("[data-dialog-content]").innerHTML = '<p class="muted" role="status">Рассчитываю полный список…</p>';
   if (!dialog.open) dialog.showModal();
   let attempts = 0;
@@ -4869,12 +4903,12 @@ async function showDashboardFleetDialog(analytics) {
   const dialog = $("#detailsDialog");
   const content = dialog.querySelector("[data-dialog-content]");
   const showContent = (value) => {
-    dialog.querySelector("[data-dialog-title]").textContent = "Динамика устройств по Final";
+    dialog.querySelector("[data-dialog-title]").textContent = "Динамика устройств по снимок объединения";
     content.innerHTML = value;
     if (!dialog.open) dialog.showModal();
   };
   if (!analytics.detailsReady) {
-    showContent('<p class="muted" role="status">Считаю число уникальных MAC и динамику Final по полной истории…</p>');
+    showContent('<p class="muted" role="status">Считаю число уникальных MAC и динамику снимок объединения по полной истории…</p>');
     let attempts = 0;
     while (state.analytics && !state.analytics.detailsReady && attempts < 1800) {
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -4882,7 +4916,7 @@ async function showDashboardFleetDialog(analytics) {
     }
     analytics = state.analytics;
     if (!analytics?.detailsReady) {
-      showContent('<p class="empty">Историю Final не удалось рассчитать. Проверьте статус аналитики и повторите открытие.</p>');
+      showContent('<p class="empty">Историю снимок объединения не удалось рассчитать. Проверьте статус аналитики и повторите открытие.</p>');
       return;
     }
   }
@@ -4892,6 +4926,32 @@ async function showDashboardFleetDialog(analytics) {
   showContent(dashboardFleetDialogContent(fleet, { offset: 0 }));
 }
 
+async function showDashboardMainDevices(analytics, page = 1, open = true) {
+  const requestId = (state.analyticsMainPageRequest || 0) + 1;
+  state.analyticsMainPageRequest = requestId;
+  const snapshot = analytics?.dashboardFilters?.status === "missing" ? analytics.previous : analytics?.current;
+  if (!snapshot?.id) return;
+  const result = await database.loadSnapshotMainMacPage(snapshot.id, {
+    page, limit: 100, legacy: !Number.isSafeInteger(snapshot.mainUniqueMacs),
+    filters: analytics.dashboardFilters, positionMask: analytics.unassignedPositionMask,
+    positionValue: CURRENT_STATUS_MASK[analytics.dashboardFilters?.status] || 1,
+  });
+  if (state.analytics !== analytics || state.analyticsMainPageRequest !== requestId) return;
+  await projectConfirmedAddresses(result.devices);
+  if (state.analytics !== analytics || state.analyticsMainPageRequest !== requestId) return;
+  const pagination = `<div class="action-row"><span>Уникальных MAC · ${result.total.toLocaleString("ru-RU")} · страница ${result.page} из ${result.pageCount}</span><button class="button secondary" data-dashboard-main-page="${result.page - 1}" ${result.page <= 1 ? "disabled" : ""}>Назад</button><button class="button secondary" data-dashboard-main-page="${result.page + 1}" ${result.page >= result.pageCount ? "disabled" : ""}>Дальше</button></div>`;
+  const content = `<p>${escapeHtml(snapshot.name || "")}</p>${!Number.isSafeInteger(snapshot.mainUniqueMacs) ? '<p class="muted">Для старого снимка происхождение из Main не записано. Показаны уникальные MAC сохранённого результата.</p>' : ""}${pagination}${deviceTable(result.devices, { wrapAddresses: true })}${pagination}`;
+  if (open) showDialog($("#detailsDialog"), "Устройства основного файла", content);
+  else $("#detailsDialog [data-dialog-content]").innerHTML = content;
+}
+
+function dashboardDeviceCount(analytics) {
+  const filters = analytics.dashboardFilters || {};
+  return (!filters.status || filters.status === "all") && !filters.query && !filters.manufacturer && !filters.room
+    && Number.isSafeInteger(analytics.current?.mainUniqueMacs)
+    ? analytics.current.mainUniqueMacs : Number(analytics.dataset?.summary?.devices ?? analytics.dashboardFilteredDeviceCount ?? analytics.kpis.devices);
+}
+
 function renderDashboardFilterOptions(devices = [], suppliedOptions = null) {
   const options = suppliedOptions || dashboardFilterOptions(devices);
   const filters = state.analyticsDashboardSettings.filters;
@@ -4899,7 +4959,7 @@ function renderDashboardFilterOptions(devices = [], suppliedOptions = null) {
     const values = new Set(rows);
     if (selected && !values.has(selected)) values.add(selected);
     const ordered = [...values].sort((left, right) => left.localeCompare(right, "ru", { sensitivity: "base" }) || left.localeCompare(right));
-    return `<option value="">${allLabel}</option>${ordered.map((value) => `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(value)}${rows.includes(value) ? "" : " (нет в выбранном Final)"}</option>`).join("")}`;
+    return `<option value="">${allLabel}</option>${ordered.map((value) => `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(value)}${rows.includes(value) ? "" : " (нет в выбранном снимке объединения)"}</option>`).join("")}`;
   };
   $("#analyticsDashboardManufacturer").innerHTML = renderOptions(options.manufacturers, filters.manufacturer, "Все производители");
   $("#analyticsDashboardRoom").innerHTML = renderOptions(options.rooms, filters.room, "Все помещения");
@@ -4909,8 +4969,8 @@ function renderSnapshotSelectors() {
   const items = state.snapshotMetadata.map((snapshot) => ({ value: snapshot.id, label: `${snapshot.name} · ${snapshot.deviceCount}` }));
   const defaults = defaultSnapshotSelection(state.snapshotMetadata, { snapshotsAscending: true });
   const manual = state.pinnedDashboardPair;
-  renderSelect($("#baseSnapshotSelect"), items, items.some(({ value }) => value === manual?.base) ? manual.base : defaults.baseId, "Нет базового Final");
-  renderSelect($("#currentSnapshotSelect"), items, items.some(({ value }) => value === manual?.current) ? manual.current : defaults.currentId, "Нет текущего Final");
+  renderSelect($("#baseSnapshotSelect"), items, items.some(({ value }) => value === manual?.base) ? manual.base : defaults.baseId, "Нет базового снимка объединения");
+  renderSelect($("#currentSnapshotSelect"), items, items.some(({ value }) => value === manual?.current) ? manual.current : defaults.currentId, "Нет текущего снимка объединения");
   $("#dashboardComparisonMode").value = state.analyticsDashboardSettings.comparisonMode || "snapshots";
   $("#dashboardComparisonDateFrom").value = state.analyticsDashboardSettings.comparisonDateFrom || "";
   $("#dashboardComparisonDateTo").value = state.analyticsDashboardSettings.comparisonDateTo || "";
@@ -4953,7 +5013,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
   const loading = $("#analyticsLoadingStatus");
   const stage = (message) => { if (loading && state.analyticsRequests.isCurrent(revision)) loading.textContent = message; };
   if (!state.analyticsRequests.isCurrent(revision)) return null;
-  stage("Подготовка истории выбранных Final…");
+  stage("Подготовка истории выбранных снимков объединения…");
   const historyFilters = {
     query: analytics.dashboardFilters?.query || "",
     manufacturer: analytics.dashboardFilters?.manufacturer || "",
@@ -4961,14 +5021,14 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
   };
   let history = force ? null : await database.loadSnapshotHistoryCache(historySignature, historyFilters);
   if (!history) {
-    stage("Агрегация истории Final по чанкам…");
+    stage("Агрегация истории снимков объединения по чанкам…");
     const visitHistoryChunks = async (snapshotId, visit, _snapshot, index) => {
-      progress(index / Math.max(1, metadata.length) * 90, "Обработка истории Final " + (index + 1) + " из " + metadata.length, "Аналитика");
+      progress(index / Math.max(1, metadata.length) * 90, "Обработка истории снимков объединения " + (index + 1) + " из " + metadata.length, "Аналитика");
       await database.forEachSnapshotChunk(snapshotId, visit, {
         onProgress: ({ phase, index: chunkIndex, chunkCount, visitedDevices, deviceCount }) => {
-          if (phase === "chunk-start") stage(`Чтение истории Final ${index + 1}/${metadata.length}, чанка ${chunkIndex + 1}/${chunkCount}: ${visitedDevices.toLocaleString("ru-RU")} из ${deviceCount.toLocaleString("ru-RU")}…`);
-          else if (phase === "chunk-result") stage(`Ответ IndexedDB для истории Final ${index + 1}/${metadata.length}, чанка ${chunkIndex + 1}/${chunkCount} получен; обрабатываю…`);
-          else if (phase === "chunk-ready") stage(`Обработка истории Final ${index + 1}/${metadata.length}, чанка ${chunkIndex + 1}/${chunkCount} (${visitedDevices.toLocaleString("ru-RU")} устройств)…`);
+          if (phase === "chunk-start") stage(`Чтение истории снимков объединения ${index + 1}/${metadata.length}, чанка ${chunkIndex + 1}/${chunkCount}: ${visitedDevices.toLocaleString("ru-RU")} из ${deviceCount.toLocaleString("ru-RU")}…`);
+          else if (phase === "chunk-result") stage(`Ответ IndexedDB для истории снимков объединения ${index + 1}/${metadata.length}, чанка ${chunkIndex + 1}/${chunkCount} получен; обрабатываю…`);
+          else if (phase === "chunk-ready") stage(`Обработка истории снимков объединения ${index + 1}/${metadata.length}, чанка ${chunkIndex + 1}/${chunkCount} (${visitedDevices.toLocaleString("ru-RU")} устройств)…`);
         },
       });
     };
@@ -4977,12 +5037,12 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       isCurrent: () => state.analyticsRequests.isCurrent(revision),
       filters: historyFilters,
       onProgress: ({ phase, snapshot, snapshotIndex, snapshotCount, deviceCount, chunkIndex, chunkCount, error }) => {
-        if (phase === "worker-start") stage(`Worker истории Final ${snapshotIndex + 1}/${snapshotCount}, чанк ${chunkIndex + 1}/${chunkCount}: обрабатывает ${deviceCount.toLocaleString("ru-RU")} устройств…`);
-        if (phase === "chunk-complete") stage(`История Final ${snapshotIndex + 1}/${snapshotCount}: прочитано ${deviceCount} устройств из блока «${snapshot.name || snapshot.id}»…`);
+        if (phase === "worker-start") stage(`Worker истории снимков объединения ${snapshotIndex + 1}/${snapshotCount}, чанк ${chunkIndex + 1}/${chunkCount}: обрабатывает ${deviceCount.toLocaleString("ru-RU")} устройств…`);
+        if (phase === "chunk-complete") stage(`История снимков объединения ${snapshotIndex + 1}/${snapshotCount}: прочитано ${deviceCount} устройств из блока «${snapshot.name || snapshot.id}»…`);
         else if (phase === "worker-error") stage(error);
-        else if (phase === "snapshot-complete") stage(`История Final: завершён снимок ${snapshotIndex + 1}/${snapshotCount} «${snapshot.name || snapshot.id}»…`);
-        else if (phase === "finish-start") stage(`Завершение истории и сводок для ${snapshotCount} Final…`);
-        else if (phase === "finish-complete") stage("История Final и сводки готовы…");
+        else if (phase === "snapshot-complete") stage(`История снимков объединения: завершён снимок ${snapshotIndex + 1}/${snapshotCount} «${snapshot.name || snapshot.id}»…`);
+        else if (phase === "finish-start") stage(`Завершение истории и сводок для ${snapshotCount} снимок объединения…`);
+        else if (phase === "finish-complete") stage("История снимков объединения и сводки готовы…");
       },
     });
     if (!state.analyticsRequests.isCurrent(revision)) return null;
@@ -4996,8 +5056,8 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
   const matchesDashboard = createDashboardDeviceMatcher(analytics.dashboardFilters || {});
   const datasetSnapshotId = dashboardStatus === "missing" ? analytics.previous?.id || "" : analytics.current?.id || "";
   const datasetCacheSnapshotId = `${datasetSnapshotId}:dashboard:${dashboardStatus}`;
-  const datasetCacheKey = `selected-final-dataset-v9:${JSON.stringify([analytics.comparisonPairSignature || analytics.dashboardFilters || {}, state.ipEnrichmentSettings.historicalAddress])}`;
-  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 9);
+  const datasetCacheKey = `selected-final-dataset-v10:${JSON.stringify([analytics.comparisonPairSignature || analytics.dashboardFilters || {}, state.ipEnrichmentSettings.historicalAddress])}`;
+  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 10);
   if (!state.analyticsRequests.isCurrent(revision)) return null;
   let dataset = cachedDataset?.snapshotId === datasetCacheSnapshotId ? cachedDataset.dataset : null;
   if (!dataset) {
@@ -5005,6 +5065,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
     const clusterQueryId = datasetSnapshotId ? `analytics-final-v2:${datasetCacheSnapshotId}:${JSON.stringify(analytics.dashboardFilters || {})}` : "";
     if (clusterQueryId) await database.clearAnalyticsAggregateQuery(clusterQueryId);
     const datasetCollector = createDatasetAnalyticsCollector({ includeTopologyDevices: false, includeTopologySummary: !clusterQueryId, includeClusters: !clusterQueryId, includeRankings: !clusterQueryId, countFinalRows: true, clusterFields });
+    const uniqueDevice = createUniqueAnalyticsDeviceFilter();
     let rowsProcessed = 0;
     const acceptStatusChunk = (chunk = [], startOffset = 0) => {
       if (dashboardStatus === "missing") return chunk.filter((_device, index) => missingPositionMask?.[startOffset + index] === 1);
@@ -5017,17 +5078,19 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       devices: datasetSnapshotId ? undefined : analytics.devices,
       visitChunks: (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit, {
         onProgress: ({ phase, index, chunkCount, visitedDevices, deviceCount }) => {
-          if (phase === "chunk-start") stage(`Чтение чанка ${index + 1}/${chunkCount} Final: ${visitedDevices.toLocaleString("ru-RU")} из ${deviceCount.toLocaleString("ru-RU")}…`);
+          if (phase === "chunk-start") stage(`Чтение чанка ${index + 1}/${chunkCount} снимка объединения: ${visitedDevices.toLocaleString("ru-RU")} из ${deviceCount.toLocaleString("ru-RU")}…`);
           else if (phase === "chunk-result") stage(`Ответ IndexedDB для чанка ${index + 1}/${chunkCount} получен; обрабатываю…`);
         },
       }),
       isCurrent: () => state.analyticsRequests.isCurrent(revision),
       accept: async (chunk, startOffset = 0) => {
-        const selectedChunk = acceptStatusChunk(chunk, startOffset).filter(matchesDashboard);
+        const sourceRows = acceptStatusChunk(chunk, startOffset).filter(matchesDashboard);
+        const selectedChunk = sourceRows.filter(uniqueDevice);
+        const pendingRowsProcessed = rowsProcessed + sourceRows.length;
+        rowsProcessed = pendingRowsProcessed;
         if (!selectedChunk.length) return;
         await projectConfirmedAddresses(selectedChunk);
         datasetCollector.accept(selectedChunk);
-        const pendingRowsProcessed = rowsProcessed + selectedChunk.length;
         if (clusterQueryId) {
           stage(`Сохранение агрегатов выбранного статуса: ${pendingRowsProcessed.toLocaleString("ru-RU")} из ${Number(analytics.dashboardFilteredDeviceCount ?? analytics.current?.deviceCount ?? 0).toLocaleString("ru-RU")} устройств…`);
           await database.mergeAnalyticsAggregateBatches(clusterQueryId, {
@@ -5045,14 +5108,17 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
     }
     stage("Завершение рейтингов, комнат и топологии…");
     dataset = datasetCollector.finish();
+    dataset.sourceRowCount = rowsProcessed;
     if (clusterQueryId) {
-      const metricNames = ["vendor", "model", "room", "smartroom", "switch", "occupancy-room"];
+      const metricNames = ["vendor", "model", "room", "smartroom", "switch", "occupancy-room", "unassigned-vendor", "unassigned-model"];
       const [page, ...metricResults] = await Promise.all([
         database.analyticsAggregatePage(clusterQueryId, "cluster", { limit: 50 }),
         ...metricNames.map(async (metric) => ({ metric, rows: await database.analyticsAggregateTop(clusterQueryId, metric, 50) })),
       ]);
       const pageItems = page.rows.map((row) => ({ ...row.data, id: row.value, count: row.count }));
       const tops = Object.fromEntries(metricResults.map(({ metric, rows }) => [metric, rows]));
+      dataset.unassignedVendors = tops["unassigned-vendor"].map((row) => ({ label: row.data?.label || row.value, value: row.count }));
+      dataset.unassignedModels = tops["unassigned-model"].map((row) => ({ label: row.data?.label || row.value, value: row.count }));
       const countMetrics = ["known-vendor", "model", "room-identity", "smartroom", "switch", "occupancy-room"];
       const counts = Object.fromEntries(await Promise.all(countMetrics.map(async (metric) => [metric, await database.analyticsAggregateCount(clusterQueryId, metric)])));
       dataset.clusters = {
@@ -5088,7 +5154,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       };
       stage("Сохранение рассчитанной сводки Dashboard…");
     }
-    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 9, {
+    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 10, {
       onProgress: ({ phase }) => {
         const labels = {
           started: "Сохранение сводки: открыта транзакция…",
@@ -5110,7 +5176,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
     dataset.clusters.nextCursor = page.nextCursor;
   }
   const expectedDevices = Number(analytics.dashboardFilteredDeviceCount ?? analytics.current?.deviceCount ?? analytics.devices?.length ?? 0);
-  if (dataset.summary.devices !== expectedDevices) throw new Error("Аналитика Final остановлена: число прочитанных устройств не совпало с метаданными снимка");
+  if (dataset.sourceRowCount !== expectedDevices) throw new Error("Аналитика снимка объединения остановлена: число прочитанных устройств не совпало с метаданными снимка");
   delete analytics.comparison.statusClassifier;
   return {
     weekly: history.weekly,
@@ -5365,9 +5431,9 @@ async function renderAnalytics(force = false) {
   const previousIndex = await ensureDashboardComparisonIndex(metadata, previousMetadata, () => state.analyticsRequests.isCurrent(revision), (progress) => {
     if (!state.analyticsRequests.isCurrent(revision)) return;
     if (progress.stage === "history-index") {
-      loadingStatus.textContent = `Подготовка истории сравнения · ${progress.processed} из ${progress.total}: ${progress.snapshot?.name || progress.snapshot?.id || "Final"}`;
+      loadingStatus.textContent = `Подготовка истории сравнения · ${progress.processed} из ${progress.total}: ${progress.snapshot?.name || progress.snapshot?.id || "снимок объединения"}`;
     } else if (progress.stage === "backfill-history") {
-      loadingStatus.textContent = `Восстановление baseline по истории · Final ${progress.snapshotIndex} из ${progress.snapshotCount} · ${progress.phase === "complete" ? "завершён" : "обработка"} · ${Number(progress.deviceCount).toLocaleString("ru-RU")} устройств`;
+      loadingStatus.textContent = `Восстановление baseline по истории · снимок объединения ${progress.snapshotIndex} из ${progress.snapshotCount} · ${progress.phase === "complete" ? "завершён" : "обработка"} · ${Number(progress.deviceCount).toLocaleString("ru-RU")} устройств`;
     } else if (progress.stage === "backfill-chunk") {
       loadingStatus.textContent = `Подготовка baseline · блок ${progress.processed} из ${progress.total} ${progress.phase === "complete" ? "готов" : "обрабатывается"}`;
     }
@@ -5387,8 +5453,8 @@ async function renderAnalytics(force = false) {
     (visit) => currentMetadata?.id
       ? database.forEachSnapshotChunk(currentMetadata.id, visit, {
         onProgress: ({ phase, index, chunkCount }) => {
-          if (phase === "chunk-start") loadingStatus.textContent = `Чтение текущего Final · блок ${index + 1} из ${chunkCount}`;
-          else if (phase === "chunk-ready") loadingStatus.textContent = `Обработка текущего Final · блок ${index + 1} из ${chunkCount}`;
+          if (phase === "chunk-start") loadingStatus.textContent = `Чтение текущего снимка объединения · блок ${index + 1} из ${chunkCount}`;
+          else if (phase === "chunk-ready") loadingStatus.textContent = `Обработка текущего снимка объединения · блок ${index + 1} из ${chunkCount}`;
         },
       })
       : Promise.resolve(current),
@@ -5476,7 +5542,7 @@ async function runDataQualityAnalysis() {
   if (!isEngineerActive()) throw new Error("Для проверки качества войдите в инженерный режим");
   const snapshotId = $("#currentSnapshotSelect").value || state.analytics?.current?.id || "";
   const snapshot = state.snapshotMetadata.find((item) => item.id === snapshotId);
-  if (!snapshot) throw new Error("Выберите Final для анализа качества данных");
+  if (!snapshot) throw new Error("Выберите снимок объединения для анализа качества данных");
   const button = $("#runDataQualityButton");
   const status = $("#dataQualityStatus");
   const output = $("#dataQualityReport");
@@ -5485,7 +5551,7 @@ async function runDataQualityAnalysis() {
   button.disabled = true;
   output.replaceChildren();
   try {
-    status.textContent = "Локальная проверка Final «" + (snapshot.name || snapshot.id) + "»…";
+    status.textContent = "Локальная проверка снимок объединения «" + (snapshot.name || snapshot.id) + "»…";
     await database.forEachSnapshotChunk(snapshot.id, (chunk) => {
       accumulator.accept(chunk);
       read += chunk.length;
@@ -5501,9 +5567,9 @@ async function runDataQualityAnalysis() {
       "<h4>Final: " + escapeHtml(snapshot.name || snapshot.id) + "</h4>",
       "<p>Оценка качества: <strong>" + report.score.toLocaleString("ru-RU") + " / 100 · " + report.grade + "</strong></p>",
       "<p>Устройств: <strong>" + report.summary.devices.toLocaleString("ru-RU") + "</strong> · повторные MAC: <strong>" + report.summary.duplicates.toLocaleString("ru-RU") + "</strong> · заполненность: <strong>" + report.summary.completeness.toLocaleString("ru-RU") + "%</strong> · источников: <strong>" + report.summary.sources.toLocaleString("ru-RU") + "</strong></p>",
-      report.issues.length ? "<h4>Обнаруженные проблемы</h4><ul>" + issueRows + "</ul>" : "<p class=\"notice\">" + (report.devices ? "Качество данных хорошее. Проблем не обнаружено." : "В выбранном Final нет устройств для проверки.") + "</p>",
+      report.issues.length ? "<h4>Обнаруженные проблемы</h4><ul>" + issueRows + "</ul>" : "<p class=\"notice\">" + (report.devices ? "Качество данных хорошее. Проблем не обнаружено." : "В выбранном снимке объединения нет устройств для проверки.") + "</p>",
       recommendations ? "<h4>Рекомендации</h4><ul>" + recommendations + "</ul>" : "",
-      coverageRows ? "<div class=\"table-scroll\"><table class=\"data-table\"><caption>Заполненность полей полного Final</caption><thead><tr><th>Поле</th><th>Заполнено</th><th>Доля</th></tr></thead><tbody>" + coverageRows + "</tbody></table></div>" : "",
+      coverageRows ? "<div class=\"table-scroll\"><table class=\"data-table\"><caption>Заполненность полей полного снимок объединения</caption><thead><tr><th>Поле</th><th>Заполнено</th><th>Доля</th></tr></thead><tbody>" + coverageRows + "</tbody></table></div>" : "",
     ];
     output.innerHTML = parts.join("");
     status.textContent = "Проверка завершена и сохранена · " + report.devices.toLocaleString("ru-RU") + " устройств · " + report.issues.length.toLocaleString("ru-RU") + " проблем · " + new Date(savedReport.createdAt).toLocaleString("ru-RU");
@@ -5537,7 +5603,7 @@ async function renderDataQualityHistory(offset = state.dataQualityHistoryOffset)
     return;
   }
   const rows = page.rows.map((record) => "<tr><td>" + escapeHtml(new Date(record.createdAt).toLocaleString("ru-RU")) + "</td><td>" + escapeHtml(record.snapshotName) + "</td><td>" + escapeHtml(record.score.toLocaleString("ru-RU") + " / 100") + "</td><td>" + escapeHtml(record.grade) + "</td><td>" + escapeHtml(record.report.summary?.devices?.toLocaleString("ru-RU") || "0") + "</td></tr>").join("");
-  host.innerHTML = "<table class=\"data-table\"><caption>Отчёты качества " + escapeHtml((page.offset + 1).toLocaleString("ru-RU")) + "–" + escapeHtml((page.offset + page.rows.length).toLocaleString("ru-RU")) + " из " + escapeHtml(page.total.toLocaleString("ru-RU")) + "</caption><thead><tr><th>Дата</th><th>Final</th><th>Оценка</th><th>Класс</th><th>Устройства</th></tr></thead><tbody>" + rows + "</tbody></table>";
+  host.innerHTML = "<table class=\"data-table\"><caption>Отчёты качества " + escapeHtml((page.offset + 1).toLocaleString("ru-RU")) + "–" + escapeHtml((page.offset + page.rows.length).toLocaleString("ru-RU")) + " из " + escapeHtml(page.total.toLocaleString("ru-RU")) + "</caption><thead><tr><th>Дата</th><th>снимок объединения</th><th>Оценка</th><th>Класс</th><th>Устройства</th></tr></thead><tbody>" + rows + "</tbody></table>";
 }
 
 async function renderTemporalStatistics(force = false) {
@@ -5583,7 +5649,7 @@ async function renderTemporalStatistics(force = false) {
     $("#temporalSummary").innerHTML = "";
     $("#temporalChart").hidden = true;
     $("#temporalTable").classList.add("empty");
-    $("#temporalTable").textContent = "Нет сохранённых Final.";
+    $("#temporalTable").textContent = `За последние ${rangeDays} дней снимков объединения нет. В истории ${state.snapshotMetadata.length} снимков. Выберите больший диапазон.`;
     $("#exportTemporalCsvButton").disabled = true;
     state.temporalStatistics = null;
     state.temporalStatisticsWindowSignature = windowSignature;
@@ -5592,7 +5658,7 @@ async function renderTemporalStatistics(force = false) {
   // Every calculation has a unique query ID and removes its own disk-backed
   // scratch records in finally. Scanning the entire temporal scratch prefix
   // here made an otherwise bounded render block behind unrelated stale sets.
-  temporalStage(`Временная статистика: подготовка ${snapshots.length} Final…`);
+  temporalStage(`Временная статистика: подготовка ${snapshots.length} снимок объединения…`);
   const accumulator = new TemporalStatisticsAccumulator(period, {
     deviceMatches: historyFilters.query || historyFilters.manufacturer || historyFilters.room
       ? createDashboardDeviceMatcher(historyFilters)
@@ -5610,8 +5676,8 @@ async function renderTemporalStatistics(force = false) {
   try {
     for (let index = 0; index < snapshots.length; index += 1) {
       const snapshot = snapshots[index];
-      temporalStage(`Временная статистика: чтение Final ${index + 1} из ${snapshots.length}…`);
-      progress(index / snapshots.length * 92, `Final ${index + 1} из ${snapshots.length}`, "Статистика по времени");
+      temporalStage(`Временная статистика: чтение снимок объединения ${index + 1} из ${snapshots.length}…`);
+      progress(index / snapshots.length * 92, `снимок объединения ${index + 1} из ${snapshots.length}`, "Статистика по времени");
       await accumulator.startSnapshot(snapshot);
       if (revision !== state.temporalRevision) return;
       const chunkCount = Math.max(1, Number(snapshot.chunkCount) || Math.ceil(Number(snapshot.deviceCount || 0) / 500));
@@ -5620,7 +5686,7 @@ async function renderTemporalStatistics(force = false) {
         await accumulator.observeChunk(devices);
         const chunkNumber = chunkIndex + 1;
         const percent = ((index + chunkNumber / chunkCount) / snapshots.length) * 92;
-        const detail = `Final ${index + 1} из ${snapshots.length}, блок ${chunkNumber} из ${chunkCount}`;
+        const detail = `снимок объединения ${index + 1} из ${snapshots.length}, блок ${chunkNumber} из ${chunkCount}`;
         progress(percent, detail, "Статистика по времени");
         if (temporalLoading && !temporalLoading.hidden && temporalLoading.textContent.startsWith("Временная статистика:")) {
           temporalLoading.textContent = `Временная статистика: ${detail} сохранён…`;
@@ -5628,7 +5694,7 @@ async function renderTemporalStatistics(force = false) {
         return true;
       }, {
         onProgress: ({ phase, index: chunkIndex, chunkCount, visitedDevices, deviceCount }) => {
-          if (phase === "chunk-start") temporalStage(`Временная статистика: чтение блока ${chunkIndex + 1} из ${chunkCount}, Final ${index + 1}/${snapshots.length} (${visitedDevices}/${deviceCount})…`);
+          if (phase === "chunk-start") temporalStage(`Временная статистика: чтение блока ${chunkIndex + 1} из ${chunkCount}, снимок объединения ${index + 1}/${snapshots.length} (${visitedDevices}/${deviceCount})…`);
           else if (phase === "chunk-result") temporalStage(`Временная статистика: блок ${chunkIndex + 1} получен; подготовка MAC…`);
           else if (phase === "chunk-ready") temporalStage(`Временная статистика: запись MAC блока ${chunkIndex + 1} из ${chunkCount}…`);
         },
@@ -5709,7 +5775,7 @@ async function loadIdentityDiagnosticsMarkup(analytics, offset = 0) {
   if (!expected) return "";
   const page = await loadDashboardComparisonPage(analytics, "identityDiagnostics", offset, 100);
   if (!page || state.analytics !== analytics) return "";
-  if (page.total !== expected) throw new Error("Число диагностик идентичности не совпало с точным сравнением выбранных Final");
+  if (page.total !== expected) throw new Error("Число диагностик идентичности не совпало с точным сравнением выбранных снимок объединения");
   return comparisonDiagnosticsPageContent(page);
 }
 
@@ -5791,7 +5857,7 @@ async function renderPeriodChangeCategory(category = state.comparisonChangeCateg
       const eventLabel = type === "added" ? "Добавлено" : type === "absent" ? "Отсутствует" : "Изменено";
       const detail = `${fieldLabel}: ${oldValue || "—"} → ${newValue || "—"}`;
       const identity = event.mac || event.device?.mac || event.deviceId || event.device?.id || "—";
-      return `<tr><td><span class="severity-badge severity-${severity}">${severity === "critical" ? "Критическое" : severity === "low" ? "Низкое" : "Другое"}</span></td><td>${eventLabel}</td><td>${escapeHtml(identity)}</td><td>${escapeHtml(event.device?.room || "—")}</td><td>${escapeHtml(detail)}</td><td>${escapeHtml(event.source || "История Final")}</td></tr>`;
+      return `<tr><td><span class="severity-badge severity-${severity}">${severity === "critical" ? "Критическое" : severity === "low" ? "Низкое" : "Другое"}</span></td><td>${eventLabel}</td><td>${escapeHtml(identity)}</td><td>${escapeHtml(event.device?.room || "—")}</td><td>${escapeHtml(detail)}</td><td>${escapeHtml(event.source || "История снимков объединения")}</td></tr>`;
     }).join("");
     const pageNumber = state.periodChangePage.previous.length + 1;
     const pager = page.total > 100 ? `<div class="action-row"><span class="muted">Страница ${pageNumber} · показано ${page.rows.length.toLocaleString("ru-RU")} из ${page.total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-period-change-page="previous" ${state.periodChangePage.previous.length ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-period-change-page="next" ${page.hasMore ? "" : "disabled"}>Дальше</button></div>` : `<p class="muted">Событий: ${page.total.toLocaleString("ru-RU")}</p>`;
@@ -5805,11 +5871,11 @@ async function renderPeriodChangeCategory(category = state.comparisonChangeCateg
 
 async function renderAnalyticsUnchangedPage(analytics = state.analytics, offset = 0, dialog = false) {
   if (!analytics?.comparison) return;
-  if (dialog) showDialog($("#detailsDialog"), "Без изменений", '<p class="muted" role="status">Сравнение выбранных Final…</p>');
+  if (dialog) showDialog($("#detailsDialog"), "Без изменений", '<p class="muted" role="status">Сравнение выбранных снимок объединения…</p>');
   const result = await loadDashboardUnchangedPage(analytics, offset, 100);
   if (!result || state.analytics !== analytics) return;
   const expected = Number(analytics.comparison.unchangedCount || 0);
-  if (result.total !== expected) throw new Error("Список без изменений не совпал со счётчиком выбранной пары Final");
+  if (result.total !== expected) throw new Error("Список без изменений не совпал со счётчиком выбранной пары снимок объединения");
   const rows = result.devices.map((device) => `<tr><td>${escapeHtml(device.mac || device.deviceId || device.serial || "—")}</td><td>${escapeHtml(device.manufacturer || "—")}</td><td>${escapeHtml(device.model || "—")}</td><td>${escapeHtml(device.room || "—")}</td><td>${escapeHtml(device.ip || "—")}</td></tr>`).join("");
   const pageAttribute = dialog ? "data-analytics-unchanged-page" : "data-unchanged-page";
   const pager = result.total > result.limit ? `<div class="action-row"><span class="muted">Показано ${Math.min(result.offset + result.devices.length, result.total).toLocaleString("ru-RU")} из ${result.total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" ${pageAttribute}="${Math.max(0, result.offset - result.limit)}" ${result.offset ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" ${pageAttribute}="${result.offset + result.limit}" ${result.hasNext ? "" : "disabled"}>Дальше</button></div>` : `<p class="muted">Устройств: ${result.total.toLocaleString("ru-RU")}</p>`;
@@ -5822,7 +5888,7 @@ async function renderAnalyticsModifiedDevicePage(analytics = state.analytics, of
   const result = await loadDashboardModifiedDevicePage(analytics, offset, 100);
   if (!result || state.analytics !== analytics) return;
   const expected = Number(analytics.comparison.modifiedDeviceCount || 0);
-  if (result.total !== expected) throw new Error("Список изменённых устройств не совпал со счётчиком выбранной пары Final");
+  if (result.total !== expected) throw new Error("Список изменённых устройств не совпал со счётчиком выбранной пары снимок объединения");
   const rows = result.devices.map((device) => `<tr><td>${escapeHtml(device.mac || device.deviceId || device.serial || device.id || "—")}</td><td>${escapeHtml(device.manufacturer || "—")}</td><td>${escapeHtml(device.model || "—")}</td><td>${escapeHtml(device.room || "—")}</td><td>${escapeHtml(device.ip || "—")}</td></tr>`).join("");
   const pager = result.total > result.limit ? `<div class="action-row"><span class="muted">Показано ${Math.min(result.offset + result.devices.length, result.total).toLocaleString("ru-RU")} из ${result.total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-modified-device-page="${Math.max(0, result.offset - result.limit)}" ${result.offset ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-modified-device-page="${result.offset + result.limit}" ${result.hasNext ? "" : "disabled"}>Дальше</button></div>` : `<p class="muted">Устройств: ${result.total.toLocaleString("ru-RU")}</p>`;
   const body = rows ? `<div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>MAC / ID</th><th>Производитель</th><th>Модель</th><th>Помещение</th><th>IP</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}` : '<p class="empty">Изменённых устройств нет.</p>';
@@ -5842,7 +5908,7 @@ async function renderAnalyticsStatusRoster(analytics = state.analytics, status =
     : status === "changed" ? Number(analytics.comparison.modifiedDeviceCount || 0)
       : status === "missing" ? Number(analytics.comparison.absentCount || 0)
         : Number(analytics.comparison.unchangedCount || 0);
-  if (result.total !== expected) throw new Error(`Список статуса «${status}» не совпал с точным сравнением выбранной пары Final`);
+  if (result.total !== expected) throw new Error(`Список статуса «${status}» не совпал с точным сравнением выбранной пары снимок объединения`);
   const labels = { all: "Все устройства", changed: "Изменённые устройства", missing: "Отсутствующие устройства", unchanged: "Без изменений" };
   const rows = result.devices.map((device) => `<tr><td>${escapeHtml(device.mac || device.deviceId || device.serial || device.id || "—")}</td><td>${escapeHtml(device.manufacturer || "—")}</td><td>${escapeHtml(device.model || "—")}</td><td>${escapeHtml(device.room || "—")}</td><td>${escapeHtml(device.ip || "—")}</td></tr>`).join("");
   const shownEnd = Math.min(result.offset + result.devices.length, result.total);
@@ -5865,7 +5931,7 @@ async function renderAnalyticsChangeCategories(comparison = state.analytics?.com
   if (["all", "critical", "modified"].includes(selected)) {
     const groupPage = await loadDashboardChangeGroupPage(analytics, selected, offset, 100);
     if (!groupPage || state.analytics !== analytics || state.comparisonChangeCategory !== selected) return;
-    if (selected === "modified" && groupPage.totalEvents !== counts.modified) throw new Error("Группы изменений не совпали с точным количеством событий выбранной пары Final");
+    if (selected === "modified" && groupPage.totalEvents !== counts.modified) throw new Error("Группы изменений не совпали с точным количеством событий выбранной пары снимок объединения");
     state.comparisonChangeOffset = groupPage.offset;
     const tabList = '<div class="change-category-tabs" role="tablist" aria-label="Категории изменений">' + CHANGE_CATEGORIES.map((key) =>
       '<button type="button" class="button secondary ' + (selected === key ? "active-filter" : "") + '" role="tab" aria-controls="analyticsChangeEventsPanel" aria-selected="' + (selected === key) + '" tabindex="' + (selected === key ? "0" : "-1") + '" data-change-category="' + key + '">' + CHANGE_CATEGORY_LABELS[key] + ' <strong>' + counts[key].toLocaleString("ru-RU") + "</strong></button>"
@@ -6001,7 +6067,7 @@ async function loadRoomAnomalySummaryPage(analytics, page) {
 
 async function loadRoomAnomalyPage(analytics, roomKey, page) {
   const snapshotId = analytics.current?.id;
-  if (!snapshotId) throw new Error("Не выбран текущий Final для загрузки состава помещения");
+  if (!snapshotId) throw new Error("Не выбран текущий снимок объединения для загрузки состава помещения");
   const current = state.analyticsRoomAnomalyPages[roomKey];
   if (current?.loading) return;
   state.analyticsRoomAnomalyPages[roomKey] = { ...current, loading: true };
@@ -6115,7 +6181,7 @@ async function loadRoomCoverageSummaryPage(analytics, page) {
 
 async function loadRoomCoveragePage(analytics, roomKey, page) {
   const snapshotId = analytics.current?.id;
-  if (!snapshotId) throw new Error("Не выбран текущий Final для состава помещения");
+  if (!snapshotId) throw new Error("Не выбран текущий снимок объединения для состава помещения");
   const current = state.analyticsRoomCoveragePages[roomKey];
   if (current?.loading) return;
   const requestId = (state.analyticsRoomCoverageRequests.get(roomKey) || 0) + 1;
@@ -6130,7 +6196,7 @@ async function loadRoomCoveragePage(analytics, roomKey, page) {
     const expected = state.analyticsRoomCoverageList?.analytics === analytics
       ? state.analyticsRoomCoverageList.rooms.find((room) => room.key === roomKey)?.rosterCount
       : analytics.roomChanges?.find((room) => room.key === roomKey)?.rosterCount;
-    if (result.total !== Number(expected || 0)) throw new Error("Число устройств помещения не совпало с выбранным Final");
+    if (result.total !== Number(expected || 0)) throw new Error("Число устройств помещения не совпало с выбранным снимком объединения");
     state.analyticsRoomCoveragePages[roomKey] = result;
     $("#detailsDialog [data-dialog-content]").innerHTML = render();
   } catch (error) {
@@ -6144,7 +6210,7 @@ async function loadRoomCoveragePage(analytics, roomKey, page) {
 async function showUnassignedAnalyticsPage(analytics, page = 1, open = false) {
   const status = analytics.dashboardFilters?.status;
   const snapshotId = (status === "missing" ? analytics.previous : analytics.current)?.id;
-  if (!snapshotId) throw new Error("Не выбран текущий Final для списка устройств без помещения");
+  if (!snapshotId) throw new Error("Не выбран текущий снимок объединения для списка устройств без помещения");
   const requestId = ++state.analyticsUnassignedDeviceRequest;
   const dialog = $("#detailsDialog");
   if (open) showDialog(dialog, "Устройства без помещения", '<p class="muted" role="status">Загрузка страницы устройств…</p>');
@@ -6159,8 +6225,8 @@ async function showUnassignedAnalyticsPage(analytics, page = 1, open = false) {
   dialog.querySelector("[data-dialog-content]").innerHTML = unassignedDevicesContent({
     devices: result.devices,
     count: result.total,
-    vendors: status === "all" ? analytics.unassignedVendors : [],
-    models: status === "all" ? analytics.unassignedModels : [],
+    vendors: analytics.dataset?.unassignedVendors || [],
+    models: analytics.dataset?.unassignedModels || [],
     page: result.page,
     pageCount: result.pageCount,
   });
@@ -6222,7 +6288,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
   }
   const metadata = state.snapshotMetadata;
   const baselineMetadata = metadata.find((snapshot) => snapshot.id === baselineId);
-  if (!baselineMetadata) throw new Error("Базовый Final выбранной пары не найден");
+  if (!baselineMetadata) throw new Error("Базовый снимок объединения выбранной пары не найден");
   const baselineIndex = metadata.indexOf(baselineMetadata);
   const supportsIndexedIdentityPage = ["identityDiagnostics", "absent", "added", "unchanged", "modifiedDevices", "modified", "modifiedGroups"].includes(kind);
   if (supportsIndexedIdentityPage) {
@@ -6258,7 +6324,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
     if (kind === "identityDiagnostics"
       && (result.ambiguousCount !== Number(analytics.comparison.ambiguousCount || 0)
         || result.identityConflictCount !== Number(analytics.comparison.identityConflictCount || 0))) {
-      throw new Error("Страница диагностики идентичности не совпала с точным сравнением выбранной пары Final");
+      throw new Error("Страница диагностики идентичности не совпала с точным сравнением выбранной пары снимок объединения");
     }
     return cachePage(result);
   }
@@ -6297,7 +6363,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
     if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
     if (result.ambiguousCount !== Number(analytics.comparison.ambiguousCount || 0)
       || result.identityConflictCount !== Number(analytics.comparison.identityConflictCount || 0)) {
-      throw new Error("Страница диагностики идентичности не совпала с точным сравнением выбранной пары Final");
+      throw new Error("Страница диагностики идентичности не совпала с точным сравнением выбранной пары снимок объединения");
     }
     return cachePage(result);
   }
@@ -6393,10 +6459,10 @@ async function loadDashboardChangeGroupPage(analytics, category, offset = 0, lim
       else if (part.kind === "absent") result = await loadDashboardAbsencePage(analytics, localOffset, requested, requestId);
       else result = await loadDashboardModificationGroupPage(analytics, localOffset, requested, part.options, requestId);
       if (!result || state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
-      if (result.total !== part.count) throw new Error("Страница групп устройств не совпала с точным сравнением выбранной пары Final");
+      if (result.total !== part.count) throw new Error("Страница групп устройств не совпала с точным сравнением выбранной пары снимок объединения");
       if (part.kind === "modifiedGroups") {
         const expectedEvents = category === "critical" ? Math.max(0, counts.critical - absentCount) : counts.modified;
-        if (result.totalEvents !== expectedEvents) throw new Error("Группы изменений не совпали с точным количеством событий выбранной пары Final");
+        if (result.totalEvents !== expectedEvents) throw new Error("Группы изменений не совпали с точным количеством событий выбранной пары снимок объединения");
         groups.push(...result.groups);
       } else {
         const type = part.kind === "added" ? "added" : "absent";
@@ -6420,11 +6486,11 @@ async function loadDashboardChangeGroupPage(analytics, category, offset = 0, lim
 
 async function showAnalyticsAbsencePage(analytics, offset = 0, open = true) {
   const dialog = $("#detailsDialog");
-  if (open) showDialog(dialog, "Отсутствующие устройства", '<p class="muted" role="status">Сравнение выбранных Final…</p>');
+  if (open) showDialog(dialog, "Отсутствующие устройства", '<p class="muted" role="status">Сравнение выбранных снимок объединения…</p>');
   const result = await loadDashboardAbsencePage(analytics, offset, 100);
   if (!result || state.analytics !== analytics) return;
   const expected = Number(analytics.comparison.absentCount ?? analytics.kpis.absent ?? 0);
-  if (result.total !== expected) throw new Error("Число отсутствующих устройств не совпало с точным сравнением выбранных Final");
+  if (result.total !== expected) throw new Error("Число отсутствующих устройств не совпало с точным сравнением выбранных снимок объединения");
   dialog.querySelector("[data-dialog-title]").textContent = "Отсутствующие устройства";
   dialog.querySelector("[data-dialog-content]").innerHTML = absentDevicesPageContent(result);
 }
@@ -6442,7 +6508,7 @@ function modifiedEventsContent(result, codecOnly = false) {
 async function showAnalyticsModificationPage(analytics, offset = 0, codecOnly = false, open = true) {
   const dialog = $("#detailsDialog");
   const title = codecOnly ? "Изменения кодеков" : "Изменённые устройства";
-  if (open) showDialog(dialog, title, '<p class="muted" role="status">Сравнение выбранных Final…</p>');
+  if (open) showDialog(dialog, title, '<p class="muted" role="status">Сравнение выбранных снимок объединения…</p>');
   if (!codecOnly) {
     const page = await loadDashboardChangeGroupPage(analytics, "modified", offset, 100);
     if (!page || state.analytics !== analytics) return;
@@ -6482,9 +6548,9 @@ function paintAnalyticsSummary(analytics) {
   $("#exportAnalyticsReportButton").disabled = true;
   drawFinalTotalsTrend($("#totalChart"), analytics.totals || []);
   renderKpis($("#analyticsKpis"), analytics.kpis, {
-    devices: () => {
-      selectDashboardKpiStatus("devices", analytics);
-      showDashboardFleetDialog(analytics).catch(showError);
+    devices: async () => {
+      const selected = await selectDashboardKpiStatus("devices", analytics);
+      if (selected) return showDashboardMainDevices(selected).catch(showError);
     },
     modified: () => selectDashboardKpiStatus("modified", analytics),
     absent: () => selectDashboardKpiStatus("absent", analytics),
@@ -6497,7 +6563,7 @@ function paintAnalyticsSummary(analytics) {
     switchAnomalyRooms: () => openRoomAnomalyDialog(analytics),
     codecChanges: () => showAnalyticsModificationPage(analytics, 0, true).catch(showError),
   }, activeDashboardWidgetKeys(), {
-    devices: Number(analytics.dashboardFilteredDeviceCount ?? analytics.kpis.devices).toLocaleString("ru-RU"),
+    devices: dashboardDeviceCount(analytics).toLocaleString("ru-RU"),
   });
   applyDashboardWidgetVisibility();
 }
@@ -6522,9 +6588,9 @@ function paintSelectedMainMacs(analytics) {
   const mainCount = analytics.current?.mainUniqueMacs;
   const legacyCount = analytics.detailsReady ? analytics.totals?.find((item) => item.id === analytics.current?.id)?.value : undefined;
   $("#analyticsHistoryKpis").innerHTML = [
-    ["Final в истории", state.snapshotMetadata.length],
-    ["Уникальных MAC в Main выбранного Final", mainCount],
-    ...(!Number.isInteger(mainCount) && Number.isInteger(legacyCount) ? [["Уникальных MAC в старом Final · число из Main не сохранено", legacyCount]] : []),
+    ["снимок объединения в истории", state.snapshotMetadata.length],
+    ["Уникальных MAC в Main выбранного снимка объединения", mainCount],
+    ...(!Number.isInteger(mainCount) && Number.isInteger(legacyCount) ? [["Уникальных MAC в старом снимок объединения · число из Main не сохранено", legacyCount]] : []),
   ].map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number.isInteger(value) ? value.toLocaleString("ru-RU") : "—"}</strong></article>`).join("");
 }
 
@@ -6532,9 +6598,9 @@ function paintAnalyticsDetails(analytics) {
   paintHistoryBackfill(analytics);
   paintSelectedMainMacs(analytics);
   renderKpis($("#analyticsKpis"), analytics.kpis, {
-    devices: () => {
-      selectDashboardKpiStatus("devices", analytics);
-      showDashboardFleetDialog(analytics).catch(showError);
+    devices: async () => {
+      const selected = await selectDashboardKpiStatus("devices", analytics);
+      if (selected) return showDashboardMainDevices(selected).catch(showError);
     },
     modified: () => selectDashboardKpiStatus("modified", analytics),
     absent: () => selectDashboardKpiStatus("absent", analytics),
@@ -6547,7 +6613,7 @@ function paintAnalyticsDetails(analytics) {
     switchAnomalyRooms: () => openRoomAnomalyDialog(analytics),
     codecChanges: () => showAnalyticsModificationPage(analytics, 0, true).catch(showError),
   }, activeDashboardWidgetKeys(), {
-    devices: Number(analytics.dashboardFilteredDeviceCount ?? analytics.kpis.devices).toLocaleString("ru-RU"),
+    devices: dashboardDeviceCount(analytics).toLocaleString("ru-RU"),
     manufacturers: Number(analytics.dataset?.summary?.uniqueVendors ?? analytics.kpis.manufacturers).toLocaleString("ru-RU"),
     rooms: Number(analytics.dataset?.roomOccupancy?.uniqueRooms ?? analytics.dataset?.summary?.uniqueRooms ?? analytics.kpis.rooms).toLocaleString("ru-RU"),
     withoutRoom: Number(analytics.dataset?.roomOccupancy?.unassignedDevices ?? analytics.kpis.withoutRoom).toLocaleString("ru-RU"),
@@ -6622,7 +6688,7 @@ function paintAnalyticsDetails(analytics) {
       try {
         const transitions = await collectPresenceTransitions(mac, state.snapshotMetadata, (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit), { filters: analytics.dashboardFilters || {}, snapshotsAscending: true });
         content.innerHTML = transitions.length
-          ? `<details open><summary>Переходы: ${transitions.length.toLocaleString("ru-RU")}</summary><ol>${transitions.map((item) => `<li><strong>${item.type === "absent" ? "Исчезновение" : "Возвращение"}</strong> · ${escapeHtml(item.date || "Дата не указана")} · ${escapeHtml(item.name || item.snapshotId || "Final")}</li>`).join("")}</ol></details>`
+          ? `<details open><summary>Переходы: ${transitions.length.toLocaleString("ru-RU")}</summary><button type="button" class="button secondary" data-open-mac-dialog="${escapeHtml(mac)}">История MAC</button><ol class="churn-transition-events">${transitions.map((item) => `<li><details><summary><strong>${item.type === "absent" ? "Исчезновение" : "Возвращение"}</strong> · ${escapeHtml(item.date || "Дата не указана")} · ${escapeHtml(item.name || item.snapshotId || "снимок объединения")}</summary><p>Последний снимок с MAC · ${escapeHtml(item.lastSeen?.name || item.lastSeen?.snapshotId || "")} · ${escapeHtml(item.lastSeen?.date || "")}</p><div class="churn-transition-context">${item.before ? `<section><h4>Последние известные данные</h4>${deviceTable([item.before], { wrapAddresses: true })}</section>` : ""}${item.after ? `<section><h4>Данные при возвращении</h4>${deviceTable([item.after], { wrapAddresses: true })}</section>` : ""}</div></details></li>`).join("")}</ol></details>`
           : '<p class="empty">Переходы не найдены для текущих фильтров.</p>';
         row.dataset.loaded = "true";
         row.hidden = false;
@@ -6843,7 +6909,7 @@ async function runPyqtClustering(analytics) {
   const button = $("#runPyqtClusteringButton");
   if (!snapshotId || !Number.isSafeInteger(deviceCount) || deviceCount < 3) {
     status.hidden = false;
-    status.textContent = "Для кластеризации нужны минимум три устройства в выбранном Final.";
+    status.textContent = "Для кластеризации нужны минимум три устройства в выбранном снимке объединения.";
     return;
   }
   pyqtClusteringController?.abort();
@@ -6865,7 +6931,7 @@ async function runPyqtClustering(analytics) {
     await database.forEachSnapshotChunk(snapshotId, (devices) => {
       if (!stillCurrent()) throw new DOMException("Анализ изменился", "AbortError");
       for (const device of devices) {
-        if (position >= deviceCount) throw new Error("Кластеризация остановлена: записей в Final больше метаданных");
+        if (position >= deviceCount) throw new Error("Кластеризация остановлена: записей в снимок объединения больше метаданных");
         writePyqtDeviceFeatures(device, features, position * 8);
         position += 1;
       }
@@ -6896,7 +6962,7 @@ async function runPyqtClustering(analytics) {
     const compacted = compactPyqtClusterLabels(result.labels);
     const clusters = Array.from({ length: compacted.clusterCount }, () => ({ count: 0, vendors: new Set(), rooms: new Set(), switches: new Set() }));
     position = 0;
-    status.textContent = "Сводка кластеров: повторное чтение выбранного Final…";
+    status.textContent = "Сводка кластеров: повторное чтение выбранного снимка объединения…";
     await database.forEachSnapshotChunk(snapshotId, (devices) => {
       if (!stillCurrent()) throw new DOMException("Анализ изменился", "AbortError");
       for (const device of devices) {
@@ -6939,7 +7005,7 @@ function paintHistoryBackfill(analytics) {
   const restored = Number(analytics.historyBackfill?.restoredFields || 0);
   const ambiguous = Number(analytics.historyBackfill?.ambiguousMatches || 0);
   status.hidden = !restored && !ambiguous;
-  status.textContent = status.hidden ? "" : `Базовый Final: восстановлено исторических значений ${restored.toLocaleString("ru-RU")}; неоднозначных совпадений оставлено без переноса: ${ambiguous.toLocaleString("ru-RU")}.`;
+  status.textContent = status.hidden ? "" : `Базовый снимок объединения: восстановлено исторических значений ${restored.toLocaleString("ru-RU")}; неоднозначных совпадений оставлено без переноса: ${ambiguous.toLocaleString("ru-RU")}.`;
 }
 
 async function renderMacOptions(query = $("#macHistorySearch").value) {
@@ -7193,7 +7259,7 @@ async function openMacHistory({ includeOptionalHostHistory = false, dialogMac = 
     const timestamp = Number.isFinite(parsed) ? parsed + 8_640_000_000_000_000 : 18_000_000_000_000_000;
     return `${String(timestamp).padStart(17, "0")}:${String(sequence).padStart(16, "0")}`;
   };
-  const isAppearance = (event) => !event.historyOnly && ["first", "present", "changed", "observation"].includes(event.status);
+  const isAppearance = (event) => !event.historyOnly && ["first", "present", "changed", "observation", "ambiguous"].includes(event.status);
   const timeline = createMacTimelineAccumulator(mac, {
     dedupeStableEventIds: false,
     retainEvents: false,
@@ -7248,10 +7314,12 @@ async function openMacHistory({ includeOptionalHostHistory = false, dialogMac = 
       pendingSnapshots.push({ id: metadata.id, data: { name: metadata.name || metadata.id, createdAt: metadata.createdAt || "" } });
       let matchCount = 0;
       let firstMatch = null;
+      const previewCandidates = [];
       await database.forEachSnapshotChunk(metadata.id, async (devices) => {
         for (const device of devices) {
           if (!deviceContainsNormalizedMac(device, mac)) continue;
           matchCount += 1;
+          if (previewCandidates.length < 10) previewCandidates.push(compactMacTimelineDevice(device));
           if (matchCount === 1) {
             firstMatch = device;
             continue;
@@ -7262,7 +7330,7 @@ async function openMacHistory({ includeOptionalHostHistory = false, dialogMac = 
           if (pendingCandidates.length >= 500) await flushTimelineBuffers();
         }
       });
-      timeline.addSnapshot(metadata, matchCount > 1 ? [] : firstMatch ? [firstMatch] : [], { matchCount, candidatesInScratch: matchCount > 1 });
+      timeline.addSnapshot(metadata, matchCount > 1 ? previewCandidates : firstMatch ? [firstMatch] : [], { matchCount, candidatesInScratch: matchCount > 1 });
       if (pendingRows.length >= 400 || pendingSnapshots.length >= 500 || pendingLookups.length >= 400 || pendingCandidates.length >= 400) await flushTimelineBuffers();
     }
     await flushTimelineBuffers();
@@ -7384,7 +7452,7 @@ function renderMacHistory(queryId, summary, { dialog, isCurrent }) {
   let appearanceRequest = 0;
   summaryHost.innerHTML = macTimelineSummaryStatsContent(summary);
   summaryHost.hidden = summary.eventCount === 0;
-  const pageSize = dialog ? 12 : 100;
+  const pageSize = 12;
   const renderTimelinePage = async () => {
     const requestId = ++timelineRequest;
     const page = await database.macTimelinePage(queryId, { page: timelinePage, limit: pageSize });
@@ -7580,7 +7648,7 @@ function previousLegacyObservationPage() {
 async function deleteSelectedLegacyObservations() {
   const ids = [...state.legacyObservationLog.selectedIds];
   if (!ids.length) return;
-  if (!globalThis.confirm(`Удалить ${ids.length.toLocaleString("ru-RU")} отмеченных импортированных записей? Снимки Final и события истории не затрагиваются.`)) return;
+  if (!globalThis.confirm(`Удалить ${ids.length.toLocaleString("ru-RU")} отмеченных импортированных записей? Снимки снимок объединения и события истории не затрагиваются.`)) return;
   const deleted = await database.deleteLegacyObservations(ids);
   state.legacyObservationLog.selectedIds.clear();
   const current = state.legacyObservationLog;
@@ -7592,7 +7660,7 @@ async function deleteFilteredLegacyObservations() {
   const current = state.legacyObservationLog;
   const total = Number(current.page?.total || 0);
   if (!total || !legacyObservationFiltersActive(current.filters)) return;
-  if (!globalThis.confirm(`Удалить все ${total.toLocaleString("ru-RU")} записи по активному фильтру? Данные Final и события History не затрагиваются.`)) return;
+  if (!globalThis.confirm(`Удалить все ${total.toLocaleString("ru-RU")} записи по активному фильтру? Данные снимок объединения и события History не затрагиваются.`)) return;
   const deleted = await database.deleteLegacyObservationsByFilters(current.filters);
   current.selectedIds.clear();
   await loadLegacyObservationLog({ filters: current.filters, cursor: null, previous: [] });
@@ -7602,7 +7670,7 @@ async function deleteFilteredLegacyObservations() {
 async function deleteSelectedHistoryEvents() {
   const selected = [...state.historyLog.selectedIds];
   if (!selected.length) return;
-  if (!globalThis.confirm(`Удалить ${selected.length.toLocaleString("ru-RU")} отмеченных событий истории? Final и Inventory не удаляются.`)) return;
+  if (!globalThis.confirm(`Удалить ${selected.length.toLocaleString("ru-RU")} отмеченных событий истории? снимок объединения и Inventory не удаляются.`)) return;
   const ids = selected.map((id) => /^\d+$/.test(id) ? Number(id) : id);
   const deleted = await database.deleteHistoryEvents(ids);
   state.historyLog.selectedIds.clear();
@@ -7615,7 +7683,7 @@ async function deleteFilteredHistoryEvents() {
   const current = state.historyLog;
   const total = Number(current.page?.total || 0);
   if (!total) return;
-  if (!globalThis.confirm(`Удалить все ${total.toLocaleString("ru-RU")} событий по текущим фильтрам? Final и Inventory не удаляются.`)) return;
+  if (!globalThis.confirm(`Удалить все ${total.toLocaleString("ru-RU")} событий по текущим фильтрам? снимок объединения и Inventory не удаляются.`)) return;
   const deleted = await database.deleteHistoryEventsByFilters(current.filters);
   current.selectedIds.clear();
   await loadHistoryLog({ filters: current.filters, cursor: null, previous: [] });
@@ -8167,7 +8235,7 @@ async function showRoomTimeline(roomKey = "", room = {}) {
       if (isLatest) {
         latestObservation = {
           snapshot, devices: scanned.rosterRows,
-          comparison: scanned.counts ? roomTimelineComparisonPage(scanned.counts, scanned.rows, previousSnapshot?.name || "Final") : null,
+          comparison: scanned.counts ? roomTimelineComparisonPage(scanned.counts, scanned.rows, previousSnapshot?.name || "снимок объединения") : null,
           roster: { pageData: true, page: 1, total: scanned.deviceCount },
         };
       }
@@ -8180,7 +8248,7 @@ async function showRoomTimeline(roomKey = "", room = {}) {
   if (revision !== state.roomTimelineRevision) return;
   state.roomTimelineDiagnostics = ambiguousHistoryMatches;
   if (!latestObservation) {
-    timeline.textContent = "Нет сохранённых Final для хронологии.";
+    timeline.textContent = "Нет сохранённых снимок объединения для хронологии.";
     finishProgress("Нет данных для хронологии");
     return;
   }
@@ -8262,7 +8330,7 @@ async function loadRoomTimelineObservation(snapshotId) {
             snapshot,
             devices: countPass.rosterRows,
             comparison: countPass.counts
-              ? roomTimelineComparisonPage(countPass.counts, countPass.rows, previous?.snapshot.name || "Final", pages)
+              ? roomTimelineComparisonPage(countPass.counts, countPass.rows, previous?.snapshot.name || "снимок объединения", pages)
               : null,
             roster: { pageData: true, page: 1, total: countPass.deviceCount },
             ambiguousMatches,
@@ -8293,7 +8361,7 @@ async function loadRoomTimelineObservation(snapshotId) {
           throw new Error("Снимок помещения изменился во время загрузки страницы; повторите операцию");
         }
         const comparison = detailPass.counts
-          ? roomTimelineComparisonPage(detailPass.counts, detailPass.rows, previous?.snapshot.name || "Final", pages)
+          ? roomTimelineComparisonPage(detailPass.counts, detailPass.rows, previous?.snapshot.name || "снимок объединения", pages)
           : null;
         return {
           snapshot,
@@ -8338,11 +8406,11 @@ async function compareLatestRoomFinals() {
   if (!key) throw new Error("Выберите помещение или уточните поиск");
   const room = roomDevices().find((device) => locationKey(device) === key) || {};
   const snapshots = state.snapshotMetadata;
-  if (snapshots.length < 2) throw new Error("Для сравнения помещения нужны минимум два Final");
+  if (snapshots.length < 2) throw new Error("Для сравнения помещения нужны минимум два снимок объединения");
   state.roomPair = { key, room, baseSnapshot: snapshots.at(-2), currentSnapshot: snapshots.at(-1) };
   state.roomPairPage = 1;
   await renderRoomPairComparison();
-  finishProgress("Сравнение двух последних Final для помещения готово");
+  finishProgress("Сравнение двух последних снимок объединения для помещения готово");
 }
 
 async function loadRoomPairComparison(pair, requestedPage = 1) {
@@ -8452,7 +8520,7 @@ function refreshBatchValidation() {
     const failed = ["error", "cancelled"].includes(pair.status);
     element.className = `batch-validation ${problems.length || failed ? "error" : "ok"}`;
     element.textContent = problems.length ? problems.join("; ")
-        : ["completed", "reused"].includes(pair.status) ? pair.status === "reused" ? "Ранее сохранённый Final использован повторно" : "Final сохранён"
+        : ["completed", "reused"].includes(pair.status) ? pair.status === "reused" ? "Ранее сохранённый снимок объединения использован повторно" : "снимок объединения сохранён"
         : pair.status === "error" ? pair.errorMessage
           : pair.status === "cancelled" ? pair.errorMessage || "Обработка отменена"
           : pair.status === "processing" ? "Обрабатывается"
@@ -8469,7 +8537,7 @@ function renderBatchPreview() {
     return;
   }
   const unmatched = unmatchedBatchEntries(state.batch.pairs, state.batch.entries);
-  host.innerHTML = `<p class="notice"><strong>Принцип:</strong> каждый включённый Main создаёт один Final. SmartRoom/DDIO назначаются не более чем одному Main. Выберите одинаковую календарную дату либо ближайшую дату с допуском. Файлы без достоверной даты остаются неназначенными. Можно отключить цикл, переназначить источники и увидеть неназначенные файлы до запуска.</p>${unmatched.length ? `<p class="batch-validation error">Без пары (${unmatched.length}): ${unmatched.map((entry) => escapeHtml(`${entry.role}: ${batchEntryDisplayName(entry)}`)).join(" · ")}</p>` : ""}<div class="table-scroll"><table class="data-table batch-table"><thead><tr><th>Цикл</th><th>№</th><th>Дата</th><th>Main</th><th>SmartRoom</th><th>DDIO</th></tr></thead><tbody>${state.batch.pairs.map((pair, index) => `<tr><td><input type="checkbox" aria-label="Включить цикл ${index + 1}" data-batch-pair-enabled="${index}" ${pair.enabled !== false ? "checked" : ""}></td><td>${index + 1}</td><td>${escapeHtml(pair.date.date.slice(0, 10) || "Дата неизвестна")}</td><td>${escapeHtml(batchEntryDisplayName(pair.main))}</td><td>${batchSourceSelect(pair, index, "smartroom")}</td><td>${batchSourceSelect(pair, index, "ddio")}</td></tr><tr class="batch-details-row"><td colspan="6"><details ${index === 0 ? "open" : ""}><summary>Проверить и изменить сопоставление колонок</summary><p data-batch-problems="${index}"></p><div class="batch-mapping-grid">${batchMappingEditor(pair.main)}${batchMappingEditor(pair.smartroom)}${batchMappingEditor(pair.ddio)}</div><label class="batch-review"><input type="checkbox" data-batch-pair-reviewed="${index}" ${pair.reviewed ? "checked" : ""}>Я проверил файлы и mapping этой пары</label></details></td></tr>`).join("")}</tbody></table></div>`;
+  host.innerHTML = `<p class="notice"><strong>Принцип:</strong> каждый включённый Main создаёт один снимок объединения. SmartRoom/DDIO назначаются не более чем одному Main. Выберите одинаковую календарную дату либо ближайшую дату с допуском. Файлы без достоверной даты остаются неназначенными. Можно отключить цикл, переназначить источники и увидеть неназначенные файлы до запуска.</p>${unmatched.length ? `<p class="batch-validation error">Без пары (${unmatched.length}): ${unmatched.map((entry) => escapeHtml(`${entry.role}: ${batchEntryDisplayName(entry)}`)).join(" · ")}</p>` : ""}<div class="table-scroll"><table class="data-table batch-table"><thead><tr><th>Цикл</th><th>№</th><th>Дата</th><th>Main</th><th>SmartRoom</th><th>DDIO</th></tr></thead><tbody>${state.batch.pairs.map((pair, index) => `<tr><td><input type="checkbox" aria-label="Включить цикл ${index + 1}" data-batch-pair-enabled="${index}" ${pair.enabled !== false ? "checked" : ""}></td><td>${index + 1}</td><td>${escapeHtml(pair.date.date.slice(0, 10) || "Дата неизвестна")}</td><td>${escapeHtml(batchEntryDisplayName(pair.main))}</td><td>${batchSourceSelect(pair, index, "smartroom")}</td><td>${batchSourceSelect(pair, index, "ddio")}</td></tr><tr class="batch-details-row"><td colspan="6"><details ${index === 0 ? "open" : ""}><summary>Проверить и изменить сопоставление колонок</summary><p data-batch-problems="${index}"></p><div class="batch-mapping-grid">${batchMappingEditor(pair.main)}${batchMappingEditor(pair.smartroom)}${batchMappingEditor(pair.ddio)}</div><label class="batch-review"><input type="checkbox" data-batch-pair-reviewed="${index}" ${pair.reviewed ? "checked" : ""}>Я проверил файлы и mapping этой пары</label></details></td></tr>`).join("")}</tbody></table></div>`;
   host.querySelectorAll("[data-batch-pair-source]").forEach((select) => select.addEventListener("change", () => {
     reassignBatchSource(state.batch.pairs, state.batch.entries, Number(select.dataset.batchPairIndex), select.dataset.batchPairSource, select.value);
     renderBatchPreview();
@@ -8623,7 +8691,7 @@ async function runBatch(pairs = state.batch.pairs, strategy = $("input[name='str
       stage = "объединение Main, SmartRoom и DDIO";
       const start = index / pairs.length * 100;
       const end = (index + 1) / pairs.length * 100;
-      return await executeEnrichment({ tables, mappings, files, name: `Final ${pair.main.file.name}`, strategy, progressRange: [start, end] });
+      return await executeEnrichment({ tables, mappings, files, name: `снимок объединения ${pair.main.file.name}`, strategy, progressRange: [start, end] });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (error?.batchStage) throw error;
@@ -8651,10 +8719,10 @@ async function runBatch(pairs = state.batch.pairs, strategy = $("input[name='str
   await refreshDatabaseState();
   const stoppedMessage = result.stopped ? ` · остановлена после ошибки пары №${result.failedPairIndex}` : "";
   const cancelMessage = result.cancelled ? " · обработка отменена" : "";
-  finishProgress(`Очередь завершена: ${result.completed} Final сохранено${result.errors.length ? ` · ошибок: ${result.errors.length}` : ""}${stoppedMessage}${cancelMessage}`);
+  finishProgress(`Очередь завершена: ${result.completed} снимок объединения сохранено${result.errors.length ? ` · ошибок: ${result.errors.length}` : ""}${stoppedMessage}${cancelMessage}`);
   const queueErrors = result.errors.map(({ message }) => message);
   if (result.observerErrors.length) {
-    queueErrors.push(`Не удалось обновить статус очереди (${result.observerErrors.map(({ phase, pairIndex }) => `пара №${pairIndex}, ${phase}`).join("; ")}). Результаты сохранённых Final не затронуты.`);
+    queueErrors.push(`Не удалось обновить статус очереди (${result.observerErrors.map(({ phase, pairIndex }) => `пара №${pairIndex}, ${phase}`).join("; ")}). Результаты сохранённых снимок объединения не затронуты.`);
   }
   if (queueErrors.length) showError(queueErrors.join("\n"));
   return result;
@@ -8689,7 +8757,7 @@ function renderScheduledBatches() {
   list.innerHTML = schedules.map((schedule) => {
     const lastResult = schedule.lastStatus?.lastResult;
     const outcome = lastResult
-      ? `Последний запуск: Final ${lastResult.completed} · ошибок ${lastResult.errorCount}${lastResult.stopped ? ` · остановка после пары ${lastResult.failedPairIndex}` : ""}`
+      ? `Последний запуск: снимок объединения ${lastResult.completed} · ошибок ${lastResult.errorCount}${lastResult.stopped ? ` · остановка после пары ${lastResult.failedPairIndex}` : ""}`
       : schedule.lastStatus?.lastError ? `Ошибка: ${schedule.lastStatus.lastError.message || schedule.lastStatus.lastError}` : "Ожидает запуска";
     const nextAt = schedule.lastStatus?.nextAt ? ` · следующий запуск ${schedule.lastStatus.nextAt.toLocaleString("ru-RU")}` : "";
     const inactive = ["complete", "stopped"].includes(schedule.lastStatus?.phase);
@@ -8819,19 +8887,19 @@ async function exportDatabase() {
 async function uploadActiveFinalToOptionalHost() {
   const button = $("#optionalHostSnapshotUploadButton");
   const status = $("#optionalHostSnapshotUploadStatus");
-  if (!optionalHostDatabaseExportHref(globalThis.location)) throw new Error("Копирование Final доступно только через локальный optional host");
+  if (!optionalHostDatabaseExportHref(globalThis.location)) throw new Error("Копирование снимок объединения доступно только через локальный optional host");
   const metadata = await database.activeSnapshotMetadata();
-  if (!metadata) throw new Error("Нет целого активного Final для копирования");
+  if (!metadata) throw new Error("Нет целого активного снимка объединения для копирования");
   button.disabled = true;
-  status.textContent = `Потоковая передача Final «${metadata.name}»: ${Number(metadata.deviceCount).toLocaleString("ru-RU")} устройств…`;
+  status.textContent = `Потоковая передача снимок объединения «${metadata.name}»: ${Number(metadata.deviceCount).toLocaleString("ru-RU")} устройств…`;
   try {
     const result = await uploadFinalSnapshotToOptionalHost(metadata, database.iterateSnapshotDevices(metadata.id));
-    status.textContent = `Final «${metadata.name}» сохранён; передача событий History…`;
+    status.textContent = `снимок объединения «${metadata.name}» сохранён; передача событий History…`;
     const history = await uploadSnapshotHistoryToOptionalHost(
       metadata.id,
       database.iterateSnapshotHistoryEvents(metadata.id),
     );
-    const finalStatus = result.alreadyExists ? "Final уже скопирован без изменений" : "Final добавлен";
+    const finalStatus = result.alreadyExists ? "снимок объединения уже скопирован без изменений" : "снимок объединения добавлен";
     status.textContent = `${finalStatus}: ${Number(result.deviceCount).toLocaleString("ru-RU")} устройств · History: ${history.insertedCount.toLocaleString("ru-RU")} новых, ${history.duplicateCount.toLocaleString("ru-RU")} уже были в SQLite · SHA-256 ${result.signature}`;
     return { ...result, history };
   } finally {
@@ -8899,7 +8967,7 @@ async function renderOptionalHostSnapshots({ after = optionalHostSnapshotPage.af
   const list = $("#optionalHostSnapshotsList");
   const status = $("#optionalHostSnapshotsStatus");
   if (!list || !status) return null;
-  status.textContent = "Загрузка списка Final из локального optional host…";
+  status.textContent = "Загрузка списка снимок объединения из локального optional host…";
   try {
     const page = await listOptionalHostSnapshots({ after, limit: 50 });
     optionalHostSnapshotPage.after = after;
@@ -8910,20 +8978,20 @@ async function renderOptionalHostSnapshots({ after = optionalHostSnapshotPage.af
       const createdAt = snapshot.createdAt ? new Date(snapshot.createdAt) : null;
       const date = createdAt && Number.isFinite(createdAt.getTime()) ? createdAt.toLocaleString("ru-RU") : snapshot.createdAt || "—";
       const checked = optionalHostSnapshotPage.selected.has(snapshot.id) ? " checked" : "";
-      return `<tr><td><input type="checkbox" data-optional-host-snapshot-select="${escapeHtml(snapshot.id)}" aria-label="Выбрать Final ${escapeHtml(snapshot.name)}"${checked}></td><td>${escapeHtml(snapshot.name)}</td><td>${escapeHtml(date)}</td><td>${snapshot.deviceCount.toLocaleString("ru-RU")}</td><td>${escapeHtml(snapshot.source || "—")}</td><td><button class="button secondary" type="button" data-optional-host-snapshot-delete="${escapeHtml(snapshot.id)}" data-snapshot-name="${escapeHtml(snapshot.name)}">Удалить копию</button></td></tr>`;
+      return `<tr><td><input type="checkbox" data-optional-host-snapshot-select="${escapeHtml(snapshot.id)}" aria-label="Выбрать снимок объединения ${escapeHtml(snapshot.name)}"${checked}></td><td>${escapeHtml(snapshot.name)}</td><td>${escapeHtml(date)}</td><td>${snapshot.deviceCount.toLocaleString("ru-RU")}</td><td>${escapeHtml(snapshot.source || "—")}</td><td><button class="button secondary" type="button" data-optional-host-snapshot-delete="${escapeHtml(snapshot.id)}" data-snapshot-name="${escapeHtml(snapshot.name)}">Удалить копию</button></td></tr>`;
     }).join("");
     const previous = optionalHostSnapshotPage.previous.length > 0;
     const hasNext = typeof page.nextCursor === "string" && page.nextCursor.length > 0;
     const controls = previous || hasNext
       ? `<div class="action-row"><button class="button secondary" type="button" data-optional-host-snapshot-page="previous" ${previous ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-optional-host-snapshot-page="next" data-page-cursor="${escapeHtml(page.nextCursor || "")}" ${hasNext ? "" : "disabled"}>Дальше</button></div>`
       : "";
-    list.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th><input type="checkbox" data-optional-host-snapshot-select-page aria-label="Выбрать все Final на этой странице"></th><th>Final</th><th>Дата</th><th>Устройств</th><th>Источник</th><th>Действие</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Копий Final в SQLite optional host нет.</td></tr>'}</tbody></table></div><div class="action-row"><button class="button danger" type="button" data-optional-host-snapshot-delete-selected ${optionalHostSnapshotPage.selected.size ? "" : "disabled"}>Удалить отмеченные копии (${optionalHostSnapshotPage.selected.size.toLocaleString("ru-RU")})</button></div>${controls}`;
+    list.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th><input type="checkbox" data-optional-host-snapshot-select-page aria-label="Выбрать все снимки объединения на этой странице"></th><th>снимок объединения</th><th>Дата</th><th>Устройств</th><th>Источник</th><th>Действие</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Копий снимок объединения в SQLite optional host нет.</td></tr>'}</tbody></table></div><div class="action-row"><button class="button danger" type="button" data-optional-host-snapshot-delete-selected ${optionalHostSnapshotPage.selected.size ? "" : "disabled"}>Удалить отмеченные копии (${optionalHostSnapshotPage.selected.size.toLocaleString("ru-RU")})</button></div>${controls}`;
     updateOptionalHostSnapshotSelectionUi();
     const start = page.snapshots.length ? optionalHostSnapshotPage.previous.length * 50 + 1 : 0;
     const end = page.snapshots.length ? Math.min(start + page.snapshots.length - 1, page.total) : 0;
     status.textContent = page.total
       ? `Всего ${page.total.toLocaleString("ru-RU")} копий · эта страница ${start.toLocaleString("ru-RU")}–${end.toLocaleString("ru-RU")}`
-      : "Сохранённых Final-копий нет.";
+      : "Сохранённых снимок объединения-копий нет.";
     return page;
   } catch (error) {
     status.textContent = error.message || String(error);
@@ -8951,7 +9019,7 @@ async function deleteSelectedOptionalHostSnapshots(button) {
   const selected = optionalHostSnapshotPage.items.filter(({ id }) => optionalHostSnapshotPage.selected.has(id));
   if (!selected.length) return;
   const names = selected.map(({ name }) => `• ${name}`).join("\n");
-  if (!globalThis.confirm(`Удалить ${selected.length} отмеченных Final из SQLite optional host и их связанные History? Каждый Final удаляется отдельной транзакцией. Inventory, другие Final и данные IndexedDB сохранятся.\n\n${names}`)) return;
+  if (!globalThis.confirm(`Удалить ${selected.length} отмеченных снимок объединения из SQLite optional host и их связанные History? Каждый снимок объединения удаляется отдельной транзакцией. Inventory, другие снимок объединения и данные IndexedDB сохранятся.\n\n${names}`)) return;
   button.disabled = true;
   const status = $("#optionalHostSnapshotsStatus");
   try {
@@ -8964,7 +9032,7 @@ async function deleteSelectedOptionalHostSnapshots(button) {
     });
     status.textContent = failedNames.length
       ? `Удалено ${result.deletedIds.length} из ${selected.length}. Не удалены: ${failedNames.join("; ")}`
-      : `Удалены ${result.deletedIds.length} отмеченных Final и связанные события History. Inventory сохранён.`;
+      : `Удалены ${result.deletedIds.length} отмеченных снимок объединения и связанные события History. Inventory сохранён.`;
   } finally {
     button.disabled = optionalHostSnapshotPage.selected.size === 0;
   }
@@ -8973,13 +9041,13 @@ async function deleteSelectedOptionalHostSnapshots(button) {
 async function deleteOptionalHostSnapshotFromUi(button) {
   const snapshotId = button?.dataset.optionalHostSnapshotDelete || "";
   const name = button?.dataset.snapshotName || snapshotId;
-  if (!snapshotId || !globalThis.confirm(`Удалить копию Final «${name}» и связанную с ней History из SQLite optional host? Inventory, другие Final и данные IndexedDB сохранятся.`)) return;
+  if (!snapshotId || !globalThis.confirm(`Удалить копию снимок объединения «${name}» и связанную с ней History из SQLite optional host? Inventory, другие снимок объединения и данные IndexedDB сохранятся.`)) return;
   button.disabled = true;
   const status = $("#optionalHostSnapshotsStatus");
   try {
     const result = await deleteOptionalHostSnapshot(snapshotId);
     optionalHostSnapshotPage.selected.delete(snapshotId);
-    status.textContent = `Удалена копия «${name}» и ${result.deletedHistoryCount.toLocaleString("ru-RU")} связанных событий History. Inventory и остальные Final сохранены.`;
+    status.textContent = `Удалена копия «${name}» и ${result.deletedHistoryCount.toLocaleString("ru-RU")} связанных событий History. Inventory и остальные снимок объединения сохранены.`;
     await renderOptionalHostSnapshots();
   } catch (error) {
     status.textContent = error.message || String(error);
@@ -8990,7 +9058,7 @@ async function deleteOptionalHostSnapshotFromUi(button) {
 }
 
 async function exportReferenceArchive() {
-  progress(5, "Потоковая выгрузка Final, Inventory и истории", "Экспорт MAC Analyzer Pro");
+  progress(5, "Потоковая выгрузка снимок объединения, Inventory и истории", "Экспорт MAC Analyzer Pro");
   const archiveStream = database.exportReferenceArchiveStream();
   const filename = `mac-analyzer-${new Date().toISOString().slice(0, 10)}.macarchive.json`;
   const result = await downloadReadableStream(filename, archiveStream, "application/json", "Архив MAC Analyzer Pro");
@@ -9312,7 +9380,7 @@ function ouiRecords(table, columns = detectOuiColumns(table.headers)) {
   })).filter((item) => item.prefix && item.vendor);
 }
 
-async function ensureBundledOui() {
+async function ensureBundledOui({ reportProgress = true } = {}) {
   const registry = await loadBundledIeeeRegistry();
   renderIeeeCidCatalog(registry);
   const version = `${registry.metadata.generatedAt}:all-assignment-lengths-v1`;
@@ -9326,7 +9394,7 @@ async function ensureBundledOui() {
   const legacySeedMatches = previousVersion === LEGACY_OUI_SEED_VERSION && currentOuiSource !== "Встроенный IEEE OUI"
     ? legacyOuiSeedMatchMap()
     : null;
-  progress(2, "Первичная загрузка встроенного OUI", "Инициализация");
+  if (reportProgress) progress(2, "Первичная загрузка встроенного OUI", "Инициализация");
   let imported = 0;
   for (const records of ieeeOuiRecordBatches(registry, { batchSize: 500 })) {
     imported += await database.importOui(records, { overwriteSources, legacySeedMatches });
@@ -9351,19 +9419,19 @@ function renderSnapshotList() {
     return Number.isNaN(date.getTime()) ? "Без даты" : date.toLocaleString("ru-RU");
   };
   $("#snapshotList").innerHTML = result.rows.length
-    ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Выбрать</th><th>Дата</th><th>Final</th><th>Файлы-источники</th><th>Устройств</th><th>Совпадений</th><th>Время</th><th>Действие</th></tr></thead><tbody>${result.rows.map((snapshot) => {
+    ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Выбрать</th><th>Дата</th><th>снимок объединения</th><th>Файлы-источники</th><th>Устройств</th><th>Совпадений</th><th>Время</th><th>Действие</th></tr></thead><tbody>${result.rows.map((snapshot) => {
       const sourceRoles = (snapshot.originalFileRoles || []).filter((role) => ["main", "smartroom", "ddio"].includes(role));
       const sourceDownloads = sourceRoles.map((role) => `<button class="button secondary" type="button" data-download-original="${escapeHtml(snapshot.id)}" data-original-role="${escapeHtml(role)}">${escapeHtml(role.toUpperCase())}</button>`).join(" ");
       const restoreSources = isEngineerActive() && sourceRoles.length
         ? `<button class="button secondary" type="button" data-restore-originals="${escapeHtml(snapshot.id)}">Восстановить исходники в объединение</button>`
         : "";
-      return `<tr><td><input type="checkbox" aria-label="Выбрать Final ${escapeHtml(snapshot.name || snapshot.id)} для удаления" data-select-final="${escapeHtml(snapshot.id)}" ${current.selectedIds.has(snapshot.id) ? "checked" : ""}></td><td>${escapeHtml(formatDate(snapshot.createdAt))}</td><td>${escapeHtml(snapshot.name || snapshot.id)}</td><td>${escapeHtml(snapshotSourceNames(snapshot).join(", ") || "—")}</td><td>${Number(snapshot.deviceCount || 0).toLocaleString("ru-RU")}</td><td>${snapshot.matchingDeviceCount == null ? "—" : Number(snapshot.matchingDeviceCount).toLocaleString("ru-RU")}</td><td>${(Math.max(0, Number(snapshot.processingTimeMs || 0)) / 1000).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} с</td><td><button class="button secondary" type="button" data-open-final="${escapeHtml(snapshot.id)}">Открыть</button>${sourceDownloads ? `<div class="action-row">${sourceDownloads}</div>${restoreSources}` : ""}</td></tr>`;
+      return `<tr><td><input type="checkbox" aria-label="Выбрать снимок объединения ${escapeHtml(snapshot.name || snapshot.id)} для удаления" data-select-final="${escapeHtml(snapshot.id)}" ${current.selectedIds.has(snapshot.id) ? "checked" : ""}></td><td>${escapeHtml(formatDate(snapshot.createdAt))}</td><td>${escapeHtml(snapshot.name || snapshot.id)}</td><td>${escapeHtml(snapshotSourceNames(snapshot).join(", ") || "—")}</td><td>${Number(snapshot.deviceCount || 0).toLocaleString("ru-RU")}</td><td>${snapshot.matchingDeviceCount == null ? "—" : Number(snapshot.matchingDeviceCount).toLocaleString("ru-RU")}</td><td>${(Math.max(0, Number(snapshot.processingTimeMs || 0)) / 1000).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} с</td><td><button class="button secondary" type="button" data-open-final="${escapeHtml(snapshot.id)}">Открыть</button>${sourceDownloads ? `<div class="action-row">${sourceDownloads}</div>${restoreSources}` : ""}</td></tr>`;
     }).join("")}</tbody></table></div>`
     : '<p class="empty">По выбранным условиям успешных загрузок нет.</p>';
-  const scope = current.results === null ? "загрузок" : "совпавших Final";
+  const scope = current.results === null ? "загрузок" : "совпавших снимок объединения";
   $("#snapshotHistoryStatus").textContent = `${result.total.toLocaleString("ru-RU")} ${scope} · страница ${result.page} из ${result.pageCount}`;
   $("#deleteSelectedFinalsButton").disabled = !current.selectedIds.size;
-  $("#deleteSelectedFinalsButton").textContent = `Удалить отмеченные Final (${current.selectedIds.size})`;
+  $("#deleteSelectedFinalsButton").textContent = `Удалить отмеченные снимок объединения (${current.selectedIds.size})`;
   $("#clearFinalHistoryButton").disabled = state.snapshotMetadata.length === 0;
   $("#snapshotHistoryPreviousButton").disabled = !result.hasPrevious;
   $("#snapshotHistoryNextButton").disabled = !result.hasNext;
@@ -9372,7 +9440,7 @@ function renderSnapshotList() {
 async function deleteSelectedFinals() {
   const ids = [...state.uploadHistory.selectedIds];
   if (!ids.length) return;
-  if (!globalThis.confirm(`Удалить ${ids.length} отмеченных Final вместе с их историей, оригиналами файлов и аналитическими данными? Накопительный Inventory сохранится.`)) return;
+  if (!globalThis.confirm(`Удалить ${ids.length} отмеченных снимок объединения вместе с их историей, оригиналами файлов и аналитическими данными? Накопительный Inventory сохранится.`)) return;
   const result = await database.deleteSnapshots(ids);
   state.uploadHistory.selectedIds.clear();
   state.uploadHistory.results = null;
@@ -9380,12 +9448,12 @@ async function deleteSelectedFinals() {
   await refreshDatabaseState();
   await synchronizeDataDirectoryArchive();
   renderSnapshotList();
-  $("#snapshotHistoryStatus").textContent = `Удалено Final: ${result.deleted}. Inventory сохранён.`;
+  $("#snapshotHistoryStatus").textContent = `Удалено снимок объединения: ${result.deleted}. Inventory сохранён.`;
 }
 
 async function clearFinalHistory() {
   if (!state.snapshotMetadata.length) return;
-  if (!globalThis.confirm(`Удалить все ${state.snapshotMetadata.length} Final, их историю, исходные файлы и аналитические индексы? Inventory, пользовательские правила и настройки останутся.`)) return;
+  if (!globalThis.confirm(`Удалить все ${state.snapshotMetadata.length} снимок объединения, их историю, исходные файлы и аналитические индексы? Inventory, пользовательские правила и настройки останутся.`)) return;
   const result = await database.deleteFinalSnapshots();
   state.uploadHistory.selectedIds.clear();
   state.uploadHistory.results = null;
@@ -9393,7 +9461,7 @@ async function clearFinalHistory() {
   await refreshDatabaseState();
   await synchronizeDataDirectoryArchive();
   renderSnapshotList();
-  $("#snapshotHistoryStatus").textContent = `История Final очищена · удалено ${result.deleted.toLocaleString("ru-RU")}. Inventory, правила и настройки сохранены.`;
+  $("#snapshotHistoryStatus").textContent = `История снимков объединения очищена · удалено ${result.deleted.toLocaleString("ru-RU")}. Inventory, правила и настройки сохранены.`;
 }
 
 async function searchUploadHistory(values = state.uploadHistory) {
@@ -9464,21 +9532,21 @@ async function openFinalSnapshotPage(snapshotId, page = 1) {
   const result = await database.loadSnapshotPage(snapshotId, { page, limit: pageSize });
   state.snapshotDetail = { id: snapshotId, page: result.page };
   const metadata = result.metadata;
-  const content = `<p class="muted">${Number(result.total).toLocaleString("ru-RU")} устройств · ${escapeHtml(new Date(metadata.createdAt || "").toLocaleString("ru-RU"))} · ${escapeHtml(snapshotSourceNames(metadata).join(", ") || "источник не указан")}</p><p class="muted">Страница ${result.page} из ${result.pageCount}</p>${result.devices.length ? deviceTable(result.devices, { columnConfig: state.inventoryColumnConfig, rowNumberOffset: (result.page - 1) * pageSize }) : '<p class="empty">В этом Final нет устройств.</p>'}<div class="action-row"><button class="button secondary" type="button" data-final-detail-page="${Math.max(1, result.page - 1)}" ${result.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-final-detail-page="${Math.min(result.pageCount, result.page + 1)}" ${result.hasNext ? "" : "disabled"}>Дальше</button></div>`;
-  showDialog($("#detailsDialog"), `Final: ${metadata.name || metadata.id}`, content);
+  const content = `<p class="muted">${Number(result.total).toLocaleString("ru-RU")} устройств · ${escapeHtml(new Date(metadata.createdAt || "").toLocaleString("ru-RU"))} · ${escapeHtml(snapshotSourceNames(metadata).join(", ") || "источник не указан")}</p><p class="muted">Страница ${result.page} из ${result.pageCount}</p>${result.devices.length ? deviceTable(result.devices, { columnConfig: state.inventoryColumnConfig, rowNumberOffset: (result.page - 1) * pageSize }) : '<p class="empty">В этом снимке объединения нет устройств.</p>'}<div class="action-row"><button class="button secondary" type="button" data-final-detail-page="${Math.max(1, result.page - 1)}" ${result.hasPrevious ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-final-detail-page="${Math.min(result.pageCount, result.page + 1)}" ${result.hasNext ? "" : "disabled"}>Дальше</button></div>`;
+  showDialog($("#detailsDialog"), `снимок объединения: ${metadata.name || metadata.id}`, content);
 }
 
 function renderSavedFinalSearchResults(rows) {
   const container = $("#savedFinalSearchResults");
   if (!rows.length) {
-    container.innerHTML = '<p class="empty">В сохранённых Final совпадений не найдено.</p>';
+    container.innerHTML = '<p class="empty">В сохранённых снимок объединения совпадений не найдено.</p>';
     return;
   }
   const dateText = (value) => {
     const date = new Date(value || "");
     return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("ru-RU");
   };
-  container.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>MAC / ID</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Помещение</th><th>Адрес</th><th>Final</th><th>Дата</th></tr></thead><tbody>${rows.map((row) => `<tr><td><button class="link-button" type="button" data-saved-final-snapshot="${escapeHtml(row.snapshotId)}" data-saved-final-index="${row.deviceIndex}">${escapeHtml(row.macFormatted)}</button></td><td>${escapeHtml(row.manufacturer || "—")}</td><td>${escapeHtml(row.model || "—")}</td><td>${escapeHtml(row.ip || "—")}</td><td>${escapeHtml(row.room || "—")}</td><td>${escapeHtml(row.address || row.physicalAddress || "—")}</td><td>${escapeHtml(row.snapshotName)}</td><td>${escapeHtml(dateText(row.snapshotCreatedAt))}</td></tr>`).join("")}</tbody></table></div>`;
+  container.innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>MAC / ID</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Помещение</th><th>Адрес</th><th>снимок объединения</th><th>Дата</th></tr></thead><tbody>${rows.map((row) => `<tr><td><button class="link-button" type="button" data-saved-final-snapshot="${escapeHtml(row.snapshotId)}" data-saved-final-index="${row.deviceIndex}">${escapeHtml(row.macFormatted)}</button></td><td>${escapeHtml(row.manufacturer || "—")}</td><td>${escapeHtml(row.model || "—")}</td><td>${escapeHtml(row.ip || "—")}</td><td>${escapeHtml(row.room || "—")}</td><td>${escapeHtml(row.address || row.physicalAddress || "—")}</td><td>${escapeHtml(row.snapshotName)}</td><td>${escapeHtml(dateText(row.snapshotCreatedAt))}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 async function runSavedFinalSearch() {
@@ -9497,7 +9565,7 @@ async function runSavedFinalSearch() {
   savedFinalSearchController = controller;
   cancelButton.disabled = false;
   $("#savedFinalSearchResults").innerHTML = "";
-  status.textContent = `Поиск «${query}» по ${state.snapshotMetadata.length.toLocaleString("ru-RU")} сохранённым Final…`;
+  status.textContent = `Поиск «${query}» по ${state.snapshotMetadata.length.toLocaleString("ru-RU")} сохранённым снимок объединения…`;
   try {
     const result = await searchSavedFinalSnapshots(query, {
       snapshots: state.snapshotMetadata,
@@ -9506,15 +9574,15 @@ async function runSavedFinalSearch() {
       signal: controller.signal,
       onProgress: ({ snapshot, snapshots, scanned, matches }) => {
         if (savedFinalSearchController !== controller) return;
-        status.textContent = `Проверено Final: ${snapshot.toLocaleString("ru-RU")} из ${snapshots.toLocaleString("ru-RU")} · устройств: ${scanned.toLocaleString("ru-RU")} · найдено: ${matches.toLocaleString("ru-RU")}`;
+        status.textContent = `Проверено снимок объединения: ${snapshot.toLocaleString("ru-RU")} из ${snapshots.toLocaleString("ru-RU")} · устройств: ${scanned.toLocaleString("ru-RU")} · найдено: ${matches.toLocaleString("ru-RU")}`;
       },
     });
     if (savedFinalSearchController !== controller) return;
     renderSavedFinalSearchResults(result.rows);
-    status.textContent = `Найдено уникальных MAC: ${result.rows.length.toLocaleString("ru-RU")} · проверено устройств: ${result.scanned.toLocaleString("ru-RU")} · Final: ${result.snapshotsScanned.toLocaleString("ru-RU")}${result.truncated ? " · показаны первые 100, есть другие совпадения" : ""}.`;
+    status.textContent = `Найдено уникальных MAC: ${result.rows.length.toLocaleString("ru-RU")} · проверено устройств: ${result.scanned.toLocaleString("ru-RU")} · снимок объединения: ${result.snapshotsScanned.toLocaleString("ru-RU")}${result.truncated ? " · показаны первые 100, есть другие совпадения" : ""}.`;
   } catch (error) {
     if (savedFinalSearchController !== controller) return;
-    if (error?.name === "AbortError") status.textContent = "Поиск по сохранённым Final отменён.";
+    if (error?.name === "AbortError") status.textContent = "Поиск по сохранённым снимкам объединения отменён.";
     else {
       status.textContent = `Поиск не завершён: ${error?.message || error}`;
       showError(error);
@@ -9534,7 +9602,7 @@ function renderVendorModelHistory() {
   const next = $("#vendorModelHistoryNextButton");
   $("#exportVendorModelHistoryButton").disabled = !current.data || current.loading;
   if (!current.data) {
-    host.innerHTML = '<p class="empty">Постройте историю, чтобы просмотреть агрегаты по сохранённым Final и импортированным наблюдениям.</p>';
+    host.innerHTML = '<p class="empty">Постройте историю, чтобы просмотреть агрегаты по сохранённым снимкам объединения и импортированным наблюдениям.</p>';
     previous.disabled = true;
     next.disabled = true;
     $("#deleteImportedHistoryLoadsButton").hidden = true;
@@ -9545,8 +9613,8 @@ function renderVendorModelHistory() {
   const columns = current.kind === "loads"
     ? [["source", "Источник / файл"], ["records", "Устройств / записей"], ["newVendorsAdded", "Новых производителей"], ["newModelsAdded", "Новых моделей"], ["enrichedFromHistory", "Обогащено из истории"], ["vendors", "Производители"], ["models", "Модели"], ["lastSeen", "Последняя запись"], ["actions", "Действие"]]
     : current.kind === "models"
-    ? [["prefix", "MAC5"], ["model", "Модель"], ["occurrences", "Наблюдений"], ["snapshots", "Final"], ["importedObservations", "Импортировано"], ["sources", "Источники"], ["firstSeen", "Первое появление"], ["lastSeen", "Последнее появление"]]
-    : [["oui", "OUI"], ["vendor", "Производитель"], ["occurrences", "Наблюдений"], ["snapshots", "Final"], ["importedObservations", "Импортировано"], ["sources", "Источники"], ["firstSeen", "Первое появление"], ["lastSeen", "Последнее появление"]];
+    ? [["prefix", "MAC5"], ["model", "Модель"], ["occurrences", "Наблюдений"], ["snapshots", "снимок объединения"], ["importedObservations", "Импортировано"], ["sources", "Источники"], ["firstSeen", "Первое появление"], ["lastSeen", "Последнее появление"]]
+    : [["oui", "OUI"], ["vendor", "Производитель"], ["occurrences", "Наблюдений"], ["snapshots", "снимок объединения"], ["importedObservations", "Импортировано"], ["sources", "Источники"], ["firstSeen", "Первое появление"], ["lastSeen", "Последнее появление"]];
   const formatDate = (value) => {
     const date = new Date(value || "");
     return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("ru-RU");
@@ -9565,7 +9633,7 @@ function renderVendorModelHistory() {
     ? `<div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr>${columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${result.rows.map((row) => `<tr>${columns.map(([key]) => renderCell(row, key)).join("")}</tr>`).join("")}</tbody></table></div>`
     : '<p class="empty">По выбранным условиям записей нет.</p>';
   const stats = current.data.statistics;
-  $("#vendorModelHistoryStatus").textContent = `${stats.totalSnapshots.toLocaleString("ru-RU")} Final · ${Number(stats.importedObservations || 0).toLocaleString("ru-RU")} импортированных наблюдений · ${Number(stats.importedLoads || 0).toLocaleString("ru-RU")} импортированных загрузок · ${Number(stats.mappingRules || 0).toLocaleString("ru-RU")} правил · ${stats.loadRecords.toLocaleString("ru-RU")} источников загрузок · ${stats.ouiVendorRecords.toLocaleString("ru-RU")} OUI/производитель · ${stats.mac5ModelRecords.toLocaleString("ru-RU")} MAC5/модель · найдено ${result.total.toLocaleString("ru-RU")} · страница ${result.page} из ${result.pageCount}`;
+  $("#vendorModelHistoryStatus").textContent = `${stats.totalSnapshots.toLocaleString("ru-RU")} снимок объединения · ${Number(stats.importedObservations || 0).toLocaleString("ru-RU")} импортированных наблюдений · ${Number(stats.importedLoads || 0).toLocaleString("ru-RU")} импортированных загрузок · ${Number(stats.mappingRules || 0).toLocaleString("ru-RU")} правил · ${stats.loadRecords.toLocaleString("ru-RU")} источников загрузок · ${stats.ouiVendorRecords.toLocaleString("ru-RU")} OUI/производитель · ${stats.mac5ModelRecords.toLocaleString("ru-RU")} MAC5/модель · найдено ${result.total.toLocaleString("ru-RU")} · страница ${result.page} из ${result.pageCount}`;
   previous.disabled = !result.hasPrevious || current.loading;
   next.disabled = !result.hasNext || current.loading;
   $("#deleteImportedHistoryLoadsButton").hidden = current.kind !== "loads";
@@ -9575,7 +9643,7 @@ function renderVendorModelHistory() {
 async function deleteImportedHistoryLoad(id) {
   const current = state.vendorModelHistory;
   const load = current.data?.loads?.find((item) => item.importedLoadId === id);
-  if (!load || !globalThis.confirm(`Удалить импортированную загрузку «${load.source}» из истории? Final и события History не затрагиваются.`)) return;
+  if (!load || !globalThis.confirm(`Удалить импортированную загрузку «${load.source}» из истории? снимок объединения и события History не затрагиваются.`)) return;
   const deleted = await database.deleteLegacyObservations([id]);
   if (!deleted) throw new Error("Запись импорта уже отсутствует в локальной базе");
   await rebuildVendorModelHistory();
@@ -9584,7 +9652,7 @@ async function deleteImportedHistoryLoad(id) {
 
 async function deleteImportedHistoryLoads() {
   const count = Number(state.vendorModelHistory.data?.statistics?.importedLoads || 0);
-  if (!count || !globalThis.confirm(`Удалить все ${count.toLocaleString("ru-RU")} импортированные записи истории загрузок? Final, Inventory и события History не затрагиваются.`)) return;
+  if (!count || !globalThis.confirm(`Удалить все ${count.toLocaleString("ru-RU")} импортированные записи истории загрузок? снимок объединения, Inventory и события History не затрагиваются.`)) return;
   const deleted = await database.deleteLegacyObservationsByFilters({ kind: "history_loads" });
   await rebuildVendorModelHistory();
   $("#vendorModelHistoryStatus").textContent += ` · удалено загрузок: ${deleted.toLocaleString("ru-RU")}`;
@@ -9595,7 +9663,7 @@ async function rebuildVendorModelHistory() {
   if (current.loading) return;
   current.loading = true;
   $("#rebuildVendorModelHistoryButton").disabled = true;
-  $("#vendorModelHistoryStatus").textContent = `Обработка Final: 0 из ${state.snapshotMetadata.length}…`;
+  $("#vendorModelHistoryStatus").textContent = `Обработка снимок объединения: 0 из ${state.snapshotMetadata.length}…`;
   renderVendorModelHistory();
   let accumulator = null;
   try {
@@ -9608,7 +9676,7 @@ async function rebuildVendorModelHistory() {
       });
       accumulator.endSnapshot();
       processed += 1;
-      $("#vendorModelHistoryStatus").textContent = `Обработано Final: ${processed} из ${state.snapshotMetadata.length}…`;
+      $("#vendorModelHistoryStatus").textContent = `Обработано снимок объединения: ${processed} из ${state.snapshotMetadata.length}…`;
     }
     let importedRows = 0;
     for (const kind of ["vendor_model_history", "mac_history", "resolved_device_history"]) {
@@ -9673,7 +9741,7 @@ async function learnVendorModelRules() {
     sourceFilter: $("#vendorModelLearnSource").value,
   });
   button.disabled = true;
-  $("#vendorModelLearnStatus").textContent = `Чтение ${snapshots.length} Final из IndexedDB…`;
+  $("#vendorModelLearnStatus").textContent = `Чтение ${snapshots.length} снимок объединения из IndexedDB…`;
   try {
     let processed = 0;
     for (const snapshot of snapshots) {
@@ -9681,7 +9749,7 @@ async function learnVendorModelRules() {
         for (const device of devices) learner.add(device, snapshot);
       });
       processed += 1;
-      $("#vendorModelLearnStatus").textContent = `Обработано Final: ${processed} из ${snapshots.length}…`;
+      $("#vendorModelLearnStatus").textContent = `Обработано снимок объединения: ${processed} из ${snapshots.length}…`;
     }
     const suggestions = learner.result();
     const saved = await database.saveLearnedVendorModelRules(suggestions);
@@ -9694,7 +9762,7 @@ async function learnVendorModelRules() {
     } else {
       await synchronizeDataDirectoryArchive();
     }
-    $("#vendorModelLearnStatus").textContent = `Проверено устройств: ${suggestions.scannedDevices.toLocaleString("ru-RU")} · найдено правил: производителей ${suggestions.vendors.length}, моделей ${suggestions.models.length} · добавлено: производителей ${saved.vendors}, моделей ${saved.models} · активный Final дополнен: производителей ${applied.vendorsFilled}, моделей ${applied.modelsFilled}.`;
+    $("#vendorModelLearnStatus").textContent = `Проверено устройств: ${suggestions.scannedDevices.toLocaleString("ru-RU")} · найдено правил: производителей ${suggestions.vendors.length}, моделей ${suggestions.models.length} · добавлено: производителей ${saved.vendors}, моделей ${saved.models} · активный снимок объединения дополнен: производителей ${applied.vendorsFilled}, моделей ${applied.modelsFilled}.`;
     state.mac5Rules.cursor = null;
     state.mac5Rules.previous = [];
     await renderMac5RuleList();
@@ -9712,8 +9780,8 @@ function exportVendorModelHistory() {
   const columns = current.kind === "loads"
     ? [["source", "Источник / файл"], ["records", "Устройств / записей"], ["newVendorsAdded", "Новых производителей"], ["newModelsAdded", "Новых моделей"], ["enrichedFromHistory", "Обогащено из истории"], ["vendors", "Производители"], ["models", "Модели"], ["lastSeen", "Последняя запись"]]
     : current.kind === "models"
-    ? [["prefix", "MAC5"], ["model", "Модель"], ["occurrences", "Наблюдений"], ["snapshots", "Final"], ["importedObservations", "Импортировано"], ["sources", "Источники"], ["firstSeen", "Первое появление"], ["lastSeen", "Последнее появление"]]
-    : [["oui", "OUI"], ["vendor", "Производитель"], ["occurrences", "Наблюдений"], ["snapshots", "Final"], ["importedObservations", "Импортировано"], ["sources", "Источники"], ["firstSeen", "Первое появление"], ["lastSeen", "Последнее появление"]];
+    ? [["prefix", "MAC5"], ["model", "Модель"], ["occurrences", "Наблюдений"], ["snapshots", "снимок объединения"], ["importedObservations", "Импортировано"], ["sources", "Источники"], ["firstSeen", "Первое появление"], ["lastSeen", "Последнее появление"]]
+    : [["oui", "OUI"], ["vendor", "Производитель"], ["occurrences", "Наблюдений"], ["snapshots", "снимок объединения"], ["importedObservations", "Импортировано"], ["sources", "Источники"], ["firstSeen", "Первое появление"], ["lastSeen", "Последнее появление"]];
   const filename = `vendor-model-history-${current.kind}.csv`;
   const mime = "text/csv;charset=utf-8";
   const stream = readableTextStreamFromIterable(vendorModelHistoryCsvChunks(current.data, { kind: current.kind, query: current.query, columns }));
@@ -9774,7 +9842,7 @@ async function openModelPrefixAnalytics(model) {
         if (isFinalSnapshot(item) && !String(item.id).startsWith("legacy-sqlite-")) yield item;
       }
       if (!page.hasMore) return;
-      if (!page.nextCursor || page.nextCursor === afterId) throw new Error("Постраничное чтение Final для MAC5 не продвинуло курсор");
+      if (!page.nextCursor || page.nextCursor === afterId) throw new Error("Постраничное чтение снимок объединения для MAC5 не продвинуло курсор");
       afterId = page.nextCursor;
     }
   }());
@@ -9926,7 +9994,7 @@ async function exportAnalyticsDashboardPng() {
   context.fillText("MAC Analyzer Pro · Dashboard", 80, 60);
   context.fillStyle = colors.muted;
   context.font = "16px Segoe UI, sans-serif";
-  const snapshotLabel = state.analytics.current?.name || state.analytics.current?.id || "Текущий набор Final";
+  const snapshotLabel = state.analytics.current?.name || state.analytics.current?.id || "Текущий набор снимок объединения";
   context.fillText(`Снимок: ${snapshotLabel} · Экспорт ${new Date().toLocaleString("ru-RU")}`, 80, 92, 1840);
   const cardGap = 12;
   const cardWidth = (1840 - cardGap * 5) / 6;
@@ -9996,7 +10064,7 @@ async function exportAnalyticsDashboardHtml() {
 
 function exportActiveFinal(format) {
   const snapshot = state.activeSnapshot;
-  if (!snapshot) return Promise.reject(new Error("Нет активного Final"));
+  if (!snapshot) return Promise.reject(new Error("Нет активного снимка объединения"));
   const definitions = {
     csv: { filename: "final.csv", description: "CSV", extension: ".csv", mime: "text/csv;charset=utf-8", operation: "export_csv", stream: writeSnapshotCsv },
     xlsx: { filename: "final.xlsx", description: "Excel", extension: ".xlsx", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", operation: "export_xlsx" },
@@ -10081,6 +10149,20 @@ async function exportJsonFile(filename, valueOrFactory) {
 function bindEvents() {
   // Keep error recovery available even if a later UI binding fails during bootstrap.
   bindErrorBannerDismiss($("#errorBanner"));
+  $("#openFleetHistoryButton").addEventListener("click", () => showDashboardFleetDialog(state.analytics).catch(showError));
+  $("#includeArchivedSnapshotsButton").addEventListener("click", () => (async () => {
+    const button = $("#includeArchivedSnapshotsButton");
+    const status = $("#archiveAnalyticsStatus");
+    button.disabled = true;
+    status.textContent = "Проверка локальных архивов…";
+    try {
+      const result = await database.restoreLocalArchivesForAnalytics(({ archiveCount, name }) => {
+        status.textContent = `Архив ${archiveCount} · ${name}`;
+      });
+      await refreshDatabaseState({ synchronizeArchive: false });
+      status.textContent = `Учтено архивов · ${result.archiveCount}. Доступно снимков · ${state.snapshotMetadata.length}.`;
+    } finally { button.disabled = false; }
+  })().catch(showError));
   const reportPreviewError = (error) => {
     if (error?.name !== "AbortError") $("#filePreviewStatus").textContent = error?.message || "Не удалось проверить файл.";
   };
@@ -10714,7 +10796,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     download("analytics.svg", chartsSvg(state.analytics.dataset), "image/svg+xml;charset=utf-8");
   });
   $("#exportAnalyticsReportButton").addEventListener("click", () => {
-    if (!state.analytics?.dataset?.summary.devices) return showError(new Error("Сначала рассчитайте аналитику полного Final"));
+    if (!state.analytics?.dataset?.summary.devices) return showError(new Error("Сначала рассчитайте аналитику полного снимок объединения"));
     download(`analytics_report_${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}.txt`, state.analytics.dataset.reportText, "text/plain;charset=utf-8");
   });
   $("#openMacHistoryButton").addEventListener("click", () => openMacHistory().catch(showError));
@@ -11014,7 +11096,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     $(`#exportFinal${format[0].toUpperCase()}${format.slice(1)}Button`).addEventListener("click", () => exportActiveFinal(format).catch(showError));
   }
   $("#exportFinalPdfButton").addEventListener("click", () => (async () => {
-    if (!state.activeSnapshot) return showError(new Error("Нет активного Final"));
+    if (!state.activeSnapshot) return showError(new Error("Нет активного снимка объединения"));
     const button = $("#exportFinalPdfButton");
     const startedAt = performance.now();
     button.disabled = true;
@@ -11138,7 +11220,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   });
   $("#optionalHostDatabaseMaintenanceButton").addEventListener("click", async () => {
     const vacuum = $("#optionalHostDatabaseVacuum").checked;
-    if (vacuum && !globalThis.confirm("VACUUM перепишет страницы SQLite-копии optional host, чтобы освободить неиспользуемое место. Записи Final, History и Inventory сохраняются. Продолжить?")) return;
+    if (vacuum && !globalThis.confirm("VACUUM перепишет страницы SQLite-копии optional host, чтобы освободить неиспользуемое место. Записи снимок объединения, History и Inventory сохраняются. Продолжить?")) return;
     const button = $("#optionalHostDatabaseMaintenanceButton");
     const status = $("#optionalHostDatabaseMaintenanceStatus");
     button.disabled = true;
@@ -11147,7 +11229,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
       const result = await runOptionalHostDatabaseMaintenance({ integrity: true, optimize: true, vacuum });
       const before = result.before.sizeBytes.toLocaleString("ru-RU");
       const after = result.after.sizeBytes.toLocaleString("ru-RU");
-      status.textContent = `Проверка целостности: ${result.afterIntegrity}; PRAGMA optimize выполнен; ${result.vacuumed ? "VACUUM выполнен" : "VACUUM не запускался"}. SQLite-копия: ${before} → ${after} байт; освобождено ${result.reclaimedBytes.toLocaleString("ru-RU")} байт. IndexedDB и активный Final не изменены.`;
+      status.textContent = `Проверка целостности: ${result.afterIntegrity}; PRAGMA optimize выполнен; ${result.vacuumed ? "VACUUM выполнен" : "VACUUM не запускался"}. SQLite-копия: ${before} → ${after} байт; освобождено ${result.reclaimedBytes.toLocaleString("ru-RU")} байт. IndexedDB и активный снимок объединения не изменены.`;
     } catch (error) {
       status.textContent = error.message || String(error);
       showError(error);
@@ -11203,9 +11285,11 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     button.disabled = true;
     $("#localArchiveStatus").textContent = "Проверка и сохранение базы порциями…";
     try {
+      await bundledOuiInitialization;
+      await saveWorkspaceStateNow();
       const archive = await database.createLocalArchive($("#localArchiveName").value, portableDatabaseArchiveOptions());
       $("#localArchiveName").value = "";
-      $("#localArchiveStatus").textContent = `Сохранён архив «${archive.name}»: ${archive.snapshotCount} Final, ${archive.recordCount.toLocaleString("ru-RU")} записей.`;
+      $("#localArchiveStatus").textContent = `Сохранён архив «${archive.name}»: ${archive.snapshotCount} снимок объединения, ${archive.recordCount.toLocaleString("ru-RU")} записей.`;
       await renderLocalArchiveList();
     } finally { button.disabled = false; }
   })().catch(showError));
@@ -11252,7 +11336,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     const result = await database.applyIpAddressMappingsToActiveSnapshot();
     state.analytics = null;
     await refreshDatabaseState();
-    $("#ipMappingStatus").textContent = `Final ${result.snapshotId}: заполнено адресов ${result.filled}. ID и дата снимка сохранены.`;
+    $("#ipMappingStatus").textContent = `снимок объединения ${result.snapshotId}: заполнено адресов ${result.filled}. ID и дата снимка сохранены.`;
   })().catch(showError));
   $("#exportIpMappingsButton").addEventListener("click", () => database.ipAddressMappings().then((mappings) => download("ip-address-mappings.csv", ipMappingsCsv(mappings), "text/csv;charset=utf-8")).catch(showError));
   $("#exportIpMappingsJsonButton").addEventListener("click", () => database.ipAddressMappings().then((mappings) => download("ip-address-mappings.json", ipMappingsJson(mappings), "application/json;charset=utf-8")).catch(showError));
@@ -11312,6 +11396,11 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     const unchangedPage = event.target.closest("[data-analytics-unchanged-page]");
     if (unchangedPage && !unchangedPage.disabled && state.analytics) {
       renderAnalyticsUnchangedPage(state.analytics, Number(unchangedPage.dataset.analyticsUnchangedPage) || 0, true).catch(showError);
+      return;
+    }
+    const mainPageButton = event.target.closest("[data-dashboard-main-page]");
+    if (mainPageButton && !mainPageButton.disabled && state.analytics) {
+      showDashboardMainDevices(state.analytics, Number(mainPageButton.dataset.dashboardMainPage) || 1, false).catch(showError);
       return;
     }
     const fleetPageButton = event.target.closest("[data-dashboard-fleet-page]");
@@ -11444,7 +11533,7 @@ async function downloadOriginalSource(snapshotId, role, button) {
   button.disabled = true;
   try {
     const original = await database.getOriginalFile(snapshotId, role);
-    if (!original) throw new Error(`Оригинал ${role.toUpperCase()} для этого Final отсутствует в IndexedDB`);
+    if (!original) throw new Error(`Оригинал ${role.toUpperCase()} для этого снимок объединения отсутствует в IndexedDB`);
     const safeName = String(original.name || `${role}-source`).replace(/[\\/:*?"<>|]+/g, "_").slice(0, 180) || `${role}-source`;
     download(safeName, original.blob, original.type || "application/octet-stream");
   } finally {
@@ -11659,7 +11748,7 @@ async function analyzeLegacyTaskFile(file) {
       consumeDevices: true,
       onProgress: ({ phase, completedDevices = 0, totalDevices = 0, completed = 0, total = 0 }) => {
         if (phase === "history") progress(85 + (total ? completed / total : 1) * 3, `History: ${completed.toLocaleString("ru-RU")} / ${total.toLocaleString("ru-RU")} событий`, "Фоновый анализ");
-        else if (phase === "chunk" || phase === "complete") progress(88 + (totalDevices ? completedDevices / totalDevices : 1) * 11, `Final: ${completedDevices.toLocaleString("ru-RU")} / ${totalDevices.toLocaleString("ru-RU")} устройств`, "Фоновый анализ");
+        else if (phase === "chunk" || phase === "complete") progress(88 + (totalDevices ? completedDevices / totalDevices : 1) * 11, `снимок объединения: ${completedDevices.toLocaleString("ru-RU")} / ${totalDevices.toLocaleString("ru-RU")} устройств`, "Фоновый анализ");
       },
     });
     finalSnapshotId = finalSnapshot.id;
@@ -11832,7 +11921,7 @@ async function bootstrap() {
   installTableSorter(document);
   const cachedStatus = readDatabaseStatusCache();
   if (cachedStatus) {
-    $("#databaseStatus").textContent = `${cachedStatus.snapshotCount} Final · ${cachedStatus.activeFinalCount.toLocaleString("ru-RU")} в активном Final · последний сохранённый счётчик`;
+    $("#databaseStatus").textContent = `${cachedStatus.snapshotCount} снимок объединения · ${cachedStatus.activeFinalCount.toLocaleString("ru-RU")} в активном снимке объединения · последний сохранённый счётчик`;
   }
   await database.open();
   initializeOptionalHostConnection();
@@ -11843,7 +11932,7 @@ async function bootstrap() {
   await initializeEngineeringMode();
   await restoreWorkspaceState();
   await loadAnalyticsDashboardSettings();
-  await restoreDataDirectoryArchive();
+  await restoreDataDirectoryArchive({ skipUnchanged: true });
   state.sourceMappingPreferences = normalizeSourceMappingPreferences(await database.getSetting("sourceMappingPreferences", {}));
   await restoreWorkspaceSourceHandles().catch(showError);
   await restoreWorkspaceBatchDirectories().catch(showError);
@@ -11886,13 +11975,11 @@ async function bootstrap() {
   applyTheme(resolveThemeChoice(databaseTheme, localTheme, importedLegacyTheme
     ? importedLegacyTheme === "dark"
     : matchMedia("(prefers-color-scheme: dark)").matches));
-  await ensureBundledOui();
-  await loadBundledIeeeIndex();
-  await refreshDatabaseState();
+  await refreshDatabaseState({ synchronizeArchive: false, verifyFinalIntegrity: location.hash === "#analytics" });
   if (finalRecovery.recovered && finalRecovery.snapshotId) {
-    $("#databaseStatus").textContent += " · активный Final восстановлен";
+    $("#databaseStatus").textContent += " · активный снимок объединения восстановлен";
   } else if (finalRecovery.unavailable) {
-    $("#databaseStatus").textContent += " · активный Final недоступен";
+    $("#databaseStatus").textContent += " · активный снимок объединения недоступен";
   }
   await restoreLegacyTaskSchedulers();
   $("#progressPanel").hidden = true;
@@ -11903,6 +11990,17 @@ async function bootstrap() {
   initializeLazyTabs($$(".view"), initialView);
   activateView(initialView);
   document.documentElement.dataset.appReady = "true";
+  bundledOuiInitialization = Promise.all([ensureBundledOui({ reportProgress: false }), loadBundledIeeeIndex()]);
+  bundledOuiInitialization.catch(showError);
+  database.listSnapshots({ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true })
+    .then(async (verified) => {
+      if (verified.length !== state.snapshotMetadata.length) {
+        await refreshDatabaseState({ synchronizeArchive: false });
+        if (finalRecovery.recovered && state.activeSnapshot?.id === finalRecovery.snapshotId) {
+          $("#databaseStatus").textContent += " · активный снимок объединения восстановлен";
+        }
+      }
+    }).catch(showError);
 }
 
 function initializeOptionalHostConnection() {
@@ -11914,7 +12012,7 @@ function initializeOptionalHostConnection() {
     if (!connection) return;
     status.dataset.connection = connection.healthy ? "connected" : "warning";
     status.textContent = connection.healthy
-      ? `SQLite optional host: подключена · Final ${connection.finalCount.toLocaleString("ru-RU")} · Inventory ${connection.inventoryCount.toLocaleString("ru-RU")}`
+      ? `SQLite optional host: подключена · снимок объединения ${connection.finalCount.toLocaleString("ru-RU")} · Inventory ${connection.inventoryCount.toLocaleString("ru-RU")}`
       : "SQLite optional host: подключена, требуется проверка базы";
   }).catch(() => {
     status.dataset.connection = "unavailable";

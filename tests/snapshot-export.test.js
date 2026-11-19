@@ -26,7 +26,7 @@ test("Final XLSX sheets include metadata and stream every device across bounded 
     { key: "mac", label: "MAC" }, { key: "room", label: "Помещение" }, { key: "alternatives", label: "Альтернативы" },
   ], { maxDataRowsPerSheet: 2 });
   assert.equal(sheets.length, 3);
-  assert.equal(sheets[0].name, "Сведения о Final");
+  assert.equal(sheets[0].name, "Сведения о снимке объединения");
   const facts = [];
   for await (const row of sheets[0].rows) facts.push(row);
   assert.deepEqual(facts.find(([key]) => key === "Название"), ["Название", metadata.name]);
@@ -89,7 +89,7 @@ test("Final TXT export includes metadata, escaped tabular values and a bounded s
   const blob = await snapshotTextBlob(metadata, visitChunks, columns);
   const text = await blob.text();
   assert.equal(blob.type, "text/plain;charset=utf-8");
-  assert.match(text, /^Final MAC Analyzer Pro Next\nID Final: "final-1"\nНазвание: "Final \\\"one\\\""/);
+  assert.match(text, /^Снимок объединения MAC Analyzer Pro Next\nID снимка объединения: "final-1"\nНазвание: "Final \\\"one\\\""/);
   assert.match(text, /Устройств: 2\nНекорректных строк: 0\n\nУстройства\nMAC\tПомещение/);
   assert.match(text, /"Room; \\\"A\\\""/);
   const writes = [];

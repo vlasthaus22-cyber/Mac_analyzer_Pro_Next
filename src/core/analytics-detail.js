@@ -372,7 +372,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
 
   function collectAnalyticsBuckets(devices = []) {
     const metrics = new Map();
-    const fields = ["vendor", "model", "room", "smartroom", "switch", "known-vendor", "room-identity", "occupancy-room"];
+    const fields = ["vendor", "model", "room", "smartroom", "switch", "known-vendor", "room-identity", "occupancy-room", "unassigned-vendor", "unassigned-model"];
     for (const field of fields) metrics.set(field, new Map());
     const add = (metric, value) => {
       const label = String(value ?? "");
@@ -390,7 +390,11 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
       if (!unknownVendors.has(vendor.toLowerCase())) add("known-vendor", vendor);
       if (!unknownModels.has(model.toLowerCase())) add("model", model);
       if (room) add("room", room);
-      if (room || smartroomId) add("occupancy-room", room || `Smartroom ID ${smartroomId}`);
+      if (room && !unknownValues.has(room.toLowerCase())) add("occupancy-room", room);
+      else {
+        add("unassigned-vendor", vendor || "Unknown");
+        add("unassigned-model", model || "Unknown");
+      }
       if (smartroomId) add("smartroom", smartroomId);
       if (switchIp && !unknownValues.has(switchIp.toLowerCase())) add("switch", switchIp);
       if (smartroomId || room) add("room-identity", smartroomId || room);
@@ -544,7 +548,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
         if (!unknownVendors.has(vendor.toLowerCase())) knownVendors += 1;
         if (ip && !unknownValues.has(ip.toLowerCase())) withIp += 1;
         if (room && !unknownValues.has(room.toLowerCase())) withRoom += 1;
-        if (room || smartroomId) {
+        if (room && !unknownValues.has(room.toLowerCase())) {
           assignedRooms += 1;
           if (occupancyCounts) tally(occupancyCounts, room || `Smartroom ID ${smartroomId}`);
         }
@@ -956,7 +960,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
   }
 
   async function writeTopologyHtml(snapshot, visitSnapshotChunks, summary, writable, { maxBytes = 256 * 1024 } = {}) {
-    if (!snapshot?.id || typeof visitSnapshotChunks !== "function") throw new TypeError("Для экспорта топологии нужен Final и поток его чанков");
+    if (!snapshot?.id || typeof visitSnapshotChunks !== "function") throw new TypeError("Для экспорта топологии нужен снимок объединения и поток его чанков");
     if (!writable || typeof writable.write !== "function") throw new TypeError("Для потокового экспорта топологии нужен файловый поток");
     const totals = summary && typeof summary === "object" ? summary : {};
     if (Number(snapshot.deviceCount) === 0) {

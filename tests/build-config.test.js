@@ -83,7 +83,7 @@ test("optional-host database maintenance is explicit, loopback-only, and include
   assert.match(app, /runOptionalHostDatabaseMaintenance\(\{ integrity: true, optimize: true, vacuum \}\)/);
   assert.match(controls, /request\("\/api\/database\/maintenance"/);
   assert.match(controls, /credentials: "same-origin"/);
-  assert.match(html, /IndexedDB и активный Final не изменяются/);
+  assert.match(html, /IndexedDB и активный снимок объединения не изменяются/);
 });
 
 test("Windows-hosted frontend connects to SQLite with a read-only summary while file mode stays autonomous", () => {
@@ -122,7 +122,7 @@ test("portable HTML renders the PyQt seven-field coverage chart from the full Fi
   assert.match(analytics, /function pyqtFieldCoverageChartItems\(dataset = \{\}\)/);
   assert.match(app, /pyqtFieldCoverageChartItems\(analytics\.dataset\)/);
   assert.match(app, /maximum: 100/);
-  assert.match(html, /id="pyqtFieldCoverageChart"[^>]*aria-label="Заполненность семи полей полного Final"/);
+  assert.match(html, /id="pyqtFieldCoverageChart"[^>]*aria-label="Заполненность семи полей полного снимок объединения"/);
 });
 
 test("portable HTML renders the PyQt top-eight vendor share pie from full analytics", () => {
@@ -134,14 +134,14 @@ test("portable HTML renders the PyQt top-eight vendor share pie from full analyt
   assert.match(app, /pyqtVendorShareChartItems\(analytics\.dataset\)/);
   assert.match(app, /drawPie\(\$\("#pyqtVendorShareChart"\)/);
   assert.match(renderer, /export function drawPie\(/);
-  assert.match(html, /id="pyqtVendorShareChart"[^>]*aria-label="Доля восьми ведущих производителей полного Final"/);
+  assert.match(html, /id="pyqtVendorShareChart"[^>]*aria-label="Доля восьми ведущих производителей полного снимок объединения"/);
   assert.match(analytics, /function pyqtVendorTopChartItems\(dataset = \{\}\)/);
   assert.match(analytics, /function pyqtRoomDistributionChartItems\(dataset = \{\}\)/);
   assert.match(app, /drawPie\(\$\("#pyqtVendorTopChart"\)/);
   assert.match(app, /pyqtRoomDistributionChartItems\(analytics\.dataset\)/);
   assert.match(app, /drawBars\(\$\("#pyqtRoomDistributionChart"\)/);
-  assert.match(html, /id="pyqtVendorTopChart"[^>]*aria-label="Топ-10 производителей полного Final"/);
-  assert.match(html, /id="pyqtRoomDistributionChart"[^>]*aria-label="Топ-10 помещений по числу устройств в полном Final"/);
+  assert.match(html, /id="pyqtVendorTopChart"[^>]*aria-label="Топ-10 производителей полного снимок объединения"/);
+  assert.match(html, /id="pyqtRoomDistributionChart"[^>]*aria-label="Топ-10 помещений по числу устройств в полном снимок объединения"/);
 });
 
 test("release packaging refreshes and verifies sidecars for built HTML and Windows host artifacts", () => {
@@ -565,7 +565,7 @@ test("portable HTML configuration includes every current runtime module", () => 
 test("database refresh filters single-analysis metadata during cursor traversal", () => {
   const app = readFileSync("src/app.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
-  assert.match(app, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true \}\)/);
+  assert.match(app, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity \}\)/);
   assert.match(database, /async listSnapshots\(\{ includeDiagnostics = true, finalOnly = false, catalogOnly = false, verifyFinalIntegrity = false \} = \{\}\)/);
   assert.match(database, /store\.indexNames\.contains\("by_created_id"\)[\s\S]{0,80}store\.index\("by_created_id"\)/);
   assert.match(database, /const request = \(chronologyIndex \|\| store\)\.openCursor\(\)/);
@@ -790,9 +790,9 @@ test("PyQt notification config import is bounded, local, disabled by default, an
 test("data-directory archive restores before Final recovery without deleting browser state", () => {
   const app = readFileSync("src/app.js", "utf8");
   const bootstrap = app.slice(app.indexOf("async function bootstrap()"));
-  const restore = app.slice(app.indexOf("async function restoreDataDirectoryArchive()"), app.indexOf("\nasync function synchronizeDataDirectoryArchiveOnce()"));
+  const restore = app.slice(app.indexOf("async function restoreDataDirectoryArchive("), app.indexOf("\nasync function synchronizeDataDirectoryArchiveOnce()"));
   const databaseOpen = bootstrap.indexOf("await database.open()");
-  const restoreCall = bootstrap.indexOf("await restoreDataDirectoryArchive()");
+  const restoreCall = bootstrap.indexOf("await restoreDataDirectoryArchive({ skipUnchanged: true })");
   const finalRecovery = bootstrap.indexOf("const finalRecovery = await database.recoverActiveSnapshot()");
   assert.ok(databaseOpen >= 0 && databaseOpen < restoreCall, "open IndexedDB before checking the retained directory handle");
   assert.ok(restoreCall < finalRecovery, "restore additive archive records before active Final recovery");
@@ -814,7 +814,7 @@ test("directory archive sync serializes writes and retries when IndexedDB change
   assert.match(app, /database\.createLocalArchive\(\$\("#localArchiveName"\)\.value, portableDatabaseArchiveOptions\(\)\)/);
   assert.match(once, /if \(handle !== state\.dataDirectoryHandle\)\s*\{\s*state\.dataDirectorySyncRequested = true;/);
   assert.match(once, /state\.dataDirectoryWriteFailed = true/);
-  assert.match(once, /Final сохранён в IndexedDB/);
+  assert.match(once, /снимок объединения сохранён в IndexedDB/);
 });
 
 test("portable app schedules streaming Final XLSX autosaves only through the granted local folder", () => {
@@ -831,7 +831,7 @@ test("portable app schedules streaming Final XLSX autosaves only through the gra
   assert.match(app, /writeDirectoryFile\(handle, fileName, createXlsxWorkbookStream\(sheets\)\)/);
   assert.match(app, /const columns = inventoryOutputColumns\(\)/);
   assert.match(app, /createSnapshotXlsxSheets\(database, state\.activeSnapshot, columns\)/);
-  assert.match(app, /Final остаётся в IndexedDB/);
+  assert.match(app, /снимок объединения остаётся в IndexedDB/);
   const autoSave = app.slice(app.indexOf("async function autoSaveActiveFinal()"), app.indexOf("\nfunction startFinalAutoSave()"));
   assert.match(autoSave, /if \(state\.dataDirectoryWriteFailed\)[\s\S]*?Автосохранение приостановлено/);
   assert.match(autoSave, /state\.dataDirectoryWriteFailed = true;[\s\S]*?await refreshDataDirectoryControls\(\);/);
@@ -932,8 +932,8 @@ test("Ctrl+S selects Final XLSX or portable backup and Ctrl+E opens export choic
   assert.match(app, /state\.snapshotMetadata\.length\s*\?\s*"#exportFinalXlsxButton"\s*:\s*"#exportDatabaseButton"/);
   assert.match(app, /const menu = \$\("#exportFinalCsvButton"\)\.closest\("details\.export-menu"\)/);
   assert.match(app, /menu\.open = true;\s*menu\.querySelector\("summary"\)\.focus\(\)/);
-  assert.match(html, /Ctrl\+S — выгрузить активный Final в XLSX; если Final ещё нет — создать переносимый архив/);
-  assert.match(html, /Ctrl\+E — открыть меню форматов экспорта Final/);
+  assert.match(html, /Ctrl\+S — выгрузить активный снимок объединения в XLSX; если снимок объединения ещё нет — создать переносимый архив/);
+  assert.match(html, /Ctrl\+E — открыть меню форматов экспорта снимок объединения/);
 });
 
 test("Ctrl+F selects the existing global search query for immediate replacement", () => {
@@ -946,7 +946,7 @@ test("saved Final search is reachable and renders a bounded, cancellable histori
   const html = readFileSync("index.html", "utf8");
   const search = readFileSync("src/core/search.js", "utf8");
   const shortcuts = readFileSync("src/core/shortcuts.js", "utf8");
-  assert.match(html, /id="searchSavedFinalsButton"[^>]*>Поиск по сохранённым Final/);
+  assert.match(html, /id="searchSavedFinalsButton"[^>]*>Поиск по сохранённым снимкам объединения/);
   assert.match(html, /id="savedFinalSearchStatus"[^>]*aria-live="polite"/);
   assert.match(html, /id="cancelSavedFinalSearchButton"/);
   assert.ok(app.includes("searchSavedFinalSnapshots(query, {"));
@@ -956,16 +956,16 @@ test("saved Final search is reachable and renders a bounded, cancellable histori
   assert.ok(app.includes("savedFinalSearchController?.abort()"));
   assert.match(app, /state\.tableController,\s*savedFinalSearchController,\s*pyqtClusteringController/);
   assert.ok(app.includes("<th>Адрес</th>"));
-  assert.match(app, /<th>Помещение<\/th><th>Адрес<\/th><th>Final<\/th>/);
+  assert.match(app, /<th>Помещение<\/th><th>Адрес<\/th><th>снимок объединения<\/th>/);
   assert.ok(app.includes('"ctrl+shift+f": () => { activateView("search"); runSavedFinalSearch().catch(showError); },'));
   assert.ok(search.includes("for (let snapshotIndex = snapshots.length - 1; snapshotIndex >= 0; snapshotIndex -= 1)"));
   assert.ok(search.includes("seenIdentities.has(identityKey)"));
   assert.ok(search.includes("identityTokens(device).find((token) => token.strong)"));
   assert.ok(app.includes("MAC / ID"));
-  assert.ok(app.includes("В сохранённых Final совпадений не найдено."));
+  assert.ok(app.includes("В сохранённых снимок объединения совпадений не найдено."));
   assert.ok(search.includes("if (rows.length >= limit)"));
   assert.ok(shortcuts.includes('"ctrl+shift+f"'));
-  assert.ok(html.includes("Ctrl+Shift+F — поиск по всем сохранённым Final"));
+  assert.ok(html.includes("Ctrl+Shift+F — поиск по всем сохранённым снимкам объединения"));
 });
 
 test("Ctrl+Shift+C opens the engineer-only Inventory column manager", () => {
@@ -977,7 +977,7 @@ test("Ctrl+Shift+C opens the engineer-only Inventory column manager", () => {
   assert.match(app, /if \(!isEngineerActive\(\) && !isShortcutAllowedWithoutEngineer\(shortcut\)\) return/);
   assert.match(html, /Ctrl\+Shift\+C — открыть менеджер колонок Inventory \(инженерный режим\)/);
   assert.match(html, /<dialog id="inventoryColumnManagerDialog"[^>]*aria-labelledby="inventoryColumnManagerTitle"/);
-  assert.match(html, /Настройки применяются к таблице Inventory, просмотру Final и экспорту Final/);
+  assert.match(html, /Настройки применяются к таблице Inventory, просмотру снимка объединения и экспорту снимка объединения/);
   assert.match(html, /aria-controls="inventoryColumnManagerDialog"/);
   assert.match(app, /inventoryColumnDialog\.addEventListener\("close", \(\) => inventoryColumnToggle\.setAttribute\("aria-expanded", "false"\)\)/);
   assert.match(app, /async function saveInventoryColumnConfig\(config, \{ rerender = true \} = \{\}\)[\s\S]*?if \(state\.snapshotDetail\.id && \$\("#detailsDialog"\)\.open && \$\("#detailsDialog \[data-dialog-title\]"\)\.textContent\.startsWith\("Final: "\)\)\s*\{\s*await openFinalSnapshotPage\(state\.snapshotDetail\.id, state\.snapshotDetail\.page\);/);
@@ -1171,8 +1171,8 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /#exportAnalyticsXlsxButton/);
   assert.match(smoke, /#exportAllMultiCompareCsvButton/);
   assert.match(smoke, /async function openDashboardAggregateKpi\(key, title\)[\s\S]*?data-dashboard-aggregate-filter/);
-  assert.match(smoke, /openDashboardAggregateKpi\("manufacturers", "Производители выбранного Final"\)/);
-  assert.match(smoke, /openDashboardAggregateKpi\("rooms", "Помещения выбранного Final"\)/);
+  assert.match(smoke, /openDashboardAggregateKpi\("manufacturers", "Производители выбранного снимка объединения"\)/);
+  assert.match(smoke, /openDashboardAggregateKpi\("rooms", "Помещения выбранного снимка объединения"\)/);
   assert.match(smoke, /137,80,78,71,13,10,26,10/);
   assert.match(smoke, /80,75,3,4/);
   assert.match(smoke, /window\.confirm=\(message\)=>/);
@@ -1185,7 +1185,7 @@ test("browser smoke waits for DevTools and enters the disposable engineer UI bef
   assert.match(smoke, /#singleFileInput/);
   assert.match(smoke, /#runSingleAnalysisButton/);
   assert.match(smoke, /singleAnalysisHistoryRows/);
-  assert.match(smoke, /singleFileNotice\.includes\("активный Final не переключается"\)/);
+  assert.match(smoke, /singleFileNotice\.includes\("активный снимок объединения не переключается"\)/);
   assert.match(smoke, /compare_before\.csv/);
   assert.match(smoke, /file-comparison\.xlsx/);
   assert.match(smoke, /multiComparePairSelect/);
@@ -1431,8 +1431,8 @@ test("single-file analysis exposes the same review and apply flow as source impo
   assert.match(app, /const finalSnapshot = await database\.saveFinal\(/);
   assert.match(app, /activate: false,\s*updateInventory: true/);
   assert.match(app, /database\.attachSingleAnalysisSnapshot\(savedAnalysis\.id, finalSnapshot\.id\)/);
-  assert.match(html, /Анализ сохраняется в отдельной истории и снимке; активный Final не переключается, а найденные устройства обновляют Inventory/);
-  assert.doesNotMatch(html, /Этот анализ не создаёт Final и не меняет базу/);
+  assert.match(html, /Анализ сохраняется в отдельной истории и снимке; активный снимок объединения не переключается, а найденные устройства обновляют Inventory/);
+  assert.doesNotMatch(html, /Этот анализ не создаёт снимок объединения и не меняет базу/);
   assert.match(app, /Выберите внутренний ID, Device ID, серийный номер или MAC/);
   assert.match(detector, /role === "single"/);
   assert.match(single, /detectMapping\(headers, rows, "single"\)/);
@@ -1726,8 +1726,8 @@ test("Inventory result pages expose the full reference page-size choices up to 1
 
 test("Final comparison selectors update before expensive Inventory and MAC refreshes", () => {
   const app = readFileSync("src/app.js", "utf8");
-  const refresh = app.slice(app.indexOf("async function refreshDatabaseState()"), app.indexOf("\nasync function renderLocalArchiveList()"));
-  assert.match(refresh, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true \}\)[\s\S]*?renderSnapshotSelectors\(\);[\s\S]*?if \(\$\("\.nav-button\.active"\)\?\.dataset\.view === "analytics"\) \{\s*renderAnalytics\(false\)\.catch\(showError\);\s*\}[\s\S]*?await renderDeviceTable\(\);\s*await renderMacOptions\(\)/);
+  const refresh = app.slice(app.indexOf("async function refreshDatabaseState("), app.indexOf("\nasync function renderLocalArchiveList()"));
+  assert.match(refresh, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity \}\)[\s\S]*?renderSnapshotSelectors\(\);[\s\S]*?if \(\$\("\.nav-button\.active"\)\?\.dataset\.view === "analytics"\) \{\s*renderAnalytics\(false\)\.catch\(showError\);\s*\}[\s\S]*?await renderDeviceTable\(\);\s*await renderMacOptions\(\)/);
   assert.match(refresh, /state\.snapshotTimeCache\.clear\(\)/);
   assert.doesNotMatch(refresh, /new Map\(state\.snapshotMetadata\.map/);
   assert.match(app, /snapshotTimeCache: createSnapshotTimeCache\(\(ids\) => database\.snapshotCreatedAtByIds\(ids\)\)/);
@@ -1910,7 +1910,7 @@ test("absence KPI, chart, and detail page use the selected Final comparison resu
   assert.match(app, /renderKpis\(\$\("#analyticsKpis"\), analytics\.kpis/);
   assert.match(app, /buildAnalyticsDashboardExportModel\(analytics, state\.analyticsDashboardSettings\)/);
   assert.match(app, /async function showAnalyticsAbsencePage\(analytics[\s\S]*?analytics\.comparison\.absentCount \?\? analytics\.kpis\.absent/);
-  assert.match(app, /key === "absent"\) await showAnalyticsAbsencePage\(analytics, 0, true\)/);
+  assert.match(app, /key === "absent"\) await showAnalyticsAbsencePage\(selected, 0, true\)/);
   assert.match(analytics, /const absentVendorCounts = new Map\(\);[\s\S]*?for \(const device of comparison\.absent \|\| \[\]\)/);
 });
 
@@ -1981,7 +1981,7 @@ test("upload history screen searches, pages and opens successful Final snapshots
   assert.match(app, /snapshotsCanonical: state\.snapshotMetadataCanonical/);
   assert.doesNotMatch(app, /filterUploadHistorySnapshots\(state\.snapshotMetadata/);
   assert.match(app, /database\.deleteSnapshots\(ids\)/);
-  assert.match(app, /state\.snapshotMetadata\s*=\s*await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true \}\)/);
+  assert.match(app, /state\.snapshotMetadata\s*=\s*await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity \}\)/);
   assert.match(app, /database\.deleteFinalSnapshots\(\)/);
   assert.match(app, /state\.uploadHistory\.selectedIds\.add/);
   assert.match(app, /const metadataMatchesQuery = Boolean\(query && metadataText\.includes\(query\)\)/);
@@ -2040,7 +2040,7 @@ test("switch-IP change details persist bounded batches and read exact cursor pag
   assert.match(database, /async appendSwitchIpReportChanges\(/);
   assert.match(database, /async switchIpReportChangesPage\(/);
   assert.match(app, /await database\.clearExpiredAnalyticsAggregateQueries\("switch-ip-report:"\)/);
-  assert.match(app, /\.catch\(async \(error\) => \{\s*error\.batchStage = "атомарное сохранение Final";\s*if \(historicalSwitchChangeQueryId\) await database\.clearAnalyticsAggregateQuery\(historicalSwitchChangeQueryId\)\.catch\(\(\) => \{\}\);/);
+  assert.match(app, /\.catch\(async \(error\) => \{\s*error\.batchStage = "атомарное сохранение снимок объединения";\s*if \(historicalSwitchChangeQueryId\) await database\.clearAnalyticsAggregateQuery\(historicalSwitchChangeQueryId\)\.catch\(\(\) => \{\}\);/);
 });
 
 test("vendor inference settings persist locally and are included in the portable runtime", () => {
@@ -2135,12 +2135,12 @@ test("extended selected-Final analytics reuses its loaded payload and falls back
   assert.match(app, /scheduleAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask, currentStatusMask\)/);
   assert.match(app, /function calculateAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null\)/);
   assert.match(app, /await feedAnalyticsDatasetRows\(\{[\s\S]*?devices: datasetSnapshotId \? undefined : analytics\.devices[\s\S]*?visitChunks: \(snapshotId, visit\) => database\.forEachSnapshotChunk\(snapshotId, visit, \{/);
-    assert.match(app, /selected-final-dataset-v9:/);
-  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 9\)/);
-  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 9, \{[\s\S]*?onProgress/);
+    assert.match(app, /selected-final-dataset-v10:/);
+  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 10\)/);
+  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 10, \{[\s\S]*?onProgress/);
   assert.match(app, /\.\.\.collectTopologyBuckets\(selectedChunk\)/);
   assert.match(app, /analyticsAggregateRankedPage\(clusterQueryId, "topology-switch", \{ limit: 20 \}\)/);
-  assert.match(app, /dataset\.summary\.devices !== expectedDevices/);
+  assert.match(app, /dataset\.sourceRowCount !== expectedDevices/);
   assert.doesNotMatch(app, /buildDatasetAnalytics\(analytics\.devices/);
 });
 
@@ -2228,24 +2228,24 @@ test("large Dashboard updates show detail progress and clear the previous datase
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
   assert.match(app, /function paintAnalyticsSummary\(analytics\) \{[\s\S]*Подробная сводка выбранного статуса рассчитывается/);
-  assert.match(app, /function calculateAnalyticsDetails\([\s\S]*Подготовка истории выбранных Final/);
+  assert.match(app, /function calculateAnalyticsDetails\([\s\S]*Подготовка истории выбранных снимков объединения/);
   assert.match(app, /Сводки выбранного статуса: \$\{rowsProcessed\.toLocaleString/);
   assert.match(app, /Сохранение агрегатов выбранного статуса: \$\{pendingRowsProcessed\.toLocaleString/);
-  assert.match(app, /Чтение чанка \$\{index \+ 1\}\/\$\{chunkCount\} Final/);
+  assert.match(app, /Чтение чанка \$\{index \+ 1\}\/\$\{chunkCount\} снимка объединения/);
   assert.match(app, /state\.analyticsRoomAnomalyAnalytics = analytics/);
   assert.match(app, /roomAnomalyButton && roomAnomalyAnalytics/);
   assert.match(app, /Ответ IndexedDB для чанка \$\{index \+ 1\}\/\$\{chunkCount\} получен; обрабатываю/);
-  assert.match(app, /Чтение истории Final \$\{index \+ 1\}\/\$\{metadata\.length\}, чанка/);
-  assert.match(app, /Ответ IndexedDB для истории Final \$\{index \+ 1\}\/\$\{metadata\.length\}, чанка/);
-  assert.match(app, /Обработка истории Final \$\{index \+ 1\}\/\$\{metadata\.length\}, чанка/);
-  assert.match(app, /Worker истории Final \$\{snapshotIndex \+ 1\}\/\$\{snapshotCount\}, чанк \$\{chunkIndex \+ 1\}\/\$\{chunkCount\}/);
+  assert.match(app, /Чтение истории снимков объединения \$\{index \+ 1\}\/\$\{metadata\.length\}, чанка/);
+  assert.match(app, /Ответ IndexedDB для истории снимков объединения \$\{index \+ 1\}\/\$\{metadata\.length\}, чанка/);
+  assert.match(app, /Обработка истории снимков объединения \$\{index \+ 1\}\/\$\{metadata\.length\}, чанка/);
+  assert.match(app, /Worker истории снимков объединения \$\{snapshotIndex \+ 1\}\/\$\{snapshotCount\}, чанк \$\{chunkIndex \+ 1\}\/\$\{chunkCount\}/);
   assert.match(app, /const stage = \(message\) => \{ if \(loading && state\.analyticsRequests\.isCurrent\(revision\)\) loading\.textContent = message; \};/);
   assert.match(app, /paintAnalyticsDetails\(pair\);[\s\S]*?renderTemporalStatistics\(false\)\.catch/);
   assert.match(app, /feedAnalyticsDatasetRows\(\{[\s\S]*?isCurrent: \(\) => state\.analyticsRequests\.isCurrent\(revision\)/);
   assert.match(app, /acceptStatusChunk\(chunk, startOffset\)\.filter\(matchesDashboard\)/);
   assert.match(app, /Завершение рейтингов, комнат и топологии/);
   assert.match(app, /if \(!state\.analyticsRequests\.isCurrent\(revision\)\) \{\s*return null;\s*\}/);
-  assert.match(app, /deviceMatches: historyFilters\.query \|\| historyFilters\.manufacturer \|\| historyFilters\.room[\s\S]*?Final \$\{index \+ 1\} из \$\{snapshots\.length\}, блок \$\{chunkNumber\} из \$\{chunkCount\}/);
+  assert.match(app, /deviceMatches: historyFilters\.query \|\| historyFilters\.manufacturer \|\| historyFilters\.room[\s\S]*?снимок объединения \$\{index \+ 1\} из \$\{snapshots\.length\}, блок \$\{chunkNumber\} из \$\{chunkCount\}/);
   assert.match(analytics, /for \(let offset = 0; offset < chunk\.length; offset \+= DASHBOARD_KPI_BATCH_SIZE\) \{\s*const page = chunk\.slice\(offset, offset \+ DASHBOARD_KPI_BATCH_SIZE\);\s*summary\.observePreviousChunk\(page, previousOffset \+ offset\);\s*await onPreviousChunk\?\.\(page, previousOffset \+ offset\);\s*\}\s*previousOffset \+= chunk\.length;\s*onProgress\(\{ phase: "progress", pass, passes: totalPasses, label, processed: previousOffset, total: resolvedPreviousCount \}\)/);
   assert.match(smoke, /const needsApply=current\.value!==.*expectedBase.*if\(needsApply\)document\.querySelector\('#applyComparisonButton'\)\.click\(\)/);
   assert.match(smoke, /analyticsProgressChangedAt = Date\.now\(\)/);
@@ -2447,11 +2447,13 @@ test("paged comparison details retain only the currently displayed report", () =
   assert.match(app, /if \(detail\.queryId\) \{\s*const pageIndex = Math\.floor\([\s\S]*?loadDashboardAggregatePage\(detail, pageIndex\)/);
   assert.match(app, /data-dashboard-aggregate-page[\s\S]*?dashboardAggregateDialogContent\(detail\.items, detail\)/);
   assert.match(app, /data-dashboard-aggregate-filter[\s\S]*?saveAnalyticsDashboardSettings\(\{ \.\.\.state\.analyticsDashboardSettings, filters \}\)/);
-  assert.equal((app.match(/devices: \(\) => \{\s*selectDashboardKpiStatus\("devices", analytics\);\s*showDashboardFleetDialog\(analytics\)\.catch\(showError\);/g) || []).length, 2);
+  assert.equal((app.match(/devices: async \(\) => \{\s*const selected = await selectDashboardKpiStatus\("devices", analytics\);\s*if \(selected\) return showDashboardMainDevices\(selected\)\.catch\(showError\);/g) || []).length, 2);
   assert.match(app, /function showDashboardFleetDialog\(analytics\)[\s\S]*?buildDashboardFleetSeries\(analytics, state\.snapshotMetadata, \{ snapshotsAscending: true \}\)/);
   assert.match(app, /function selectDashboardKpiStatus\(key, analytics = state\.analytics\)\s*\{\s*const status = dashboardStatusForKpi\(key\)/);
   const kpiStatusHandler = app.match(/function selectDashboardKpiStatus\(key, analytics = state\.analytics\)\s*\{[\s\S]*?\n\}/)?.[0] || "";
-  assert.match(kpiStatusHandler, /saveAnalyticsDashboardSettings\([\s\S]*?\.then\(async \(\) => \{\s*if \(state\.analytics !== analytics\) return;\s*if \(key === "modified"\) await showAnalyticsModificationPage\(analytics, 0, false, true\);\s*if \(key === "absent"\) await showAnalyticsAbsencePage\(analytics, 0, true\);\s*if \(key === "unchanged"\) await renderAnalyticsUnchangedPage\(analytics, 0, true\);\s*return renderAnalytics\(true\);/);
+  assert.match(kpiStatusHandler, /state\.dashboardKpiRequest !== requestId/);
+  assert.ok(kpiStatusHandler.indexOf("await renderAnalytics(true)") < kpiStatusHandler.indexOf("await showAnalyticsModificationPage(selected"));
+  assert.match(kpiStatusHandler, /showAnalyticsAbsencePage\(selected, 0, true\)/);
   assert.doesNotMatch(kpiStatusHandler, /changeReportSettings\.mode/);
   assert.match(app, /async function loadDashboardAbsencePage\(analytics, offset = 0, limit = 100, sharedRequestId = null\)/);
   assert.match(app, /async function loadDashboardChangeGroupPage\(analytics, category, offset = 0, limit = 100\)/);
@@ -2485,7 +2487,7 @@ test("enrichment resolves the active Previous Final through the bounded identity
 test("enrichment bounds large current-room lookups and releases Smartroom and DDIO indexes after use", () => {
   const enrichment = readFileSync("src/core/enrichment.js", "utf8");
   const app = readFileSync("src/app.js", "utf8");
-  const roomLookup = enrichment.slice(enrichment.indexOf("const currentRoomTargets = await collectCurrentSmartroomRoomTargets"), enrichment.indexOf("await progress(58, \"Использование предыдущего Final\")"));
+  const roomLookup = enrichment.slice(enrichment.indexOf("const currentRoomTargets = await collectCurrentSmartroomRoomTargets"), enrichment.indexOf("await progress(58, \"Использование предыдущего снимка объединения\")"));
   assert.match(enrichment, /MAX_CURRENT_ROOM_TARGET_IDS = 10_000/);
   assert.match(enrichment, /targetIds\.size >= maxTargets[\s\S]*?targetIds\.clear\(\)[\s\S]*?return false[\s\S]*?return exceeded \? null : targetIds/);
   assert.match(roomLookup, /canOffloadCurrentRoomIndex[\s\S]*?appendCurrentRoomEvidencePage\(rows\)[\s\S]*?currentRoomEvidenceForIds\(\[\.\.\.keys\]\)[\s\S]*?roomIndex\.clear\(\)/);
@@ -2504,7 +2506,7 @@ test("MAC chronology pages saved history events and merges them into calculated 
   const database = readFileSync("src/data/database.js", "utf8");
   assert.match(app, /async function openMacHistory\(\{ includeOptionalHostHistory = false, dialogMac = "" \} = \{\}\)/);
   assert.match(app, /createMacTimelineAccumulator\(mac, \{[\s\S]*?dedupeStableEventIds: false,[\s\S]*?retainEvents: false,[\s\S]*?retainHistoryIndex: false,[\s\S]*?retainSnapshotMetadata: false/);
-  assert.match(app, /timeline\.addSnapshot\(metadata, matchCount > 1 \? \[\] : firstMatch \? \[firstMatch\] : \[\], \{ matchCount, candidatesInScratch: matchCount > 1 \}\)/);
+  assert.match(app, /timeline\.addSnapshot\(metadata, matchCount > 1 \? previewCandidates : firstMatch \? \[firstMatch\] : \[\], \{ matchCount, candidatesInScratch: matchCount > 1 \}\)/);
   assert.match(app, /database\.macTimelineAttachHistoryEvent\(queryId, lookupKey, item\.id\)/);
   assert.match(app, /createMacTimelineStandaloneHistoryEvent\(item, context\.snapshot/);
   assert.match(app, /database\.macTimelineSnapshotContext\(queryId, item\.snapshotId, \{ deviceId: item\.deviceId \}\)/);
@@ -2867,7 +2869,7 @@ test("streamed OUI imports commit each normalized row batch without retaining th
 
 test("bundled IEEE seeding migrates by registry version in bounded batches without replacing local rules", () => {
   const app = readFileSync("src/app.js", "utf8");
-  const initializeBody = app.match(/async function ensureBundledOui\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
+  const initializeBody = app.match(/async function ensureBundledOui\([^\n]*\) \{([\s\S]*?)\n\}/)?.[1] || "";
   const registryLoader = app.match(/async function loadBundledIeeeRegistry\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
   const database = readFileSync("src/data/database.js", "utf8");
   const builder = readFileSync("scripts/build-portable.mjs", "utf8");
@@ -2968,7 +2970,7 @@ test("selected Inventory clipboard streams the selected rows and cancels on sele
 test("room chronology exposes comparison of the two latest Finals", () => {
   const html = readFileSync("index.html", "utf8");
   const app = readFileSync("src/app.js", "utf8");
-  assert.match(html, /id="compareRoomFinalsButton"[^>]*>Сравнить два последних Final/);
+  assert.match(html, /id="compareRoomFinalsButton"[^>]*>Сравнить два последних снимок объединения/);
   assert.match(html, /id="roomFinalComparison"/);
   assert.match(app, /async function loadRoomPairComparison\(pair, requestedPage = 1\)[\s\S]*?scanRoomPairComparison\(currentSnapshot, key, room, baselineIndex, knownRoomIndex, pair\)[\s\S]*?scanRoomPairComparison\(currentSnapshot, key, room, baselineIndex, knownRoomIndex, pair, page\.ranges\)[\s\S]*?roomPairComparisonPage\(actual, detailPass\.rows, page\.page\)/);
   assert.match(app, /state\.roomPair = \{ key, room, baseSnapshot: snapshots\.at\(-2\), currentSnapshot: snapshots\.at\(-1\) \}/);
@@ -3113,7 +3115,7 @@ test("unassigned analytics details load bounded pages instead of retaining a ful
   assert.match(app, /\[data-unassigned-device-page\]/);
   assert.match(database, /async loadSnapshotUnassignedRoomPage/);
   assert.match(database, /const matchesFilters = createDashboardDeviceMatcher\(filters\)/);
-  assert.match(database, /locationKey\(device\) \|\| !matchesFilters\(device\)\) continue/);
+  assert.match(database, /!matchesFilters\(device\) \|\| !uniqueDevice\(device\) \|\| hasKnownRoom\(device\)\) continue/);
   assert.match(renderer, /data-unassigned-device-page=/);
 });
 
@@ -3266,7 +3268,7 @@ test("device analytics can delete that device's event history without changing i
   const analytics = readFileSync("src/core/device-analytics.js", "utf8");
   assert.match(analytics, /data-delete-device-history/);
   assert.match(app, /database\.deleteDeviceHistoryEvents\(current\.device\.id\)/);
-  assert.match(app, /Появления в Final, снимки Final и Inventory сохранятся/);
+  assert.match(app, /Появления в снимок объединения, снимки снимок объединения и Inventory сохранятся/);
   assert.match(database, /async deleteDeviceHistoryEvents\(deviceId\)/);
   assert.match(database, /index\.openCursor\(IDBKeyRange\.only\(String\(deviceId\)\)\)/);
 });
@@ -3797,7 +3799,7 @@ test("single-file persistence streams staged output through analysis, Inventory 
   assert.match(task, /result\.singleAnalysisId = savedAnalysis\.id/);
   assert.ok(task.indexOf("result.singleAnalysisId = savedAnalysis.id") < saveFinal, "full saved chunks must become the active export source before Final persistence begins");
   assert.ok(task.indexOf('$("#exportSingleCsvButton").disabled = false', task.indexOf("savedAnalysisRecord = savedAnalysis")) < saveFinal, "exports stay enabled if the later Final write rejects");
-  assert.match(task, /Снимок Final не сохранён:[\s\S]*?error\.message/);
+  assert.match(task, /Снимок снимок объединения не сохранён:[\s\S]*?error\.message/);
   assert.match(task, /Полный результат анализа сохранён в истории и доступен для экспорта/);
   assert.doesNotMatch(task, /database\.deleteSingleAnalysis\(savedAnalysis\.id\)/, "a saved analysis remains exportable if persisting its Final snapshot fails");
   assert.match(task, /database\.attachSingleAnalysisSnapshot\(savedAnalysis\.id, finalSnapshot\.id\)/);

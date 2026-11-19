@@ -1061,7 +1061,7 @@ test("MAC timeline can emit an ambiguous match count while candidate details rem
   timeline.addSnapshot({ id: "snapshot-1", createdAt: "2026-01-01T00:00:00Z" }, [], { matchCount: 2_001, candidatesInScratch: true });
   assert.equal(emitted[0].status, "ambiguous");
   assert.equal(emitted[0].candidateCount, 2_001);
-  assert.equal(Object.hasOwn(emitted[0], "candidates"), false);
+  assert.deepEqual(emitted[0].candidates, []);
   assert.deepEqual(timeline.retainedLookupCounts, { historyKeys: 0, snapshotEvents: 0, snapshots: 0 });
 });
 

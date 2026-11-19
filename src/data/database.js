@@ -1,4 +1,4 @@
-import { firstMac, keyText, locationKey, macHex, MAX_DEVICE_ALTERNATIVES, normalizeDate, normalizeIp, normalizeMac, physicalLocationKey, text } from "../core/normalize.js";
+import { firstMac, hasKnownRoom, keyText, locationKey, macHex, MAX_DEVICE_ALTERNATIVES, normalizeDate, normalizeIp, normalizeMac, physicalLocationKey, text } from "../core/normalize.js";
 import { createDashboardDeviceMatcher, normalizeDashboardFilters } from "../core/dashboard-filter.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { historyConfidenceFromOccurrences } from "../core/history-confidence.js";
@@ -21,6 +21,7 @@ import { BATCH_DIRECTORY_ROLES, batchDirectoryHandleKey, createBatchDirectoryHan
 import { mergeInventoryObservations } from "../core/inventory-merge.js";
 import { compareSnapshotHistoryMetadata, SnapshotHistorySignatureAccumulator, snapshotCreatedAtSortKey } from "../core/snapshot-history-signature.js";
 import { roomHistoryFallbackKey } from "../core/room-history.js";
+import { createUniqueAnalyticsDeviceFilter } from "../core/analytics.js";
 
 const TEST_DB_NAME_PATTERN = /^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i;
 const PROFILE_DB_NAME_PATTERN = /^mac-analyzer-pro-next-profile-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -37,7 +38,7 @@ const PERFORMANCE_METRICS_SETTING = "performanceMetrics:v1";
 const PERFORMANCE_METRIC_PREFIX = "performanceMetric:";
 const LEGACY_PERFORMANCE_METRIC_PREFIX = "legacyPerformanceMetric:";
 const APPLICATION_LOG_SETTING = "applicationLog:v1";
-const SNAPSHOT_HISTORY_CACHE_SCHEMA = 2;
+const SNAPSHOT_HISTORY_CACHE_SCHEMA = 3;
 function snapshotHistoryCacheKey(filters = {}) {
   const normalized = normalizeDashboardFilters(filters);
   const scope = { query: normalized.query, manufacturer: normalized.manufacturer, room: normalized.room };
@@ -1911,10 +1912,10 @@ export class Database {
     store.put({ queryId: id, metric: "", value: "lease", count: 1, rankCount: -1, updatedAt });
     for (const { key, event } of rows) {
       store.put({ queryId: id, metric: "event", value: key, count: 1, rankCount: -1, data: event, updatedAt });
-      if (!event.historyOnly && ["first", "present", "changed", "observation"].includes(event.status)) {
+      if (!event.historyOnly && ["first", "present", "changed", "observation", "ambiguous"].includes(event.status)) {
         store.put({ queryId: id, metric: "appearance", value: key, count: 1, rankCount: -1, data: key, updatedAt });
       }
-      if (event.status !== "absent" && event.status !== "ambiguous") {
+      if (event.status !== "absent") {
         const source = String(event.source || event.snapshotName || "").trim();
         if (source) store.put({ queryId: id, metric: "source", value: source, count: 1, rankCount: -1, updatedAt });
       }
@@ -4256,6 +4257,32 @@ export class Database {
     };
   }
 
+  async loadSnapshotMainMacPage(id, { page = 1, limit = 50, legacy = false, filters = {}, positionMask = null, positionValue = 1 } = {}) {
+    const pageSize = Math.max(1, Math.min(100, Math.floor(Number(limit) || 50)));
+    const selectedPage = Math.max(1, Math.floor(Number(page) || 1));
+    const offset = (selectedPage - 1) * pageSize;
+    const seen = new Set();
+    const devices = [];
+    const matches = createDashboardDeviceMatcher(filters);
+    let position = 0;
+    await this.forEachSnapshotChunk(id, (chunk) => {
+      for (const device of chunk) {
+        const currentPosition = position++;
+        if ((positionMask && positionMask[currentPosition] !== positionValue) || !matches(device)) continue;
+        if (!legacy && device.source !== "Main" && !device.sources?.includes("Main")) continue;
+        for (const value of device.mainMacs || [device.mac]) {
+          const mac = normalizeMac(value);
+          if (!mac || seen.has(mac)) continue;
+          seen.add(mac);
+          if (seen.size > offset && devices.length < pageSize) devices.push({ ...device, mac });
+        }
+      }
+    });
+    const pageCount = Math.max(1, Math.ceil(seen.size / pageSize));
+    if (selectedPage > pageCount) return this.loadSnapshotMainMacPage(id, { page: pageCount, limit: pageSize, legacy, filters, positionMask, positionValue });
+    return { devices, total: seen.size, page: selectedPage, pageCount };
+  }
+
   async loadSnapshotUnassignedRoomPage(id, { page = 1, limit = 50, filters = {}, positionMask = null, positionValue = 1 } = {}) {
     const pageSize = Math.max(1, Math.min(100, Math.floor(Number(limit) || 50)));
     const selectedPage = Math.max(1, Math.floor(Number(page) || 1));
@@ -4264,10 +4291,11 @@ export class Database {
     const devices = [];
     let total = 0;
     let position = 0;
+    const uniqueDevice = createUniqueAnalyticsDeviceFilter();
     await this.forEachSnapshotChunk(id, (chunk) => {
       for (const device of chunk) {
         const currentPosition = position++;
-        if ((positionMask && positionMask[currentPosition] !== positionValue) || locationKey(device) || !matchesFilters(device)) continue;
+        if ((positionMask && positionMask[currentPosition] !== positionValue) || !matchesFilters(device) || !uniqueDevice(device) || hasKnownRoom(device)) continue;
         total += 1;
         if (total > offset && devices.length < pageSize) devices.push(device);
       }
@@ -8351,6 +8379,22 @@ export class Database {
     archiveTx.objectStore("archives").delete(archiveId);
     await transactionDone(archiveTx);
     return true;
+  }
+
+  async restoreLocalArchivesForAnalytics(onProgress = () => {}) {
+    let after = null;
+    let archiveCount = 0;
+    do {
+      const page = await this.listLocalArchivesPage({ after, limit: 25 });
+      for (const archive of page.rows) {
+        await this.restoreLocalArchive(archive.id, { preserveActiveSnapshot: true });
+        archiveCount += 1;
+        onProgress({ archiveCount, name: archive.name });
+      }
+      if (!page.hasMore) break;
+      after = page.nextCursor;
+    } while (after);
+    return { archiveCount };
   }
 
   async restoreLocalArchive(archiveId, {

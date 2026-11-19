@@ -187,7 +187,7 @@ async function navigateToHistoryDatabase(offset, expectedDatabase) {
     await attachToTarget(target.webSocketDebuggerUrl, { force: true });
     await command("Runtime.enable");
     const state = await evaluate(`(()=>({db:new URL(location.href).searchParams.get('db'),title:document.title,status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
-    if (state.db === expectedDatabase && state.title === "MAC Analyzer Pro Next" && state.status.includes("в активном Final") && !state.error) return state;
+    if (state.db === expectedDatabase && state.title === "MAC Analyzer Pro Next" && state.status.includes("в активном снимке объединения") && !state.error) return state;
   }
   throw new Error(`Browser did not restore ready database ${expectedDatabase} from history`);
 }
@@ -493,6 +493,64 @@ if (process.argv.includes("--legacy-observation-history-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--address-roster-regression-only")) {
+  const address = "Москва, Кутузовский проспект, 32А, второй этаж";
+  const macAt = (index) => "02:80:00:00:00:" + index.toString(16).padStart(2, "0");
+  const check = async (expression, label) => {
+    for (let attempt = 0; attempt < 250; attempt += 1) {
+      const result = await evaluate(expression);
+      if (result) return result;
+      const error = await evaluate("!document.querySelector('#errorBanner').hidden && document.querySelector('#errorBanner').textContent");
+      if (error) throw new Error(label + ": " + error);
+      await wait(100);
+    }
+    throw new Error(label + " timed out");
+  };
+  await evaluate("document.querySelector('[data-view=\"enrichment\"]').click()");
+  const mainRows = Array.from({length:104}, (_,i) => [macAt(i), "D-"+i, "10.45.0.1", "SR-"+i, "1"].join(";"));
+  mainRows.push([macAt(0),"CONFLICTING-ID","10.45.0.1","SR-0","1"].join(";"));
+  const smartRows = Array.from({length:104}, (_,i) => [macAt(i), address, i ? "Переговорная 2" : "", "SR-"+i].join(";"));
+  for (let run=1;run<=2;run+=1) {
+    await assignInput("#mainFileInput", "address-main-"+run+".csv", "MAC;Device ID;NasIP;Smartroom ID;NasPortID\n"+mainRows.join("\n"));
+    await assignInput("#smartroomFileInput", "address-smartroom-"+run+".csv", "MAC;Адрес локации;Название комнаты;Smartroom ID\n"+smartRows.join("\n"));
+    await evaluate("(()=>{for(const [role,fields] of Object.entries({main:{mac:0,deviceId:1,switchIp:2,smartroomId:3,switchPort:4},smartroom:{mac:0,address:1,room:2,smartroomId:3}})){for(const[field,index]of Object.entries(fields)){const select=document.querySelector('[data-mapping-role=\"'+role+'\"][data-mapping-field=\"'+field+'\"]');select.value=String(index);select.dispatchEvent(new Event('change',{bubbles:true}))}}window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()})()");
+    await check("document.querySelector('#databaseStatus').textContent.includes("+JSON.stringify(run+" снимок объединения")+") && !document.querySelector('#runEnrichmentButton').disabled", "Commit merged snapshot "+run);
+  }
+  await evaluate("document.querySelector('[data-view=\"analytics\"]').click()");
+  await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#analyticsKpis [data-kpi=\"devices\"] strong')?.textContent.trim()==='104'", "Distinct Main count");
+  const roomCount = await evaluate("document.querySelector('#analyticsKpis [data-kpi=\"withoutRoom\"] strong')?.textContent.trim()");
+  if(roomCount!=="1") throw new Error("Without-room KPI did not deduplicate conflicting MAC: "+roomCount);
+  await evaluate("document.querySelector('#analyticsKpis [data-kpi=\"devices\"]').click()");
+  await check("document.querySelector('#detailsDialog').open && document.querySelector('#detailsDialog [data-dialog-title]').textContent==='Устройства основного файла'", "Main roster dialog");
+  const mainDetail=await evaluate("(()=>{const dialog=document.querySelector('#detailsDialog');return{count:dialog.textContent,macs:[...dialog.querySelectorAll('tbody tr:not([data-virtual-spacer]) [data-device-field=\"mac\"]')].map(e=>e.textContent.trim()),address:[...dialog.querySelectorAll('[data-device-field=\"address\"]')].map(e=>e.textContent.trim())}})()");
+  if(!mainDetail.count.includes("104") || !mainDetail.address.includes(address)) throw new Error("Main roster lost full SmartRoom address: "+JSON.stringify(mainDetail));
+  await evaluate("document.querySelector('#detailsDialog [data-dashboard-main-page=\"2\"]').click()");
+  await check("document.querySelector('#detailsDialog').textContent.includes('страница 2 из 2')", "Second Main roster page");
+  const pageTwo=await evaluate("[...document.querySelectorAll('#detailsDialog tbody tr:not([data-virtual-spacer]) [data-device-field=\"mac\"]')].map(e=>e.textContent.trim())");
+  if(pageTwo.length!==4 || pageTwo.some(mac=>mainDetail.macs.includes(mac))) throw new Error("Main roster page repeated or dropped MACs: "+JSON.stringify(pageTwo));
+  await evaluate("document.querySelector('#detailsDialog').close();document.querySelector('#analyticsKpis [data-kpi=\"withoutRoom\"]').click()");
+  await check("document.querySelector('#detailsDialog').open && document.querySelector('#detailsDialog [data-dialog-title]').textContent==='Устройства без помещения'", "Without-room details");
+  await check("document.querySelector('#detailsDialog tbody tr')", "Without-room rows");
+  const missing=await evaluate("({text:document.querySelector('#detailsDialog').textContent,rows:document.querySelectorAll('#detailsDialog tbody tr:not([data-virtual-spacer])').length})");
+  if(missing.rows!==1 || !missing.text.includes("Unknown1")) throw new Error("Without-room list disagrees with KPI: "+JSON.stringify(missing));
+  await evaluate("document.querySelector('#detailsDialog').close();document.querySelector('[data-view=\"history\"]').click();document.querySelector('#macHistorySearch').value="+JSON.stringify(macAt(0))+";document.querySelector('#openMacHistoryButton').click()");
+  await check("document.querySelectorAll('#macTimeline .mac-timeline-ambiguous').length===2", "Ambiguous MAC chronology");
+  const ambiguous=await evaluate("({summary:document.querySelector('#macTimelineSummary').textContent,candidates:document.querySelectorAll('#macTimeline .mac-timeline-ambiguous li').length,overflows:document.querySelector('#macTimeline').scrollWidth>document.querySelector('#macTimeline').clientWidth+1})");
+  if(ambiguous.summary.includes("Выгрузок0") || ambiguous.summary.includes("Источников0") || ambiguous.candidates!==4 || ambiguous.overflows) throw new Error("Ambiguous chronology lost sources or candidate details: "+JSON.stringify(ambiguous));
+  await evaluate("document.querySelector('[data-view=\"data\"]').click();document.querySelector('#localArchiveName').value='Address regression';document.querySelector('#localArchiveForm').requestSubmit()");
+  await check("document.querySelector('#localArchiveStatus').textContent.includes('Сохранён архив') && !document.querySelector('#saveLocalArchiveButton').disabled", "Local archive save");
+  await evaluate("document.querySelector('[data-view=\"analytics\"]').click();document.querySelector('#includeArchivedSnapshotsButton').click()");
+  await check("document.querySelector('#archiveAnalyticsStatus').textContent.includes('Учтено архивов · 1') && !document.querySelector('#includeArchivedSnapshotsButton').disabled", "Archive analytics restore");
+  const archived=await evaluate("document.querySelector('#databaseStatus').textContent");
+  if(!archived.includes("2 снимок объединения")) throw new Error("Archive inclusion duplicated snapshots: "+archived);
+  const reloaded=await reloadDatabaseAndWait(new URL(target.url).searchParams.get("db"));
+  await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#analyticsKpis [data-kpi=\"devices\"] strong')?.textContent.trim()==='104'", "Automatic database reload");
+  console.log(JSON.stringify({addressRosterRegression:true,mainCount:104,pageTwo,missing,ambiguous,archived,reloaded,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--dashboard-history-signs-only")) {
   await evaluate(`(()=>{const Original=window.Chart;if(typeof Original!=="function")throw new Error("Chart.js is unavailable");window.__smokeChartConfigs=[];window.Chart=new Proxy(Original,{construct(target,args,newTarget){const config=args[1];if(config?.data?.datasets)window.__smokeChartConfigs.push({canvasId:args[0]?.canvas?.id||"",labels:[...config.data.labels],datasets:config.data.datasets.map(dataset=>({label:dataset.label,data:[...dataset.data]}))});return Reflect.construct(target,args,newTarget)}})})()`);
   await evaluate(`document.querySelector('[data-view="enrichment"]').click()`);
@@ -509,9 +567,9 @@ if (process.argv.includes("--dashboard-history-signs-only")) {
       const state=await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
       if(state.error)throw new Error(`History trend Final ${count} failed: ${state.message}`);
       status=state.status;
-      if(status.includes(`${count} Final`))break;
+      if(status.includes(`${count} снимок объединения`))break;
     }
-    if(!status.includes(`${count} Final`))throw new Error(`History trend Final ${count} did not commit: ${status}`);
+    if(!status.includes(`${count} снимок объединения`))throw new Error(`History trend Final ${count} did not commit: ${status}`);
     const activeCount=await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const deviceCount=chunks.result.filter(chunk=>chunk.snapshotId===active.result?.value).reduce((total,chunk)=>total+(chunk.devices||[]).length,0);db.close();resolve(deviceCount)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
     if(activeCount!==rows.length)throw new Error(`History trend Final ${count} stored ${activeCount} rows instead of ${rows.length}`);
   };
@@ -531,10 +589,10 @@ if (process.argv.includes("--dashboard-history-signs-only")) {
   const totals=state.configs.find(item=>item.canvasId==='totalChart');
   const added=presence?.datasets.find(item=>item.label==='Добавлено')?.data;
   const absent=presence?.datasets.find(item=>item.label==='Отсутствовало')?.data;
-  if(state.loading||state.history.find(item=>item.label==='Final в истории')?.value!=='3'||state.history.find(item=>item.label==='Уникальных MAC в Main выбранного Final')?.value!=='3'
+  if(state.loading||state.history.find(item=>item.label==='снимок объединения в истории')?.value!=='3'||state.history.find(item=>item.label==='Уникальных MAC в Main выбранного снимка объединения')?.value!=='3'
     ||presence?.labels.length!==2||presence.labels.some(label=>label.includes('history_first'))
     ||JSON.stringify(added)!==JSON.stringify([1,1])||JSON.stringify(absent)!==JSON.stringify([0,-1])
-    ||JSON.stringify(totals?.labels)!==JSON.stringify(['Final history_first.csv','Final history_second.csv','Final history_third.csv'])
+    ||JSON.stringify(totals?.labels)!==JSON.stringify(['снимок объединения history_first.csv','снимок объединения history_second.csv','снимок объединения history_third.csv'])
     ||JSON.stringify(totals?.datasets?.[0]?.data)!==JSON.stringify([2,3,3])
     ||state.trendSizes.some(height=>height<140||height>200))throw new Error(`Final history trend axes, signs, or full snapshot sequence are incorrect: ${JSON.stringify({state,presence,totals,added,absent})}`);
   const coverage = state.configs.find((item) => item.canvasId === "pyqtFieldCoverageChart");
@@ -570,7 +628,7 @@ if (process.argv.includes("--dashboard-history-signs-only")) {
     comparison = await evaluate(`({analytics:document.querySelector('#analyticsView').classList.contains('active'),beforeAfter:document.querySelector('#macHistoryDialog .timeline-final-comparison')?.textContent||'',inferred:document.querySelector('#macHistoryDialog [data-mac-dialog-timeline]')?.textContent.includes('Адрес по истории IP коммутатора: Москва, ул. Тверская, 8')})`);
     if (comparison.beforeAfter) break;
   }
-  if (!comparison?.analytics || !comparison.beforeAfter.includes("Model A2") || !comparison.beforeAfter.includes("Было в предыдущем Final") || !comparison.inferred) throw new Error(`Dashboard MAC comparison or inferred historic address is missing: ${JSON.stringify(comparison)}`);
+  if (!comparison?.analytics || !comparison.beforeAfter.includes("Model A2") || !comparison.beforeAfter.includes("Было в предыдущем снимке объединения") || !comparison.inferred) throw new Error(`Dashboard MAC comparison or inferred historic address is missing: ${JSON.stringify(comparison)} / ${await evaluate("document.querySelector('#macHistoryDialog')?.textContent + document.querySelector('#errorBanner')?.textContent")}`);
   console.log(JSON.stringify({dashboardHistorySignsOnly:true,history:state.history,presence,totals,compactLayout,ok:true}));
   await command("Browser.close");
   socket.close();
@@ -600,9 +658,9 @@ if (process.argv.includes("--search-doubleclick-only")) {
     const current=await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if(current.error)throw new Error(`Search double-click fixture failed: ${current.message}`);
     finalStatus=current.status;
-    if(finalStatus.includes('1 Final')&&finalStatus.includes('3 в активном Final'))break;
+    if(finalStatus.includes('1 снимок объединения')&&finalStatus.includes('3 в активном снимке объединения'))break;
   }
-  if(!finalStatus.includes('3 в активном Final'))throw new Error(`Search double-click fixture did not save three strong-identity devices: ${finalStatus}`);
+  if(!finalStatus.includes('3 в активном снимке объединения'))throw new Error(`Search double-click fixture did not save three strong-identity devices: ${finalStatus}`);
   const stored=await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const devices=chunks.result.filter(chunk=>chunk.snapshotId===active.result?.value).flatMap(chunk=>chunk.devices||[]);db.close();resolve(devices.map(({mac,deviceId,model})=>({mac,deviceId,model}))) };tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   if(stored.length!==3||!stored.some(item=>item.deviceId==='CONTEXT-MODEL-2'&&!item.mac&&item.model==='Context Model B'))throw new Error(`The model-only row did not retain strong Device ID identity: ${JSON.stringify(stored)}`);
   await evaluate(`document.querySelector('[data-view="search"]').click()`);
@@ -666,13 +724,13 @@ if (process.argv.includes("--dashboard-summary-parity-only")) {
     await wait(100);
     const state=await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if(state.error)throw new Error(`Dashboard summary fixture failed: ${state.message}`);
-    if(state.status.includes('1 Final')&&state.status.includes('5 в активном Final')){finalReady=true;break}
+    if(state.status.includes('1 снимок объединения')&&state.status.includes('5 в активном снимке объединения')){finalReady=true;break}
   }
   if(!finalReady)throw new Error('Dashboard summary fixture did not save all five devices');
    const databaseName = new URL(target.url).searchParams.get("db");
    await evaluate(`history.replaceState(null,"",location.pathname+location.search+"#analytics")`);
    const restored = await reloadDatabaseAndWait(databaseName);
-   if (restored.db !== databaseName || !restored.status.includes("1 Final") || await evaluate(`location.hash`) !== "#analytics") throw new Error(`Direct Analytics bootstrap did not restore the saved Final: ${JSON.stringify({ restored, hash: await evaluate(`location.hash`) })}`);
+   if (restored.db !== databaseName || !restored.status.includes("1 снимок объединения") || await evaluate(`location.hash`) !== "#analytics") throw new Error(`Direct Analytics bootstrap did not restore the saved Final: ${JSON.stringify({ restored, hash: await evaluate(`location.hash`) })}`);
   let dashboard=null;
   for(let attempt=0;attempt<300;attempt+=1){
     await wait(100);
@@ -800,9 +858,9 @@ if (process.argv.includes("--identity-diagnostics-parity-only")) {
     await wait(100);
     merged = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const snapshot=snapshots.result.find(item=>item.id===active.result?.value);const devices=chunks.result.filter(item=>item.snapshotId===active.result?.value).flatMap(item=>item.devices||[]);db.close();resolve({status:document.querySelector('#databaseStatus')?.textContent||'',summary:document.querySelector('#enrichmentSummary')?.textContent.replace(/\\s+/g,' ').trim()||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',snapshot:snapshot?{deviceCount:snapshot.deviceCount}:null,devices:devices.map(({deviceId,manufacturer,model,room})=>({deviceId,manufacturer,model,room}))})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
     if (merged.error) throw new Error(`Main/SmartRoom identity diagnostic merge failed: ${merged.message}`);
-    if (merged.status.includes('1 Final') && merged.snapshot?.deviceCount === 1) break;
+    if (merged.status.includes('1 снимок объединения') && merged.snapshot?.deviceCount === 1) break;
   }
-  if (!merged?.status.includes('1 Final') || merged.snapshot?.deviceCount !== 1 || merged.devices.length !== 1 || merged.devices[0].deviceId !== 'ID-VALID'
+  if (!merged?.status.includes('1 снимок объединения') || merged.snapshot?.deviceCount !== 1 || merged.devices.length !== 1 || merged.devices[0].deviceId !== 'ID-VALID'
     || merged.devices[0].manufacturer !== 'Acme' || merged.devices[0].room !== 'Room A' || !merged.summary.includes('некорректных: 1')) {
     throw new Error(`Main/SmartRoom merge counted a blank or identity-less row as a device or lost strong-identity diagnostics: ${JSON.stringify(merged)}`);
   }
@@ -1065,9 +1123,9 @@ if (process.argv.includes("--inventory-field-history-only")) {
       const current = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
       if (current.error) throw new Error(`Inventory field history Final ${expectedCount} failed: ${current.message}`);
       status = current.status;
-      if (status.includes(`${expectedCount} Final`)) break;
+      if (status.includes(`${expectedCount} снимок объединения`)) break;
     }
-    if (!status.includes(`${expectedCount} Final`)) throw new Error(`Expected ${expectedCount} Finals after ${name}, got: ${status}`);
+    if (!status.includes(`${expectedCount} снимок объединения`)) throw new Error(`Expected ${expectedCount} снимок объединенияs after ${name}, got: ${status}`);
   };
   await runFinal({ name: "field-history-first.csv", manufacturer: "Acme", model: "Codec A", address: "Room A", switchIp: "10.0.0.1", expectedCount: 1 });
   await runFinal({ name: "field-history-second.csv", manufacturer: "Northwind", model: "", address: "Room B", switchIp: "10.0.0.2", expectedCount: 2 });
@@ -1125,9 +1183,9 @@ if (process.argv.includes("--inventory-column-manager-only")) {
     const current = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if (current.error) throw new Error(`Column manager source Final failed: ${current.message}`);
     finalStatus = current.status;
-    if (finalStatus.includes("1 Final") && finalStatus.includes("3 устройств")) break;
+    if (finalStatus.includes("1 снимок объединения") && finalStatus.includes("3 устройств")) break;
   }
-  if (!finalStatus.includes("1 Final") || !finalStatus.includes("3 устройств")) throw new Error(`Column manager source Final was not persisted: ${finalStatus}`);
+  if (!finalStatus.includes("1 снимок объединения") || !finalStatus.includes("3 устройств")) throw new Error(`Column manager source Final was not persisted: ${finalStatus}`);
   await evaluate(`document.querySelector('[data-view="search"]').click()`);
   let roster = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -1266,9 +1324,9 @@ if (process.argv.includes("--device-analytics-appearances-only")) {
       const current = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
       if (current.error) throw new Error(`Device analytics Final ${expectedCount} failed: ${current.message}`);
       status = current.status;
-      if (status.includes(`${expectedCount} Final`)) break;
+      if (status.includes(`${expectedCount} снимок объединения`)) break;
     }
-    if (!status.includes(`${expectedCount} Final`)) throw new Error(`Expected ${expectedCount} Finals after ${name}, got: ${status}`);
+    if (!status.includes(`${expectedCount} снимок объединения`)) throw new Error(`Expected ${expectedCount} снимок объединенияs after ${name}, got: ${status}`);
   };
   await runFinal({ name: "device-analytics-first.csv", manufacturer: "Acme Devices", model: "Codec One", ip: "10.76.0.1", address: "Building A", room: "Room A", expectedCount: 1 });
   await runFinal({ name: "device-analytics-second.csv", manufacturer: "Contoso AV", model: "Codec Two", ip: "10.76.0.2", address: "Building B", room: "Room B", expectedCount: 2 });
@@ -1402,9 +1460,9 @@ if (process.argv.includes("--vendor-model-history-only")) {
       const state = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
       if (state.error) throw new Error(`Vendor/model history Final ${expectedCount} failed: ${state.message}`);
       status = state.status;
-      if (status.includes(`${expectedCount} Final`)) break;
+      if (status.includes(`${expectedCount} снимок объединения`)) break;
     }
-    if (!status.includes(`${expectedCount} Final`)) throw new Error(`Expected ${expectedCount} Finals, got: ${status}`);
+    if (!status.includes(`${expectedCount} снимок объединения`)) throw new Error(`Expected ${expectedCount} снимок объединенияs, got: ${status}`);
   };
   await runFinal({name:"vendor-model-history-first.csv",vendor:"Northwind Media",model:"Codec Three",expectedCount:1,content:"MAC;Device ID;Производитель;Модель\n02:FA:DE:B0:C0:01;VMH-484-DEVICE-1;Northwind Media;Codec Three"});
   await evaluate(`document.querySelector('[data-view="data"]').click();document.querySelector('#vendorInferenceEnabled').checked=false;document.querySelector('#saveVendorInferenceSettingsButton').click();document.querySelector('[data-view="enrichment"]').click()`);
@@ -1415,11 +1473,11 @@ if (process.argv.includes("--vendor-model-history-only")) {
   for (let attempt = 0; attempt < 240; attempt += 1) {
     await wait(100);
     learningStatus = await evaluate(`document.querySelector('#vendorModelLearnStatus')?.textContent||''`);
-    if (learningStatus.includes('активный Final дополнен:')) break;
+    if (learningStatus.includes('активный снимок объединения дополнен:')) break;
   }
   const learningAfter = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks','inventory','history','oui','mac5Models'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const history=tx.objectStore('history').count();const vendor=tx.objectStore('oui').get('02FADE');const model=tx.objectStore('mac5Models').get('02FADEB0C0');const chunks=tx.objectStore('snapshotChunks').getAll();const inventory=tx.objectStore('inventory').getAll();let metadata=null;active.onsuccess=()=>{if(active.result?.value){const request=tx.objectStore('snapshots').get(active.result.value);request.onsuccess=()=>{metadata=request.result||null};request.onerror=()=>reject(request.error)}};tx.oncomplete=()=>{const devices=chunks.result.filter((chunk)=>chunk.snapshotId===active.result?.value).flatMap((chunk)=>chunk.devices||[]);const target=devices.find((row)=>row.deviceId==='VMH-484-LEARN-TARGET-99');const inventoryTarget=inventory.result.find((row)=>row.id===target?.id);db.close();resolve({activeId:active.result?.value,createdAt:metadata?.createdAt||'',history:history.result,vendor:vendor.result||null,model:model.result||null,target:target||null,inventory:inventoryTarget||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   if (!learningStatus.includes('производителей 3, моделей 3') || !learningStatus.includes('добавлено: производителей 3, моделей 3')
-    || !learningStatus.includes('активный Final дополнен: производителей 1, моделей 1')
+    || !learningStatus.includes('активный снимок объединения дополнен: производителей 1, моделей 1')
     || learningAfter.activeId !== learningBefore.activeId || learningAfter.createdAt !== learningBefore.createdAt
     || learningAfter.history !== learningBefore.history || learningAfter.vendor?.vendor !== 'Northwind Media'
     || learningAfter.model?.model !== 'Codec Three' || learningAfter.target?.manufacturer !== 'Northwind Media'
@@ -1436,9 +1494,9 @@ if (process.argv.includes("--vendor-model-history-only")) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     await wait(50);
     status = await evaluate(`document.querySelector('#vendorModelHistoryStatus')?.textContent||''`);
-    if (status.includes('2 Final · 2 импортированных наблюдений · 2 импортированных загрузок')) break;
+    if (status.includes('2 снимок объединения · 2 импортированных наблюдений · 2 импортированных загрузок')) break;
   }
-  if (!status.includes('2 Final · 2 импортированных наблюдений · 2 импортированных загрузок')) throw new Error(`Vendor/model history did not aggregate both Finals and imported observation/load rows: ${status}`);
+  if (!status.includes('2 снимок объединения · 2 импортированных наблюдений · 2 импортированных загрузок')) throw new Error(`Vendor/model history did not aggregate both Finals and imported observation/load rows: ${status}`);
   await evaluate(`(()=>{globalThis.__vmhDownloads=[];globalThis.showSaveFilePicker=undefined;const create=URL.createObjectURL.bind(URL);URL.createObjectURL=(blob)=>{if(blob instanceof Blob)globalThis.__vmhDownloads.push(blob);return create(blob)}})()`);
   const verifyExport = async ({kind,query,expected,expectedRows=1}) => {
     await evaluate(`(()=>{const form=document.querySelector('#vendorModelHistoryFilters');form.elements.namedItem('kind').value=${JSON.stringify(kind)};form.elements.namedItem('query').value=${JSON.stringify(query)};form.requestSubmit();return true})()`);
@@ -1529,9 +1587,9 @@ if (process.argv.includes("--final-history-management-only")) {
       await wait(100);
       result = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
       if (result.error) throw new Error(`Final creation failed for ${name}: ${result.message}`);
-      if (result.status.includes(`${expectedCount} Final`)) break;
+      if (result.status.includes(`${expectedCount} снимок объединения`)) break;
     }
-    if (!result?.status.includes(`${expectedCount} Final`)) throw new Error(`Expected ${expectedCount} Final after ${name}: ${JSON.stringify(result)}`);
+    if (!result?.status.includes(`${expectedCount} снимок объединения`)) throw new Error(`Expected ${expectedCount} снимок объединения after ${name}: ${JSON.stringify(result)}`);
   };
   await createFinal({name:"history-delete-room-one.csv",mac:"00:44:55:66:77:81",deviceId:"HISTORY-DELETE-81",vendor:"History Vendor One",model:"History Model One",room:"Delete Room One",expectedCount:1});
   await createFinal({name:"history-delete-room-two.csv",mac:"00:44:55:66:77:82",deviceId:"HISTORY-DELETE-82",vendor:"History Vendor Two",model:"History Model Two",room:"Delete Room Two",expectedCount:2});
@@ -1611,9 +1669,9 @@ if (process.argv.includes("--placeholder-model-recovery-only")) {
       const state = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
       if (state.error) throw new Error(`Final ${expectedCount} failed: ${state.message}`);
       status = state.status;
-      if (status.includes(`${expectedCount} Final`)) break;
+      if (status.includes(`${expectedCount} снимок объединения`)) break;
     }
-    if (!status.includes(`${expectedCount} Final`)) throw new Error(`Expected ${expectedCount} Finals after ${name}, got: ${status}`);
+    if (!status.includes(`${expectedCount} снимок объединения`)) throw new Error(`Expected ${expectedCount} снимок объединенияs after ${name}, got: ${status}`);
   };
   await createFinal({ name: "model-recovery-known.csv", model: "Conference Kit", expectedCount: 1 });
   await createFinal({ name: "model-recovery-placeholder.csv", model: "Unknown Model", expectedCount: 2 });
@@ -1820,9 +1878,9 @@ if (process.argv.includes("--table-context-actions-only")) {
     await wait(100);
     inventoryReady = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (inventoryReady.error) throw new Error(`Context-action Final failed: ${inventoryReady.message}`);
-    if (inventoryReady.status.includes("1 Final") && inventoryReady.status.includes("2 в активном Final")) break;
+    if (inventoryReady.status.includes("1 снимок объединения") && inventoryReady.status.includes("2 в активном снимке объединения")) break;
   }
-  if (!inventoryReady?.status.includes("2 в активном Final")) throw new Error(`Context-action Inventory did not load two rows: ${JSON.stringify(inventoryReady)}`);
+  if (!inventoryReady?.status.includes("2 в активном снимке объединения")) throw new Error(`Context-action Inventory did not load two rows: ${JSON.stringify(inventoryReady)}`);
   await evaluate(`document.querySelector('[data-view="search"]').click()`);
   await wait(200);
   await evaluate(`(()=>{window.__smokeClipboard=[];class SmokeClipboardItem{constructor(values){this.values=values}getType(type){return Promise.resolve(this.values[type])}}Object.defineProperty(globalThis,'ClipboardItem',{configurable:true,value:SmokeClipboardItem});Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(value)=>{window.__smokeClipboard.push(String(value))},write:async(items)=>{const blob=await items[0].getType('text/plain');window.__smokeClipboard.push(await blob.text())}}});return true})()`);
@@ -2042,7 +2100,7 @@ if (process.argv.includes("--workspace-source-handle-restart-only")) {
   if (!engineerActive) throw new Error("Could not authenticate disposable engineer mode for workspace source recovery smoke");
 
   await evaluate(`document.querySelector("[data-view=\\"enrichment\\"]").click()`);
-  await assignInput("#mainFileInput", "workspace-source-final.csv", "MAC;Device ID;Производитель;Модель\n02:63:00:00:01:02;WORKSPACE-SOURCE-FINAL;Recovery Vendor;Existing Final\n");
+  await assignInput("#mainFileInput", "workspace-source-final.csv", "MAC;Device ID;Производитель;Модель\n02:63:00:00:01:02;WORKSPACE-SOURCE-FINAL;Recovery Vendor;Existing снимок объединения\n");
   for (const [field, index] of [["mac",0],["deviceId",1],["manufacturer",2],["model",3]]) {
     const selected = await evaluate(`(()=>{const control=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!control)throw new Error('Missing Main mapping ${field}');control.value=${index};control.dispatchEvent(new Event('change',{bubbles:true}));return control.value})()`);
     if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply: ${selected}`);
@@ -2287,7 +2345,7 @@ if (process.argv.includes("--ip-address-mapping-workflow-only")) {
   const byId = Object.fromEntries((applied?.devices||[]).map(item=>[item.deviceId,item]));
   if (!applied || applied.error || applied.finalCount !== 2 || applied.activeId !== beforeApply.activeId
     || applied.snapshot?.id !== beforeApply.snapshot.id || applied.snapshot?.createdAt !== beforeApply.snapshot.createdAt
-    || byId["IPMAP-TARGET-1"]?.address !== "Auto Address" || byId["IPMAP-TARGET-1"]?.source !== "Автоопределение из активного Final"
+    || byId["IPMAP-TARGET-1"]?.address !== "Auto Address" || byId["IPMAP-TARGET-1"]?.source !== "Автоопределение из активного снимка объединения"
     || byId["IPMAP-TARGET-2"]?.address !== "Imported Address" || byId["IPMAP-TARGET-2"]?.source !== "Файл: ip-mapping-import.csv"
     || byId["IPMAP-TARGET-3"]?.address !== "Manual Address" || byId["IPMAP-TARGET-4"]?.address !== "Existing Address"
     || !applied.inventory.includes("Auto Address") || !applied.inventory.includes("Imported Address") || !applied.inventory.includes("Manual Address")) {
@@ -2418,7 +2476,7 @@ if (process.argv.includes("--data-directory-write-failure-only")) {
     if (failedWrite.error) throw new Error(`Data-directory archive failure surfaced as an application error: ${failedWrite.message}`);
     if (failedWrite.writeAttempts === 1 && failedWrite.status.includes('Запись архива не выполнена')) break;
   }
-  if (failedWrite.writeAttempts !== 1 || !failedWrite.status.includes('Synthetic write permission denied') || !failedWrite.status.includes('Final сохранён в IndexedDB; выберите папку с правом записи')
+  if (failedWrite.writeAttempts !== 1 || !failedWrite.status.includes('Synthetic write permission denied') || !failedWrite.status.includes('снимок объединения сохранён в IndexedDB; выберите папку с правом записи')
       || failedWrite.permissionButtonHidden || !failedWrite.otherFolderButtonText.includes('Выбрать другую папку')) {
     throw new Error(`Failed MADB write did not disable the handle and show exact recovery instructions: ${JSON.stringify(failedWrite)}`);
   }
@@ -2427,7 +2485,7 @@ if (process.argv.includes("--data-directory-write-failure-only")) {
   const finalState = await evaluate(`(()=>({directoryStatus:document.querySelector('#dataDirectoryStatus')?.textContent||'',otherFolderButton:{hidden:document.querySelector('#dataDirectoryButton')?.hidden,text:document.querySelector('#dataDirectoryButton')?.textContent.trim()||''},chooseFolderButton:{hidden:document.querySelector('#chooseDataDirectoryButton')?.hidden,text:document.querySelector('#chooseDataDirectoryButton')?.textContent.trim()||''},error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',writeAttempts:window.__archiveWriteFailureAttempts()}))()`);
   if (finalState.error || finalState.writeAttempts !== 1 || afterFailure.finals.length !== 2 || afterFailure.activeId === beforeFailure.activeId
       || !afterFailure.finals.some((item) => item.id === beforeFailure.activeId) || afterFailure.inventoryCount !== 2
-      || !finalState.directoryStatus.includes('Final сохранён в IndexedDB; выберите папку с правом записи')
+      || !finalState.directoryStatus.includes('снимок объединения сохранён в IndexedDB; выберите папку с правом записи')
       || finalState.otherFolderButton.hidden || !finalState.otherFolderButton.text.includes('Выбрать другую папку')) {
     throw new Error(`Enrichment did not continue with both Final records intact after MADB write failure: ${JSON.stringify({beforeFailure,failedWrite,afterFailure,finalState})}`);
   }
@@ -2469,9 +2527,9 @@ if (process.argv.includes("--data-directory-populated-startup-restore-only")) {
       const current = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
       if (current.error) throw new Error(`Could not create ${fileName}: ${current.message}`);
       status = current.status;
-      if (status.includes('1 Final') && status.includes('1 в активном Final')) break;
+      if (status.includes('1 снимок объединения') && status.includes('1 в активном снимке объединения')) break;
     }
-    if (!status.includes('1 Final') || !status.includes('1 в активном Final')) throw new Error(`${fileName} did not save one Final device: ${status}`);
+    if (!status.includes('1 снимок объединения') || !status.includes('1 в активном снимке объединения')) throw new Error(`${fileName} did not save one Final device: ${status}`);
     return await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const rows=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value||'',finals:rows.result.filter(item=>item.kind!=='single').map(item=>({id:item.id,deviceCount:item.deviceCount}))})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   };
 
@@ -2522,7 +2580,7 @@ if (process.argv.includes("--data-directory-populated-startup-restore-only")) {
   const archiveFileState = await evaluate(`(()=>new Promise(async(resolve,reject)=>{try{const handle=await window.__startupRestoreDirectory.getFileHandle('mac-analyzer-data.madb',{create:true});const writable=await handle.createWritable();await writable.write(${JSON.stringify(portableArchiveText)});await writable.close();const file=await handle.getFile();resolve({name:file.name,size:file.size,textLength:(await file.text()).length})}catch(error){reject(error)}}))()`);
   if (archiveFileState.name !== 'mac-analyzer-data.madb' || !archiveFileState.size || archiveFileState.textLength !== portableArchiveText.length) throw new Error(`Could not seed a valid OPFS startup archive: ${JSON.stringify(archiveFileState)}`);
   const beforeReload = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',db:new URL(location.href).searchParams.get('db')}))()`);
-  if (!beforeReload.status.includes('1 Final') || beforeReload.db !== mainDatabase) throw new Error(`The populated main IndexedDB was not preserved before restart: ${JSON.stringify(beforeReload)}`);
+  if (!beforeReload.status.includes('1 снимок объединения') || beforeReload.db !== mainDatabase) throw new Error(`The populated main IndexedDB was not preserved before restart: ${JSON.stringify(beforeReload)}`);
   await command("Page.reload", { ignoreCache: true });
   let restored = null;
   for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -2564,9 +2622,9 @@ if (process.argv.includes("--period-mode-persistence-only")) {
     const state = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if (state.error) throw new Error(`Could not create a current Final for the period-settings smoke: ${state.message}`);
     finalStatus = state.status;
-    if (finalStatus.includes('1 Final')) break;
+    if (finalStatus.includes('1 снимок объединения')) break;
   }
-  if (!finalStatus.includes('1 Final')) throw new Error(`Period-settings smoke did not create one current Final: ${finalStatus}`);
+  if (!finalStatus.includes('1 снимок объединения')) throw new Error(`Period-settings smoke did not create one current Final: ${finalStatus}`);
   await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
   let controlsReady = false;
   for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -2595,7 +2653,7 @@ if (process.argv.includes("--period-mode-persistence-only")) {
     if (restored.error) throw new Error(`Restoring period mode raised an error: ${restored.message}`);
     if (restored.mode === 'period' && restored.from === savedSelection.from && restored.to === savedSelection.to && restored.current) break;
   }
-  if (restored?.mode !== 'period' || restored.from !== savedSelection.from || restored.to !== savedSelection.to || !restored.current || !reloaded.status.includes('1 Final')) {
+  if (restored?.mode !== 'period' || restored.from !== savedSelection.from || restored.to !== savedSelection.to || !restored.current || !reloaded.status.includes('1 снимок объединения')) {
     throw new Error(`Reload replaced or lost the chosen period while a current Final remained: ${JSON.stringify({savedSelection,reloaded,restored})}`);
   }
   console.log(JSON.stringify({periodModePersistenceOnly:true,savedSelection,persisted,reloaded,restored,ok:true}));
@@ -2617,7 +2675,7 @@ if (process.argv.includes("--dashboard-settings-ui-only")) {
     await wait(100);
     const state = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if (state.error) throw new Error(`Dashboard settings fixture failed: ${state.message}`);
-    if (state.status.includes('1 Final') && state.status.includes('2 в активном Final')) { finalReady = true; break; }
+    if (state.status.includes('1 снимок объединения') && state.status.includes('2 в активном снимке объединения')) { finalReady = true; break; }
   }
   if (!finalReady) throw new Error('Dashboard settings fixture did not save its two-device Final');
   await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
@@ -2668,7 +2726,7 @@ if (process.argv.includes("--dashboard-settings-ui-only")) {
     if (restored.error) throw new Error(`Restoring Dashboard settings raised an error: ${restored.message}`);
     if (restored.devicesHidden && restored.roomsHidden && restored.vendorHidden && restored.churnHidden) break;
   }
-  if (!reloaded.status.includes('1 Final') || !restored.devicesHidden || !restored.roomsHidden || !restored.vendorHidden || !restored.churnHidden || restored.kpiCount < 4) {
+  if (!reloaded.status.includes('1 снимок объединения') || !restored.devicesHidden || !restored.roomsHidden || !restored.vendorHidden || !restored.churnHidden || restored.kpiCount < 4) {
     throw new Error(`Dashboard settings were not restored after reopening the app: ${JSON.stringify({reloaded,restored,saved})}`);
   }
   await evaluate(`document.querySelector('#engineeringModeButton').click();document.querySelector('#engineeringPassword').value=${JSON.stringify(smokeEngineerPassword)};document.querySelector('#engineeringPassword').dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#engineeringModeForm').requestSubmit()`);
@@ -2904,7 +2962,7 @@ if (process.argv.includes("--sqlite-smartroom-room-only")) {
     await wait(100);
     result = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (result.error) throw new Error(`Imported room mapping enrichment failed: ${result.message}`);
-    if (result.status.includes("1 Final") && result.status.includes("3 в активном Final")) break;
+    if (result.status.includes("1 снимок объединения") && result.status.includes("3 в активном снимке объединения")) break;
   }
   const persisted = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks','legacySmartroomRoomMappings'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const mappings=tx.objectStore('legacySmartroomRoomMappings').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const activeId=active.result?.value;const devices=chunks.result.filter((chunk)=>chunk.snapshotId===activeId).flatMap((chunk)=>chunk.devices||[]);db.close();resolve({activeId,importedMappings:mappings.result.map((item)=>({smartroomId:item.smartroomId,room:item.room,source:item.source,updatedAt:item.updatedAt})),devices:devices.map(({deviceId,smartroomId,room,fieldSources,roomConfidence})=>({deviceId,smartroomId,room,fieldSource:fieldSources?.room||'',roomConfidence}))})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   const exact = persisted.devices.find((device) => device.deviceId === "ROOM-EXACT");
@@ -2934,9 +2992,9 @@ if (process.argv.includes("--legacy-autosave-recovery-only")) {
     await wait(100);
     localFinalStatus = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (localFinalStatus.error) throw new Error(`Could not create a local Final before the legacy autosave import: ${localFinalStatus.message}`);
-    if (localFinalStatus.status.includes("1 Final") && localFinalStatus.status.includes("1 в активном Final")) break;
+    if (localFinalStatus.status.includes("1 снимок объединения") && localFinalStatus.status.includes("1 в активном снимке объединения")) break;
   }
-  if (!localFinalStatus?.status.includes("1 Final") || !localFinalStatus.status.includes("1 в активном Final")) throw new Error(`The local Final was not ready before legacy autosave import: ${JSON.stringify(localFinalStatus)}`);
+  if (!localFinalStatus?.status.includes("1 снимок объединения") || !localFinalStatus.status.includes("1 в активном снимке объединения")) throw new Error(`The local Final was not ready before legacy autosave import: ${JSON.stringify(localFinalStatus)}`);
   const beforeImport = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{const activeId=active.result?.value||'';const current=snapshots.result.find((snapshot)=>snapshot.id===activeId);db.close();resolve({activeId,snapshotCount:snapshots.result.length,snapshot:current||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   if (!beforeImport.activeId || beforeImport.snapshot?.deviceCount !== 1 || beforeImport.snapshotCount !== 1) throw new Error(`The disposable local Final is not a single complete snapshot: ${JSON.stringify(beforeImport)}`);
   await evaluate(`document.querySelector('[data-view="data"]').click()`);
@@ -2964,7 +3022,7 @@ if (process.argv.includes("--legacy-autosave-recovery-only")) {
     || afterImport.autosave?.reason !== "interrupted" || afterImport.autosave?.updatedAt !== "2026-10-17T10:00:00Z" || Object.hasOwn(afterImport.autosave, "snapshotId")
     || afterImport.collision?.state !== '{"resultBrowserSnapshotId":"browser-collision-final","activeSnapshotId":"browser-collision-final"}'
     || afterImport.collision?.reason !== "browser-id-collision" || afterImport.collision?.updatedAt !== "2026-10-18T10:00:00Z" || Object.hasOwn(afterImport.collision, "snapshotId")
-    || !legacyAutosaveUi.text.includes("Связанный импортированный Final не найден") || legacyAutosaveUi.activateButtons !== 0 || legacyAutosaveUi.settingsButtons !== 2) {
+    || !legacyAutosaveUi.text.includes("Связанный импортированный снимок объединения не найден") || legacyAutosaveUi.activateButtons !== 0 || legacyAutosaveUi.settingsButtons !== 2) {
     throw new Error(`SQLite UI import classified a browser snapshot ID as a SQLite Final or changed the active Final: ${JSON.stringify({beforeImport,importStatus,afterImport,legacyAutosaveUi})}`);
   }
   await command("Page.reload", { ignoreCache: true });
@@ -2972,7 +3030,7 @@ if (process.argv.includes("--legacy-autosave-recovery-only")) {
   for (let attempt = 0; attempt < 160; attempt += 1) {
     await wait(100);
     afterReload = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const autosave=tx.objectStore('settings').get('legacyAutosave:current');const collision=tx.objectStore('settings').get('legacyAutosave:browser-collision');const snapshots=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{const activeId=active.result?.value||'';const current=snapshots.result.find((snapshot)=>snapshot.id===activeId);db.close();resolve({title:document.title,status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,activeId,snapshotCount:snapshots.result.length,snapshot:current||null,autosave:autosave.result?.value||null,collision:collision.result?.value||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
-    if (afterReload.title === "MAC Analyzer Pro Next" && afterReload.status.includes("2 Final")) break;
+    if (afterReload.title === "MAC Analyzer Pro Next" && afterReload.status.includes("2 снимок объединения")) break;
   }
   if (afterReload.error || afterReload.activeId !== beforeImport.activeId || afterReload.snapshotCount !== beforeImport.snapshotCount + 1
     || afterReload.snapshot?.deviceCount !== 1 || afterReload.autosave?.state !== afterImport.autosave.state || afterReload.autosave?.snapshotId
@@ -2987,9 +3045,9 @@ if (process.argv.includes("--legacy-autosave-recovery-only")) {
     try {
       startupRecovery = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const valid=tx.objectStore('snapshots').get(${JSON.stringify(beforeImport.activeId)});const incomplete=tx.objectStore('snapshots').get('smoke-incomplete-newest');const chunks=tx.objectStore('snapshotChunks').count(IDBKeyRange.bound(['smoke-incomplete-newest',0],['smoke-incomplete-newest',Number.MAX_SAFE_INTEGER]));tx.oncomplete=()=>{db.close();resolve({status:document.querySelector('#databaseStatus')?.textContent||'',ready:Boolean(document.querySelector('#progressPanel')?.hidden),error:!document.querySelector('#errorBanner')?.hidden,activeId:active.result?.value||'',valid:Boolean(valid.result),incomplete:Boolean(incomplete.result),incompleteChunks:chunks.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
     } catch { continue; }
-    if (startupRecovery.ready && startupRecovery.status.includes("активный Final восстановлен")) break;
+    if (startupRecovery.ready && startupRecovery.status.includes("активный снимок объединения восстановлен")) break;
   }
-  if (!startupRecovery?.ready || startupRecovery.error || !startupRecovery.status.includes("активный Final восстановлен")
+  if (!startupRecovery?.ready || startupRecovery.error || !startupRecovery.status.includes("активный снимок объединения восстановлен")
     || startupRecovery.activeId !== beforeImport.activeId || !startupRecovery.valid || !startupRecovery.incomplete || startupRecovery.incompleteChunks !== 0) {
     throw new Error(`Startup recovery did not finish visibly or selected an incomplete Final: ${JSON.stringify(startupRecovery)}`);
   }
@@ -3033,11 +3091,11 @@ if (process.argv.includes("--batch-queue-failure-only")) {
   for (let attempt = 0; attempt < 300; attempt += 1) {
     await wait(100);
     result = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,summary:document.querySelector('#progressPanel')?.textContent||'',error:document.querySelector('#errorBanner span')?.textContent||'',injected:window.__queueFailureInjected,pairs:[...document.querySelectorAll('#batchPreview [data-batch-problems]')].map((item)=>item.textContent.trim())}))()`);
-    if (result.status.includes("2 Final") && result.summary.includes("Очередь завершена")) break;
+    if (result.status.includes("2 снимок объединения") && result.summary.includes("Очередь завершена")) break;
   }
-  if (!result?.injected || !result.status.includes("2 Final") || !result.summary.includes("2 Final сохранено") || !result.summary.includes("ошибок: 1")
+  if (!result?.injected || !result.status.includes("2 снимок объединения") || !result.summary.includes("2 снимок объединения сохранено") || !result.summary.includes("ошибок: 1")
     || !result.error.includes("main_2026-10-15.csv") || !result.error.includes("QuotaExceededError")
-    || !result.pairs[0].includes("Final сохранён") || !result.pairs[1].includes("QuotaExceededError") || !result.pairs[2].includes("Final сохранён")) {
+    || !result.pairs[0].includes("снимок объединения сохранён") || !result.pairs[1].includes("QuotaExceededError") || !result.pairs[2].includes("снимок объединения сохранён")) {
     throw new Error(`Browser queue did not continue around one failed atomic cycle: ${JSON.stringify(result)}`);
   }
   const persisted = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();const inventory=tx.objectStore('inventory').getAll();const history=tx.objectStore('history').getAll();tx.oncomplete=()=>{const activeId=active.result?.value;const activeDevices=chunks.result.filter((item)=>item.snapshotId===activeId).flatMap((item)=>item.devices||[]);const finals=snapshots.result.filter((item)=>item.kind!=='single');const allDevices=finals.flatMap((snapshot)=>chunks.result.filter((item)=>item.snapshotId===snapshot.id).flatMap((item)=>item.devices||[]));const historyRows=history.result.map(({snapshotId,deviceId,type})=>({snapshotId,deviceId,type}));db.close();resolve({activeId,snapshotCount:finals.length,finalIds:finals.map((item)=>item.id),activeDeviceIds:activeDevices.map((item)=>item.deviceId),inventoryIds:inventory.result.map((item)=>item.deviceId),failedDevicePersisted:allDevices.some((item)=>item.deviceId==='QUEUE-2')||inventory.result.some((item)=>item.deviceId==='QUEUE-2')||historyRows.some((item)=>item.deviceId==='QUEUE-2'),historyRows})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
@@ -3052,7 +3110,7 @@ if (process.argv.includes("--batch-queue-failure-only")) {
     stoppedResult = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,summary:document.querySelector('#progressPanel')?.textContent||'',error:document.querySelector('#errorBanner span')?.textContent||'',injected:window.__queueFailureInjected,pairs:[...document.querySelectorAll('#batchPreview [data-batch-problems]')].map((item)=>item.textContent.trim())}))()`);
     if (stoppedResult.summary.includes("остановлена после ошибки пары №2")) break;
   }
-  if (!stoppedResult?.injected || !stoppedResult.status.includes("2 Final") || !stoppedResult.summary.includes("1 Final сохранено")
+  if (!stoppedResult?.injected || !stoppedResult.status.includes("2 снимок объединения") || !stoppedResult.summary.includes("1 снимок объединения сохранено")
     || !stoppedResult.summary.includes("остановлена после ошибки пары №2") || !stoppedResult.pairs[0].includes("повторно")
     || !stoppedResult.pairs[1].includes("QuotaExceededError") || !stoppedResult.pairs[2].includes("Не запускался: очередь остановлена после ошибки пары №2")) {
     throw new Error(`Repeated browser queue run did not reset stale statuses or stop visibly at the selected failure: ${JSON.stringify(stoppedResult)}`);
@@ -3092,7 +3150,7 @@ if (process.argv.includes("--switch-ip-pages-only")) {
       await wait(100);
       state = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
       if (state.error) throw new Error(`Switch-IP paging Final ${expectedFinals} failed: ${state.message}`);
-      if (state.status.includes(`${expectedFinals} Final`) && state.status.includes(`${rowCount} в активном Final`)) return state;
+      if (state.status.includes(`${expectedFinals} снимок объединения`) && state.status.includes(`${rowCount} в активном снимке объединения`)) return state;
     }
     throw new Error(`Switch-IP paging Final ${expectedFinals} timed out: ${JSON.stringify(state)}`);
   };
@@ -3185,7 +3243,7 @@ if (process.argv.includes("--custom-fields-only")) {
     await wait(100);
     const state = await evaluate("({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})");
     if (state.error) throw new Error(`Custom-field enrichment failed: ${state.message}`);
-    if (state.status.includes("1 Final")) { committed = true; break; }
+    if (state.status.includes("1 снимок объединения")) { committed = true; break; }
   }
   if (!committed) throw new Error("Custom-field enrichment did not commit one Final");
   const persisted = await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const config=tx.objectStore('settings').get('inventoryColumnConfig');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const activeId=active.result?.value;const final=snapshots.result.find((item)=>item.id===activeId);const devices=chunks.result.filter((chunk)=>chunk.snapshotId===activeId).flatMap((chunk)=>chunk.devices||[]);db.close();resolve({activeId,finalCount:snapshots.result.filter((item)=>item.kind!=='single').length,deviceCount:devices.length,device:devices[0]||null,customColumnLabels:(config.result?.value?.columns||[]).filter((column)=>column.custom).map((column)=>column.label),diagnostics:final?.diagnosticCounts||null})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
@@ -3222,7 +3280,7 @@ if (process.argv.includes("--dashboard-xlsx-parity-only")) {
     await wait(100);
     const state = await evaluate("({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})");
     if (state.error) throw new Error(`Dashboard XLSX parity enrichment failed: ${state.message}`);
-    if (state.status.includes("1 Final") && state.status.includes("4 в активном Final")) { finalReady = true; break; }
+    if (state.status.includes("1 снимок объединения") && state.status.includes("4 в активном снимке объединения")) { finalReady = true; break; }
   }
   if (!finalReady) throw new Error("Dashboard XLSX parity source Final was not committed");
   await evaluate("document.querySelector('[data-view=\"analytics\"]').click()");
@@ -3276,9 +3334,9 @@ if (process.argv.includes("--database-unavailable-cache-only")) {
     await wait(100);
     savedStatus = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (savedStatus.error) throw new Error(`Cache smoke could not create its disposable Final: ${savedStatus.message}`);
-    if (savedStatus.status.includes("1 Final") && savedStatus.status.includes("1 в активном Final")) break;
+    if (savedStatus.status.includes("1 снимок объединения") && savedStatus.status.includes("1 в активном снимке объединения")) break;
   }
-  if (!savedStatus?.status.includes("1 Final") || !savedStatus.status.includes("1 в активном Final")) throw new Error(`The cache smoke Final did not finish: ${JSON.stringify(savedStatus)}`);
+  if (!savedStatus?.status.includes("1 снимок объединения") || !savedStatus.status.includes("1 в активном снимке объединения")) throw new Error(`The cache smoke Final did not finish: ${JSON.stringify(savedStatus)}`);
   const cachedCounts = await evaluate(`(()=>{const value=JSON.parse(localStorage.getItem('mac-analyzer-database-status-v1')||'null');return value&&{snapshotCount:value.snapshotCount,inventoryCount:value.inventoryCount}})()`);
   if (cachedCounts?.snapshotCount !== 1 || cachedCounts?.inventoryCount !== 1) throw new Error(`Successful database status was not cached before the failure: ${JSON.stringify(cachedCounts)}`);
   await command("Page.enable");
@@ -3288,9 +3346,9 @@ if (process.argv.includes("--database-unavailable-cache-only")) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     await wait(100);
     unavailableState = await evaluate(`(()=>({injected:Boolean(window.__smokeIDBFailureInstalled),status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
-    if (unavailableState.error && unavailableState.status.includes("1 Final") && unavailableState.status.includes("1 в активном Final")) break;
+    if (unavailableState.error && unavailableState.status.includes("1 снимок объединения") && unavailableState.status.includes("1 в активном снимке объединения")) break;
   }
-  if (!unavailableState?.error || !unavailableState.status.includes("1 Final") || !unavailableState.status.includes("1 в активном Final") || !unavailableState.message.includes("IndexedDB open failure")) {
+  if (!unavailableState?.error || !unavailableState.status.includes("1 снимок объединения") || !unavailableState.status.includes("1 в активном снимке объединения") || !unavailableState.message.includes("IndexedDB open failure")) {
     throw new Error(`The exact saved Final and Inventory counts were not retained when IndexedDB became unavailable: ${JSON.stringify({ cachedCounts, unavailableState })}`);
   }
   console.log(JSON.stringify({ cachedCounts, unavailableState, ok: true }));
@@ -3530,9 +3588,9 @@ if (process.argv.includes("--analytics-cache-reopen-only")) {
     await wait(100);
     finalState = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if (finalState.error) throw new Error(`Analytics-cache fixture failed: ${finalState.message}`);
-    if (finalState.status.includes('1 Final') && finalState.status.includes('3 в активном Final')) break;
+    if (finalState.status.includes('1 снимок объединения') && finalState.status.includes('3 в активном снимке объединения')) break;
   }
-  if (!finalState?.status.includes('1 Final') || !finalState.status.includes('3 в активном Final')) throw new Error(`Analytics-cache fixture did not produce one three-device Final: ${JSON.stringify(finalState)}`);
+  if (!finalState?.status.includes('1 снимок объединения') || !finalState.status.includes('3 в активном снимке объединения')) throw new Error(`Analytics-cache fixture did not produce one three-device Final: ${JSON.stringify(finalState)}`);
   await evaluate(`(()=>{window.__smokeSnapshotChunkTransactions=0;const original=IDBDatabase.prototype.transaction;IDBDatabase.prototype.transaction=function(stores,...args){const names=typeof stores==='string'?[stores]:Array.from(stores||[]);if(names.includes('snapshotChunks'))window.__smokeSnapshotChunkTransactions+=1;return original.call(this,stores,...args)}})()`);
   await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
   let firstRender = null;
@@ -3632,7 +3690,7 @@ if (process.argv.includes("--room-history-parity-only")) {
       await wait(100);
       state = await evaluate(`({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
       if (state.error) throw new Error(`Room-history Final ${expectedFinals} failed: ${state.message}`);
-      if (state.status.includes(`${expectedFinals} Final`)) return state.status;
+      if (state.status.includes(`${expectedFinals} снимок объединения`)) return state.status;
     }
     throw new Error(`Room-history Final ${expectedFinals} did not finish: ${JSON.stringify(state)}`);
   };
@@ -3712,7 +3770,7 @@ if (process.argv.includes("--room-history-parity-only")) {
   }
   if (macTimeline?.count !== 3 || !macTimeline.summary.includes("3")
     || !macTimeline.text.some((text) => text.includes("Изменение"))
-    || !macTimeline.comparisons.some((text) => text.includes("Было в предыдущем Final") && text.includes("Стало в новом Final"))) {
+    || !macTimeline.comparisons.some((text) => text.includes("Было в предыдущем снимке объединения") && text.includes("Стало в новом снимке объединения"))) {
     throw new Error(`MAC timeline did not show three deduplicated Finals and the previous/new Final comparison: ${JSON.stringify(macTimeline)}`);
   }
   await evaluate(`document.querySelector('#loadOptionalHostMacHistoryButton').click()`);
@@ -3806,7 +3864,7 @@ if (process.argv.includes("--final-export-all-only")) {
     await wait(100);
     const state = await evaluate(`({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if (state.error) throw new Error(`Final export fixture failed: ${state.message}`);
-    if (state.status.includes("1 Final") && state.status.includes("1 в активном Final")) { finalReady = true; break; }
+    if (state.status.includes("1 снимок объединения") && state.status.includes("1 в активном снимке объединения")) { finalReady = true; break; }
   }
   if (!finalReady) throw new Error("Final export fixture did not produce exactly one device");
   await evaluate(`document.querySelector('[data-view="data"]').click()`);
@@ -3854,7 +3912,7 @@ if (process.argv.includes("--final-write-failure-only")) {
       state = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
       if (expectedFinals === 1 && state.error) throw new Error(`Initial control Final failed: ${state.message}`);
       if (expectedFinals === 2 && state.error) return state;
-      if (state.status.includes(`${expectedFinals} Final`)) return state;
+      if (state.status.includes(`${expectedFinals} снимок объединения`)) return state;
     }
     throw new Error(`Final write-failure smoke ${expectedFinals} did not finish: ${JSON.stringify(state)}`);
   };
@@ -3872,7 +3930,7 @@ if (process.argv.includes("--final-write-failure-only")) {
   }
   if (!failureUi?.visible || !failureUi.injected) throw new Error(`Injected Final write failure did not surface in UI: ${JSON.stringify(failureUi)}`);
   const afterFailure = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const activeId=active.result?.value;const devices=chunks.result.filter((chunk)=>chunk.snapshotId===activeId).flatMap((chunk)=>chunk.devices||[]);db.close();resolve({activeId,snapshotCount:snapshots.result,inventoryCount:inventory.result,historyCount:history.result,model:devices[0]?.model,status:document.querySelector('#databaseStatus').textContent})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
-  if (afterFailure.activeId !== activeBeforeFailure.activeId || afterFailure.snapshotCount !== activeBeforeFailure.snapshotCount || afterFailure.inventoryCount !== activeBeforeFailure.inventoryCount || afterFailure.historyCount !== activeBeforeFailure.historyCount || afterFailure.model !== "Stable Model" || !afterFailure.status.includes("1 Final")) throw new Error(`Failed Final write replaced active data: ${JSON.stringify({activeBeforeFailure,failureUi,afterFailure})}`);
+  if (afterFailure.activeId !== activeBeforeFailure.activeId || afterFailure.snapshotCount !== activeBeforeFailure.snapshotCount || afterFailure.inventoryCount !== activeBeforeFailure.inventoryCount || afterFailure.historyCount !== activeBeforeFailure.historyCount || afterFailure.model !== "Stable Model" || !afterFailure.status.includes("1 снимок объединения")) throw new Error(`Failed Final write replaced active data: ${JSON.stringify({activeBeforeFailure,failureUi,afterFailure})}`);
   await evaluate(`document.querySelector('[data-error-dismiss]').click()`);
   const dismissed = await evaluate(`({hidden:document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
   if (!dismissed.hidden || dismissed.message) throw new Error(`Write-error banner did not dismiss cleanly after failed Final: ${JSON.stringify(dismissed)}`);
@@ -4022,7 +4080,7 @@ if (process.argv.includes("--data-quality-report-only")) {
     reportUi = await evaluate(`(()=>({status:document.querySelector('#dataQualityStatus')?.textContent||'',report:document.querySelector('#dataQualityReport')?.innerText||'',historyStatus:document.querySelector('#dataQualityHistoryStatus')?.textContent||'',history:document.querySelector('#dataQualityHistory')?.innerText||''}))()`);
     if (reportUi.status.includes("завершена и сохранена") && reportUi.historyStatus.includes("из 1")) break;
   }
-  if (!reportUi?.status.includes("завершена и сохранена") || !reportUi.report.includes("Оценка качества") || !reportUi.report.includes("Заполненность полей полного Final") || !reportUi.history.includes(finalState.name) || !reportUi.historyStatus.includes("из 1")) throw new Error(`Quality report did not render and enter the one-row saved history: ${JSON.stringify({finalState,reportUi})}`);
+  if (!reportUi?.status.includes("завершена и сохранена") || !reportUi.report.includes("Оценка качества") || !reportUi.report.includes("Заполненность полей полного снимок объединения") || !reportUi.history.includes(finalState.name) || !reportUi.historyStatus.includes("из 1")) throw new Error(`Quality report did not render and enter the one-row saved history: ${JSON.stringify({finalState,reportUi})}`);
   const savedReport = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(databaseName)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('dataQualityReports','readonly');const request=tx.objectStore('dataQualityReports').getAll();tx.oncomplete=()=>{const records=request.result;db.close();resolve(records.map(({id,snapshotId,snapshotName,score,grade,report})=>({id,snapshotId,snapshotName,score,grade,devices:report?.devices,issues:report?.issues?.length||0,fieldCoverage:Object.keys(report?.fieldCoverage||{}).length}))) };tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   if (savedReport.length !== 1 || savedReport[0].snapshotId !== finalState.activeId || savedReport[0].snapshotName !== finalState.name || savedReport[0].devices !== 2 || !["A", "B", "C", "D"].includes(savedReport[0].grade) || savedReport[0].fieldCoverage < 7) throw new Error(`Saved quality report metadata or full-field coverage did not persist: ${JSON.stringify(savedReport)}`);
   const reportClip = await evaluate(`(()=>{const rect=document.querySelector('#dataQualityPanel').getBoundingClientRect();return{x:0,y:rect.top+scrollY,width:document.documentElement.clientWidth,height:Math.min(rect.height,2600)}})()`);
@@ -4066,9 +4124,9 @@ if (process.argv.includes("--change-criticality-browser-only")) {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     await wait(100);
     fixtureStatus = await evaluate(`document.querySelector('#databaseStatus')?.textContent||''`);
-    if (fixtureStatus.includes("1 Final") && fixtureStatus.includes("1 устройств")) break;
+    if (fixtureStatus.includes("1 снимок объединения") && fixtureStatus.includes("1 устройств")) break;
   }
-  if (!fixtureStatus.includes("1 Final") || !fixtureStatus.includes("1 устройств")) throw new Error(`Could not establish a real local Final for criticality UI checks: ${fixtureStatus}`);
+  if (!fixtureStatus.includes("1 снимок объединения") || !fixtureStatus.includes("1 устройств")) throw new Error(`Could not establish a real local Final for criticality UI checks: ${fixtureStatus}`);
   const seeded = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(databaseName)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('history','readwrite');const store=tx.objectStore('history');const base=Date.now();const events=[
     {id:'criticality-russian-ip',type:'Изменено',field:'IP-адрес',oldValue:'10.0.0.1',newValue:'10.0.0.2',mac:'00:11:22:33:44:C1'},
     {id:'criticality-technical-switch-ip',type:'modified',field:'switch_ip',oldValue:'10.0.0.254',newValue:'10.0.0.253',mac:'00:11:22:33:44:C2'},
@@ -4393,7 +4451,7 @@ if (process.argv.includes("--no-new-final-rows-only")) {
       await wait(100);
       state = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
       if (state.error) throw new Error(`No-new-Final-row smoke failed: ${state.message}`);
-      if (state.status.includes(`${expectedFinals} Final`)) return state.status;
+      if (state.status.includes(`${expectedFinals} снимок объединения`)) return state.status;
     }
     throw new Error(`No-new-Final-row run ${expectedFinals} did not finish: ${JSON.stringify(state)}`);
   };
@@ -4435,7 +4493,7 @@ if (process.argv.includes("--all-changed-room-only")) {
       await wait(100);
       state = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
       if (state.error) throw new Error(`All-changed room Final failed: ${state.message}`);
-      if (state.status.includes(`${expectedFinals} Final`)) return state.status;
+      if (state.status.includes(`${expectedFinals} снимок объединения`)) return state.status;
     }
     throw new Error(`All-changed room Final ${expectedFinals} did not finish: ${JSON.stringify(state)}`);
   };
@@ -4493,7 +4551,7 @@ if (process.argv.includes("--expansion-no-only") || process.argv.includes("--exp
     await wait(100);
     state = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (state.error) throw new Error(`Expansion strategy ${strategy} failed: ${state.message}`);
-    if (state.status.includes("Final") && !state.status.includes("0 в активном Final")) break;
+    if (state.status.includes("Final") && !state.status.includes("0 в активном снимке объединения")) break;
   }
   const finalState = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();const chunks=tx.objectStore('snapshotChunks').getAll();tx.oncomplete=()=>{const activeId=active.result?.value||'';const snapshot=snapshots.result.find(item=>item.id===activeId);const devices=chunks.result.filter(chunk=>chunk.snapshotId===activeId).sort((a,b)=>a.index-b.index).flatMap(chunk=>chunk.devices||[]);db.close();resolve({activeId,deviceCount:devices.length,deviceIds:devices.map(device=>device.deviceId).sort(),macs:devices.map(device=>device.mac).sort(),unmatchedTotal:snapshot?.diagnosticCounts?.unmatchedTotal??snapshot?.unmatchedCount??null,status:document.querySelector('#databaseStatus')?.textContent||''})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   const expectedCount = strategy === "ALLOW_EXPANSION" ? 2 : 1;
@@ -4705,9 +4763,9 @@ if (requestedSmokeUrl?.searchParams.get("smoke") === "saved-final-fields") {
   for (let attempt = 0; attempt < 500; attempt += 1) {
     await wait(20);
     saved = await evaluate(`(()=>({title:document.querySelector('#enrichmentSummary h3')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,progress:!document.querySelector('#progressPanel').hidden}))()`);
-    if (saved.title.includes('Final успешно сохранён') || saved.error) break;
+    if (saved.title.includes('Снимок объединения успешно сохранён') || saved.error) break;
   }
-  if (!saved?.title.includes('Final успешно сохранён') || saved.error) throw new Error(`Synthetic Final for saved-search field smoke did not complete: ${JSON.stringify(saved)}`);
+  if (!saved?.title.includes('Снимок объединения успешно сохранён') || saved.error) throw new Error(`Synthetic Final for saved-search field smoke did not complete: ${JSON.stringify(saved)}`);
   await evaluate(`document.querySelector('[data-view="search"]').click();const input=document.querySelector('#globalSearch');input.value='00:11:22:33:44:99';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#searchSavedFinalsButton').click()`);
   let result = null;
   for (let attempt = 0; attempt < 300; attempt += 1) {
@@ -4830,7 +4888,7 @@ if (process.argv.includes("--reference-archive-only")) {
     if (archiveInputReady) break;
   }
   if (!archiveInputReady) throw new Error("Reference archive smoke could not mount its file input");
-  await evaluate(`(()=>{const archive={format:'mac-analyzer-full-json',version:2,exportedAt:'2026-10-15T00:00:00.000Z',analytics:{},workspace:{theme:'dark'},currentDevices:[],allDevices:[{internalDeviceId:'DEV-REFERENCE-SMOKE',mac:'00:11:22:33:44:61',vendor:'Reference Vendor',model:'Reference Model'}],invalidRows:[],movementHistory:[{mac:'00:11:22:33:44:61',type:'Изменено',field:'vendor',before:'Old Vendor',after:'Reference Vendor',changedAt:'2026-10-15T11:00:00.000Z'}],snapshots:[{metadata:{id:'reference-smoke-final',name:'Reference imported Final',source:'reference.csv',kind:'Final',fileCreatedAt:'2026-10-15T10:00:00.000Z',savedAt:'2026-10-15T10:01:00.000Z',deviceCount:1,invalidCount:0},devices:[{internalDeviceId:'DEV-REFERENCE-SMOKE',mac:'00:11:22:33:44:61',vendor:'Reference Vendor',model:'Reference Model'}]}]};const input=document.querySelector('#importDatabaseInput');const transfer=new DataTransfer();transfer.items.add(new File([JSON.stringify(archive)],'reference-smoke.macarchive.json',{type:'application/json'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return input.files[0]?.name})()`);
+  await evaluate(`(()=>{const archive={format:'mac-analyzer-full-json',version:2,exportedAt:'2026-10-15T00:00:00.000Z',analytics:{},workspace:{theme:'dark'},currentDevices:[],allDevices:[{internalDeviceId:'DEV-REFERENCE-SMOKE',mac:'00:11:22:33:44:61',vendor:'Reference Vendor',model:'Reference Model'}],invalidRows:[],movementHistory:[{mac:'00:11:22:33:44:61',type:'Изменено',field:'vendor',before:'Old Vendor',after:'Reference Vendor',changedAt:'2026-10-15T11:00:00.000Z'}],snapshots:[{metadata:{id:'reference-smoke-final',name:'Reference imported снимок объединения',source:'reference.csv',kind:'снимок объединения',fileCreatedAt:'2026-10-15T10:00:00.000Z',savedAt:'2026-10-15T10:01:00.000Z',deviceCount:1,invalidCount:0},devices:[{internalDeviceId:'DEV-REFERENCE-SMOKE',mac:'00:11:22:33:44:61',vendor:'Reference Vendor',model:'Reference Model'}]}]};const input=document.querySelector('#importDatabaseInput');const transfer=new DataTransfer();transfer.items.add(new File([JSON.stringify(archive)],'reference-smoke.macarchive.json',{type:'application/json'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return input.files[0]?.name})()`);
   let importedProfile = null;
   for (let attempt = 0; attempt < 120; attempt += 1) {
     await wait(250);
@@ -4839,7 +4897,7 @@ if (process.argv.includes("--reference-archive-only")) {
     const profile = new URL(target.url).searchParams.get("db") || "";
     if (/^mac-analyzer-pro-next-profile-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(profile)) {
       importedProfile = await evaluate(`(()=>({db:new URL(location.href).searchParams.get('db'),status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
-      if (importedProfile.status.includes("1 Final") && importedProfile.status.includes("1 в активном Final")) break;
+      if (importedProfile.status.includes("1 снимок объединения") && importedProfile.status.includes("1 в активном снимке объединения")) break;
     }
   }
   const profileRecords = await evaluate(`(()=>{const name=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const request=indexedDB.open(name);request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshot=tx.objectStore('snapshots').get('reference-smoke-final');const device=tx.objectStore('inventory').get('DEV-REFERENCE-SMOKE');const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({active:active.result?.value,snapshot:Boolean(snapshot.result),vendor:device.result?.manufacturer||'',history:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
@@ -4911,10 +4969,10 @@ if (process.argv.includes("--reference-archive-only")) {
     try {
       recoveryAfterReload = await evaluate(`(()=>({db:new URL(location.href).searchParams.get('db'),status:document.querySelector('#databaseStatus')?.textContent||'',ready:Boolean(document.querySelector('#progressPanel')?.hidden),error:!document.querySelector('#errorBanner')?.hidden}))()`);
     } catch { continue; }
-    if (recoveryAfterReload.ready && recoveryAfterReload.status.includes("активный Final восстановлен")) break;
+    if (recoveryAfterReload.ready && recoveryAfterReload.status.includes("активный снимок объединения восстановлен")) break;
   }
   const recoveryPointer = await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const incomplete=tx.objectStore('snapshots').get('smoke-incomplete-newest');const recovered=tx.objectStore('snapshots').get(${JSON.stringify(nextArchiveState.active)});const chunks=tx.objectStore('snapshotChunks').count(IDBKeyRange.bound(['smoke-incomplete-newest',0],['smoke-incomplete-newest',Number.MAX_SAFE_INTEGER]));tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,incomplete:Boolean(incomplete.result),recovered:Boolean(recovered.result),incompleteChunkCount:chunks.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
-  if (recoveryAfterReload?.error || !recoveryAfterReload?.ready || recoveryAfterReload.db !== importedProfile.db || !recoveryAfterReload.status.includes("активный Final восстановлен") || recoveryPointer.activeId !== nextArchiveState.active || !recoveryPointer.incomplete || !recoveryPointer.recovered || recoveryPointer.incompleteChunkCount !== 0) throw new Error(`Startup recovery failed after an imported profile reload: ${JSON.stringify({recoverySeed,recoveryAfterReload,recoveryPointer})}`);
+  if (recoveryAfterReload?.error || !recoveryAfterReload?.ready || recoveryAfterReload.db !== importedProfile.db || !recoveryAfterReload.status.includes("активный снимок объединения восстановлен") || recoveryPointer.activeId !== nextArchiveState.active || !recoveryPointer.incomplete || !recoveryPointer.recovered || recoveryPointer.incompleteChunkCount !== 0) throw new Error(`Startup recovery failed after an imported profile reload: ${JSON.stringify({recoverySeed,recoveryAfterReload,recoveryPointer})}`);
   await evaluate(`(()=>new Promise((resolve,reject)=>{const name=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(name);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('snapshots','readwrite');tx.objectStore('snapshots').delete('smoke-incomplete-newest');tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
   console.log("browser smoke: reference .macarchive.json v2, devices-json v2, and Next archive v1 imports; Back restores source, Forward/reload preserve imported records and the archived active Final");
   console.log(JSON.stringify({ importedProfile, profileRecords, sourceRecords, backState, sourceAfterBack, forwardState, reloadState, profileAfterReload, deviceTransferState, nextArchiveState, recoverySeed, recoveryAfterReload, recoveryPointer, ok: true }));
@@ -4962,10 +5020,10 @@ if (process.argv.includes("--room-timeline-stress-only")) {
       await wait(100);
       finalState = await evaluate(`(()=>({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',progress:document.querySelector('#progressDetail')?.textContent||''}))()`);
       if (finalState.error) throw new Error(`Room stress Final ${expectedFinals} failed: ${finalState.message}`);
-    if (finalState.status.includes(`${expectedFinals} Final`) && finalState.status.includes(`${rows.toLocaleString("ru-RU")} в активном Final`)) break;
+    if (finalState.status.includes(`${expectedFinals} снимок объединения`) && finalState.status.includes(`${rows.toLocaleString("ru-RU")} в активном снимке объединения`)) break;
       if (attempt % 30 === 0) console.log(`browser smoke: room stress Final ${expectedFinals} progress ${finalState.progress || finalState.status}`);
     }
-    if (!finalState?.status.includes(`${expectedFinals} Final`) || !finalState.status.includes(`${rows.toLocaleString("ru-RU")} в активном Final`)) throw new Error(`Room stress Final ${expectedFinals} did not persist ${rows} rows: ${JSON.stringify(finalState)}`);
+    if (!finalState?.status.includes(`${expectedFinals} снимок объединения`) || !finalState.status.includes(`${rows.toLocaleString("ru-RU")} в активном снимке объединения`)) throw new Error(`Room stress Final ${expectedFinals} did not persist ${rows} rows: ${JSON.stringify(finalState)}`);
   }
   await evaluate(`document.querySelector('[data-view="rooms"]').click()`);
   let roomOption = null;
@@ -5145,7 +5203,7 @@ if (process.argv.includes("--oui-import-workflow-only")) {
 }
 if (process.argv.includes("--older-archive-preserves-new-final-only")) {
   await evaluate(`document.querySelector('[data-view="enrichment"]')?.click()`);
-  await assignInput("#mainFileInput", "newer-final_2026-11-06.csv", "MAC;Device ID;Модель\n00:11:22:33:44:86;NEWER-FINAL-86;Newer browser Final");
+  await assignInput("#mainFileInput", "newer-final_2026-11-06.csv", "MAC;Device ID;Модель\n00:11:22:33:44:86;NEWER-FINAL-86;Newer browser снимок объединения");
   for (const [field, index] of [["mac", 0], ["deviceId", 1], ["model", 2]]) {
     const selected = await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main mapping ${field}');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()`);
     if (selected !== String(index)) throw new Error(`Main ${field} mapping did not apply: ${selected}`);
@@ -5270,7 +5328,7 @@ if (process.argv.includes("--single-file-safety-only")) {
     await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="main"][data-mapping-field="${field}"]');if(!select)throw new Error('Missing Main ${field} mapping');select.value=${index};select.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
   }
   await evaluate(`window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()`);
-  await waitFor(() => evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`), (value) => value.error || value.status.includes("1 Final"), "Could not create the baseline Final");
+  await waitFor(() => evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`), (value) => value.error || value.status.includes("1 снимок объединения"), "Could not create the baseline Final");
   let baseline = await readState();
   if (!baseline.activeId || baseline.snapshots !== 1 || baseline.inventory !== 1) throw new Error(`Baseline Final was not saved exactly: ${JSON.stringify(baseline)}`);
 
@@ -5514,7 +5572,7 @@ if (process.argv.includes("--roster-only")) {
     await wait(100);
     finalState = await evaluate(`({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if (finalState.error) throw new Error(`Roster-only enrichment failed: ${finalState.message}`);
-    if (finalState.status.includes(`${rosterSize.toLocaleString("ru-RU")} в активном Final`)) { finalReady = true; break; }
+    if (finalState.status.includes(`${rosterSize.toLocaleString("ru-RU")} в активном снимке объединения`)) { finalReady = true; break; }
     if (attempt && attempt % 50 === 0) console.log(`browser smoke: waiting for ${rosterSize.toLocaleString("ru-RU")} device Final: ${finalState.status}`);
   }
   if (!finalReady) throw new Error(`Roster-only ${rosterSize}-device Final was not committed: ${JSON.stringify(finalState)}`);
@@ -5583,20 +5641,20 @@ for (let attempt = 0; attempt < 60; attempt += 1) {
   await wait(250);
   const state = await evaluate(`({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||""})`);
   if (state.error) throw new Error(`UI enrichment error: ${state.message}`);
-  if (state.status.includes("1 Final")) { finished = true; break; }
+  if (state.status.includes("1 снимок объединения")) { finished = true; break; }
   if (attempt % 10 === 9) console.log(`browser smoke: waiting for first Final (${attempt + 1}/60)`);
 }
 if (!finished) throw new Error("Обогащение не завершилось за 15 секунд");
 
 const sourceDateMetadata = await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');let snapshot=null;active.onsuccess=()=>{const request=tx.objectStore('snapshots').get(active.result?.value);request.onsuccess=()=>{snapshot=request.result||null}};tx.oncomplete=()=>{db.close();resolve(snapshot&&{name:snapshot.name,createdAt:snapshot.createdAt,fileCreatedAt:snapshot.fileCreatedAt})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
-if (sourceDateMetadata?.name !== "Final main_2026-10-14.csv" || !String(sourceDateMetadata.createdAt || "").startsWith("2026-10-14")) throw new Error(`Дата выгрузки не взята из даты в имени файла: ${JSON.stringify(sourceDateMetadata)}`);
+if (sourceDateMetadata?.name !== "снимок объединения main_2026-10-14.csv" || !String(sourceDateMetadata.createdAt || "").startsWith("2026-10-14")) throw new Error(`Дата выгрузки не взята из даты в имени файла: ${JSON.stringify(sourceDateMetadata)}`);
 console.log("browser smoke: Final observation date follows the source filename date, not the file-picker copy time");
 
 const finalState = await evaluate(`({
   status: document.querySelector('#databaseStatus').textContent,
   summary: document.querySelector('#enrichmentSummary').textContent
 })`);
-if (!finalState.status.includes("4 в активном Final")) throw new Error(`Неверное число Inventory: ${finalState.status}`);
+if (!finalState.status.includes("4 в активном снимке объединения")) throw new Error(`Неверное число Inventory: ${finalState.status}`);
 if (!finalState.summary.includes("конфликтов: 0")) throw new Error(`Secondary MAC создал конфликт идентичности: ${finalState.summary}`);
 await evaluate(`document.querySelector('[data-view="search"]').click()`);
 await wait(250);
@@ -5605,7 +5663,7 @@ finalState.searchRows = await readDeviceRows();
 const ddioRow = finalState.searchRows.find((row) => row.mac?.includes("00:11:22:33:44:51"));
 if (ddioRow?.ip !== "192.168.1.51") throw new Error(`DDIO IP не появился в финальной таблице: ${JSON.stringify(finalState)}`);
 const authenticationTimeRow = finalState.searchRows.find((row) => row.mac?.includes("00:11:22:33:44:51"));
-if (authenticationTimeRow?.authenticationTime !== "2026-10-14T10:00:00.000Z") throw new Error(`Время аутентификации не прошло из Main через Final в стандартную таблицу Inventory: ${JSON.stringify(authenticationTimeRow)}`);
+if (authenticationTimeRow?.authenticationTime !== "2026-10-14T10:00:00.000Z") throw new Error(`Время аутентификации не прошло из Main через снимок объединения в стандартную таблицу Inventory: ${JSON.stringify(authenticationTimeRow)}`);
 const knownIpRow = finalState.searchRows.find((row) => row.mac?.includes("00:11:22:33:44:52"));
 if (knownIpRow?.ip !== "192.168.1.52" || knownIpRow?.switchIp !== "10.0.0.1") throw new Error(`DDIO заменил известный IP устройства или смешал его с IP коммутатора: ${JSON.stringify(knownIpRow)}`);
 const missingSmartroomIdRow = finalState.searchRows.find((row) => row.mac?.includes("00:11:22:33:44:54"));
@@ -5625,13 +5683,13 @@ if (process.argv.includes("--ddio-only")) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     await wait(250);
     const status = await evaluate(`document.querySelector('#databaseStatus').textContent`);
-    if (status.includes("2 Final")) { secondFinalReady = true; break; }
+    if (status.includes("2 снимок объединения")) { secondFinalReady = true; break; }
     const error = await evaluate(`({visible:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if (error.visible) throw new Error(`Second DDIO history Final failed: ${error.message}`);
   }
-  if (!secondFinalReady) throw new Error("Второй DDIO Final с изменённым switch IP не завершился за 15 секунд");
+  if (!secondFinalReady) throw new Error("Второй DDIO снимок объединения с изменённым switch IP не завершился за 15 секунд");
   const switchIpReport = await evaluate(`(()=>{const host=document.querySelector('#enrichmentSummary [data-switch-ip-change-container]');const rows=[...(host?.querySelectorAll('tbody tr')||[])].map((row)=>[...row.cells].map((cell)=>cell.textContent.trim()));const headers=[...(host?.querySelectorAll('thead th')||[])].map((cell)=>cell.textContent.trim());return{present:Boolean(host),summary:host?.querySelector('details summary')?.textContent.trim()||'',notice:host?.querySelector('.notice')?.textContent.trim()||'',headers,rows,noDedicatedIpChangesView:!document.querySelector('[data-view="ipchanges"]')}})()`);
-  if (!switchIpReport.present || switchIpReport.rows.length !== 1 || switchIpReport.rows[0][1] !== "10.0.0.1" || switchIpReport.rows[0][2] !== "10.0.0.9" || switchIpReport.rows[0][3] !== "192.168.1.52" || switchIpReport.rows[0][4] !== "192.168.9.52" || !switchIpReport.notice.includes("до записи этого Final") || !switchIpReport.noDedicatedIpChangesView) throw new Error(`Historical switch-IP report did not show exactly the confirmed change, device IP and separate DDIO possibility: ${JSON.stringify(switchIpReport)}`);
+  if (!switchIpReport.present || switchIpReport.rows.length !== 1 || switchIpReport.rows[0][1] !== "10.0.0.1" || switchIpReport.rows[0][2] !== "10.0.0.9" || switchIpReport.rows[0][3] !== "192.168.1.52" || switchIpReport.rows[0][4] !== "192.168.9.52" || !switchIpReport.notice.includes("до записи этого снимок объединения") || !switchIpReport.noDedicatedIpChangesView) throw new Error(`Historical switch-IP report did not show exactly the confirmed change, device IP and separate DDIO possibility: ${JSON.stringify(switchIpReport)}`);
   await evaluate(`document.querySelector('[data-view="data"]').click()`);
   await wait(200);
   await evaluate(`(()=>{Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:undefined});const nativeCreate=URL.createObjectURL.bind(URL);window.__smokeDdioFinalCsv=null;URL.createObjectURL=(blob)=>{window.__smokeDdioFinalCsv=blob;return nativeCreate(blob)};HTMLAnchorElement.prototype.click=function(){}})()`);
@@ -5672,6 +5730,8 @@ if (parsedRoomHierarchy?.businessUnit !== "ЦА" || parsedRoomHierarchy.city !==
 console.log("browser smoke: compact/separated alternate-MAC search and location hierarchy parsed from the room field");
 
 await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
+// The dated source fixtures precede the default rolling 30-day range.
+await evaluate(`document.querySelector("#temporalRangeSelect").value="365";document.querySelector("#temporalRangeSelect").dispatchEvent(new Event("change",{bubbles:true}))`);
 await wait(1000);
 const analytics = await evaluate(`({text:document.querySelector('#analyticsKpis').textContent,overview:document.querySelector('#datasetOverview').textContent,clusters:document.querySelector('#clusterSummary').textContent,topology:document.querySelector('#topologySummary').textContent,rosterHeading:document.querySelector('#changeTable h3')?.textContent||'',rosterRows:document.querySelectorAll('#changeTable tbody tr').length,rosterText:document.querySelector('#changeTable').textContent.replace(/\s+/g,' '),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',loading:!document.querySelector('#analyticsLoadingStatus').hidden})`);
 const analyticsText = analytics.text.replace(/\s+/g, " ");
@@ -5724,7 +5784,7 @@ if (analytics.error || !/Устройства\s+4/.test(analyticsText) || !/Ра
 if (!analytics.overview.includes("Устройств") || !analytics.clusters.includes("устройств") || !analytics.topology.includes("устройств")) {
   throw new Error(`Полные сводки аналитики не отображаются: ${JSON.stringify(analytics)}`);
 }
-if (analytics.rosterHeading !== "Все устройства" || analytics.rosterRows !== 4 || !analytics.rosterText.includes("Устройств: 4")) throw new Error(`Общий Dashboard roster не показывает весь текущий Final: ${JSON.stringify(analytics)}`);
+if (analytics.rosterHeading !== "Все устройства" || analytics.rosterRows !== 4 || !analytics.rosterText.includes("Устройств: 4")) throw new Error(`Общий Dashboard roster не показывает весь текущий снимок объединения: ${JSON.stringify(analytics)}`);
 console.log("browser smoke: all-device Dashboard roster shows every row and the exact total");
 if (process.argv.includes("--inventory-export-only")) {
   await evaluate(`document.querySelector('[data-view="data"]')?.click()`);
@@ -5767,9 +5827,9 @@ if (process.argv.includes("--workspace-state-persistence-only")) {
     await wait(100);
     imported = await evaluate(`(()=>({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
     if (imported.error) throw new Error(`Workspace-state Final import failed: ${imported.message}`);
-    if (imported.status.includes("64 в активном Final")) break;
+    if (imported.status.includes("64 в активном снимке объединения")) break;
   }
-  if (!imported?.status.includes("64 в активном Final")) throw new Error(`Workspace-state fixture did not create the expected 64-device active Final: ${JSON.stringify(imported)}`);
+  if (!imported?.status.includes("64 в активном снимке объединения")) throw new Error(`Workspace-state fixture did not create the expected 64-device active Final: ${JSON.stringify(imported)}`);
   await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
   let dashboardReady = null;
   for (let attempt = 0; attempt < 180; attempt += 1) {
@@ -5968,9 +6028,9 @@ if (process.argv.includes("--optional-host-transfer-only")) {
     const current = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
     if (current.error) throw new Error(`Second optional-host Final failed: ${current.message}`);
     secondFinalStatus = current.status;
-    if (secondFinalStatus.includes("2 Final")) break;
+    if (secondFinalStatus.includes("2 снимок объединения")) break;
   }
-  if (!secondFinalStatus.includes("2 Final")) throw new Error(`Second optional-host Final did not persist: ${secondFinalStatus}`);
+  if (!secondFinalStatus.includes("2 снимок объединения")) throw new Error(`Second optional-host Final did not persist: ${secondFinalStatus}`);
   await evaluate(`document.querySelector('[data-view="data"]').click()`);
   await wait(150);
   if (await evaluate(`document.querySelector('#optionalHostSnapshotUploadButton').disabled`)) throw new Error("Second active Final transfer button is disabled");
@@ -6041,10 +6101,10 @@ if (process.argv.includes("--optional-host-transfer-only")) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await wait(50);
     hostDeleteStatus = await evaluate(`document.querySelector('#optionalHostSnapshotsStatus')?.textContent||''`);
-    if (hostDeleteStatus.includes('Удалены 2 отмеченных Final')) break;
+    if (hostDeleteStatus.includes('Удалены 2 отмеченных снимок объединения')) break;
   }
   const hostAfterDelete = await evaluate(`fetch('/api/database/summary',{credentials:'same-origin',cache:'no-store'}).then(r=>r.json())`);
-  if (!hostDeleteStatus.includes('Удалены 2 отмеченных Final')
+  if (!hostDeleteStatus.includes('Удалены 2 отмеченных снимок объединения')
     || Number(hostAfterDelete.counts?.resolved_device_inventory ?? hostAfterDelete.counts?.device_inventory) < 4
     || Number(hostAfterDelete.counts?.snapshots) !== 0) {
     throw new Error(`Optional-host selected Final delete did not preserve Inventory and clear the transferred copy: ${JSON.stringify({hostDeleteStatus,hostAfterDelete})}`);
@@ -6055,7 +6115,7 @@ if (process.argv.includes("--optional-host-transfer-only")) {
 if (process.argv.includes("--dashboard-cache-reload-only")) {
   let cachedReport = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    cachedReport = await evaluate(`new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('analyticsCache','readonly');const request=tx.objectStore('analyticsCache').openCursor();let found=null;request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;const value=cursor.value.value;if(cursor.value.key.startsWith('selected-final-dataset-v9:')&&value?.dataset?.reportText){found={key:cursor.value.key,reportText:value.dataset.reportText,devices:value.dataset.summary?.devices};return}cursor.continue()};tx.oncomplete=()=>{db.close();resolve(found)};tx.onerror=()=>{db.close();reject(tx.error)}}})`);
+    cachedReport = await evaluate(`new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('analyticsCache','readonly');const request=tx.objectStore('analyticsCache').openCursor();let found=null;request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;const value=cursor.value.value;if(cursor.value.key.startsWith('selected-final-dataset-v10:')&&value?.dataset?.reportText){found={key:cursor.value.key,reportText:value.dataset.reportText,devices:value.dataset.summary?.devices};return}cursor.continue()};tx.oncomplete=()=>{db.close();resolve(found)};tx.onerror=()=>{db.close();reject(tx.error)}}})`);
     if (cachedReport) break;
     await wait(100);
   }
@@ -6142,7 +6202,7 @@ for (let attempt = 0; attempt < 300; attempt += 1) {
 }
 if (filteredAnalytics?.error || filteredAnalytics?.loading || !filteredAnalytics?.kpis.some((row)=>row.replaceAll(" ", "").includes("Устройства1"))) throw new Error(`Поиск DEV-51 не пересчитал KPI Dashboard по одной записи: ${JSON.stringify(filteredAnalytics)}`);
 const selectedManufacturer = await evaluate(`document.querySelector('#analyticsDashboardManufacturer').options[1]?.value||''`);
-if (!selectedManufacturer) throw new Error("Dashboard не создал варианты производителя из выбранного Final");
+if (!selectedManufacturer) throw new Error("Dashboard не создал варианты производителя из выбранного снимка объединения");
 await evaluate(`(()=>{document.querySelector('#analyticsDashboardSearch').value='';document.querySelector('#analyticsDashboardManufacturer').value=${JSON.stringify(selectedManufacturer)};document.querySelector('#applyAnalyticsDashboardFiltersButton').click();return true})()`);
 let manufacturerAnalytics = null;
 for (let attempt = 0; attempt < 300; attempt += 1) {
@@ -6152,7 +6212,7 @@ for (let attempt = 0; attempt < 300; attempt += 1) {
 }
 if (manufacturerAnalytics?.error || manufacturerAnalytics?.loading || !manufacturerAnalytics?.kpis.some((row)=>[1,2,3,4].some((count)=>row.replaceAll(" ","").includes(`Устройства${count}`)))) throw new Error(`Фильтр производителя не оставил совпадающие строки: ${JSON.stringify(manufacturerAnalytics)}`);
 const selectedRoom = await evaluate(`document.querySelector('#analyticsDashboardRoom').options[1]?.value||''`);
-if (!selectedRoom) throw new Error("Dashboard не создал варианты помещения из выбранного Final");
+if (!selectedRoom) throw new Error("Dashboard не создал варианты помещения из выбранного снимка объединения");
 await evaluate(`(()=>{document.querySelector('#analyticsDashboardManufacturer').value='';document.querySelector('#analyticsDashboardRoom').value=${JSON.stringify(selectedRoom)};document.querySelector('#applyAnalyticsDashboardFiltersButton').click();return true})()`);
 let roomAnalytics = null;
 for (let attempt = 0; attempt < 300; attempt += 1) {
@@ -6192,28 +6252,36 @@ for (const [key, expectedStatus] of kpiStatusTransitions) {
     for (let attempt = 0; attempt < 80; attempt += 1) {
       await wait(50);
       detail = await evaluate(`({open:document.querySelector('#detailsDialog').open,title:document.querySelector('#detailsDialog [data-dialog-title]')?.textContent||'',body:document.querySelector('#detailsDialog [data-dialog-content]')?.textContent||'',rows:document.querySelectorAll('#detailsDialog [data-dialog-content] tbody tr').length})`);
-      if (detail.open && !detail.body.includes("Сравнение выбранных Final…")) break;
+      if (detail.open && !detail.body.includes("Сравнение выбранных снимок объединения…")) break;
     }
-    if (!detail?.open || detail.title !== expectedDetailTitle || detail.body.includes("Сравнение выбранных Final…")) {
+    if (!detail?.open || detail.title !== expectedDetailTitle || detail.body.includes("Сравнение выбранных снимок объединения…")) {
       throw new Error(`KPI ${key} не открыл подробный список «${expectedDetailTitle}»: ${JSON.stringify(detail)}`);
     }
     if (key === "unchanged" && detail.rows !== 4) throw new Error(`Диалог «Без изменений» показал неверное число устройств: ${JSON.stringify(detail)}`);
     await evaluate(`document.querySelector('#detailsDialog [data-dialog-close]')?.click()`);
   }
   if (key === "devices") {
+    let mainRoster = null;
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      await wait(100);
+      mainRoster = await evaluate(`({title:document.querySelector("#detailsDialog [data-dialog-title]")?.textContent||"",macs:[...document.querySelectorAll("#detailsDialog tbody [data-device-field=mac]")].map(cell=>cell.textContent.trim())})`);
+      if (mainRoster.title === "Устройства основного файла" && mainRoster.macs.length === 4) break;
+    }
+    if (mainRoster.title !== "Устройства основного файла" || new Set(mainRoster.macs).size !== 4) throw new Error("Main roster detail lost unique devices: " + JSON.stringify(mainRoster));
+    await evaluate(`document.querySelector("#detailsDialog").close();document.querySelector("#openFleetHistoryButton").click()`);
     let fleetDialog = "";
     for (let attempt = 0; attempt < 300; attempt += 1) {
       await wait(100);
       fleetDialog = await evaluate(`document.querySelector('#detailsDialog [data-dialog-content]')?.textContent||''`);
-      if (fleetDialog.includes("Уникальных MAC во всех Final") || fleetDialog.includes("не удалось рассчитать")) break;
+      if (fleetDialog.includes("Уникальных MAC во всех снимках объединения") || fleetDialog.includes("не удалось рассчитать")) break;
     }
-    if (!fleetDialog.includes("Уникальных MAC во всех Final") || !fleetDialog.includes("Устройств в последнем Final") || !fleetDialog.includes("Изменение к предыдущему")) {
-      throw new Error(`KPI Устройства не открыл динамику Final: ${fleetDialog}`);
+    if (!fleetDialog.includes("Уникальных MAC во всех снимках объединения") || !fleetDialog.includes("Устройств в последнем снимке объединения") || !fleetDialog.includes("Изменение к предыдущему")) {
+      throw new Error(`KPI Устройства не открыл динамику снимок объединения: ${fleetDialog}`);
     }
     await evaluate(`document.querySelector('#detailsDialog [data-dialog-close]')?.click()`);
   }
 }
-console.log("browser smoke: Dashboard KPI statuses persist and Устройства opens the paged unique-MAC/Final dynamics drilldown");
+console.log("browser smoke: Dashboard KPI statuses persist and Устройства opens the paged unique-MAC/снимок объединения dynamics drilldown");
 await evaluate(`(()=>{document.querySelector('#analyticsDashboardSearch').value='DEV-51';document.querySelector('#applyAnalyticsDashboardFiltersButton').click();return true})()`);
 let filteredTrends = null;
 for (let attempt = 0; attempt < 300; attempt += 1) {
@@ -6282,9 +6350,9 @@ if (process.env.BROWSER_SMOKE_SAVED_FINAL_SEARCH_ONLY === "1" || process.argv.in
   for (let attempt = 0; attempt < 120; attempt += 1) {
     await wait(100);
     try { restoredSearchState = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||'',error:!document.querySelector('#errorBanner')?.hidden})`); } catch { continue; }
-    if (restoredSearchState.status.includes('3 Final')) break;
+    if (restoredSearchState.status.includes('3 снимок объединения')) break;
   }
-  if (!restoredSearchState?.status.includes('3 Final') || restoredSearchState.error) throw new Error(`Three saved Finals were not restored before search: ${JSON.stringify(restoredSearchState)}`);
+  if (!restoredSearchState?.status.includes('3 снимок объединения') || restoredSearchState.error) throw new Error(`Three saved Finals were not restored before search: ${JSON.stringify(restoredSearchState)}`);
   await evaluate(`document.querySelector('[data-view="search"]').click()`);
   await evaluate(`(()=>{const input=document.querySelector('#globalSearch');input.value='00:11:22:33:44:51';input.dispatchEvent(new Event('input',{bubbles:true}));document.dispatchEvent(new KeyboardEvent('keydown',{key:'f',ctrlKey:true,shiftKey:true,bubbles:true}));return true})()`);
   let savedFinalSearch = null;
@@ -6321,7 +6389,7 @@ for (let attempt = 0; attempt < 40; attempt += 1) {
   rebuiltIndex = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['finalAnalyticsMetadata','snapshots'],'readonly');const metadataRequest=tx.objectStore('finalAnalyticsMetadata').get('${staleIndexSeeded}');const snapshotRequest=tx.objectStore('snapshots').get('${staleIndexSeeded}');tx.oncomplete=()=>{const metadata=metadataRequest.result;const snapshot=snapshotRequest.result;db.close();resolve({schemaVersion:metadata?.schemaVersion,deviceCount:metadata?.deviceCount,snapshotCount:snapshot?.deviceCount})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
   if (rebuiltIndex.schemaVersion === FINAL_ANALYTICS_INDEX_SCHEMA_VERSION) break;
 }
-if (rebuiltIndex?.schemaVersion !== FINAL_ANALYTICS_INDEX_SCHEMA_VERSION || rebuiltIndex.deviceCount !== 4 || rebuiltIndex.snapshotCount !== 4) throw new Error(`Устаревший индекс не перестроился до схемы v${FINAL_ANALYTICS_INDEX_SCHEMA_VERSION} без потери Final: ${JSON.stringify(rebuiltIndex)}`);
+if (rebuiltIndex?.schemaVersion !== FINAL_ANALYTICS_INDEX_SCHEMA_VERSION || rebuiltIndex.deviceCount !== 4 || rebuiltIndex.snapshotCount !== 4) throw new Error(`Устаревший индекс не перестроился до схемы v${FINAL_ANALYTICS_INDEX_SCHEMA_VERSION} без потери снимок объединения: ${JSON.stringify(rebuiltIndex)}`);
 console.log("browser smoke: stale compact analytics index rebuilt to v5 while preserving the full Final");
 await evaluate(`document.querySelector('[data-kpi="switchAnomalyRooms"]').click()`);
 let anomalySummary = "";
@@ -6449,9 +6517,9 @@ for (let attempt = 0; attempt < 80; attempt += 1) {
   await wait(250);
   const state = await evaluate(`({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span').textContent})`);
   if (state.error) throw new Error(`Batch processing error: ${state.message}`);
-  if (state.status.includes("3 Final")) { firstBatch = state; break; }
+  if (state.status.includes("3 снимок объединения")) { firstBatch = state; break; }
 }
-if (!firstBatch) throw new Error("Последовательная batch очередь не сохранила оба Final");
+if (!firstBatch) throw new Error("Последовательная batch очередь не сохранила оба снимок объединения");
 console.log("browser smoke: serial batch committed both Finals");
 
 await evaluate(`document.querySelector('#runBatchButton').click()`);
@@ -6460,37 +6528,37 @@ for (let attempt = 0; attempt < 80; attempt += 1) {
   await wait(250);
   const state = await evaluate(`({status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span').textContent})`);
   if (state.error) throw new Error(`Repeated batch error: ${state.message}`);
-  if (state.status.includes("3 Final")) { repeatedBatch = state; break; }
+  if (state.status.includes("3 снимок объединения")) { repeatedBatch = state; break; }
 }
 if (!repeatedBatch) throw new Error("Повторная batch очередь не завершилась");
 await evaluate(`document.querySelector('[data-view="data"]').click()`);
 await wait(500);
 const finalBatchState = await evaluate(`({snapshotCount:document.querySelectorAll('#snapshotList tbody tr').length,databaseStatus:document.querySelector('#databaseStatus').textContent})`);
-if (finalBatchState.snapshotCount !== 3 || !finalBatchState.databaseStatus.includes("2 в активном Final")) throw new Error(`Повтор batch изменил количество Final или размер активного Final: ${JSON.stringify(finalBatchState)}`);
+if (finalBatchState.snapshotCount !== 3 || !finalBatchState.databaseStatus.includes("2 в активном снимке объединения")) throw new Error(`Повтор batch изменил количество снимок объединения или размер активного снимка объединения: ${JSON.stringify(finalBatchState)}`);
 await evaluate(`(()=>{Object.defineProperty(globalThis,'showSaveFilePicker',{configurable:true,value:undefined});const nativeCreate=URL.createObjectURL.bind(URL);const nativeClick=HTMLAnchorElement.prototype.click;window.__smokeFinalXlsx={blob:null,name:'',textBlob:null,textName:''};URL.createObjectURL=(blob)=>{if(blob.type==='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')window.__smokeFinalXlsx.blob=blob;if(blob.type==='text/plain;charset=utf-8')window.__smokeFinalXlsx.textBlob=blob;return nativeCreate(blob)};HTMLAnchorElement.prototype.click=function(){if(this.download==='final.xlsx')window.__smokeFinalXlsx.name=this.download;if(this.download==='final.txt')window.__smokeFinalXlsx.textName=this.download;return nativeClick.call(this)}})()`);
 await evaluate(`document.querySelector('#exportFinalXlsxButton').click()`);
 let finalXlsxExport = null;
 for (let attempt = 0; attempt < 100; attempt += 1) {
   await wait(100);
-finalXlsxExport = await evaluate(`(async()=>{const item=window.__smokeFinalXlsx;if(!item?.blob||!item.name)return null;const bytes=new Uint8Array(await item.blob.arrayBuffer());const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);const files=[];for(let i=0;i+46<=bytes.length;){if(view.getUint32(i,true)!==0x02014b50){i++;continue}const method=view.getUint16(i+10,true),size=view.getUint32(i+20,true),nameLength=view.getUint16(i+28,true),extraLength=view.getUint16(i+30,true),commentLength=view.getUint16(i+32,true),localOffset=view.getUint32(i+42,true),name=new TextDecoder().decode(bytes.slice(i+46,i+46+nameLength));if(name.startsWith('xl/')){const localNameLength=view.getUint16(localOffset+26,true),localExtraLength=view.getUint16(localOffset+28,true),start=localOffset+30+localNameLength+localExtraLength,compressed=bytes.slice(start,start+size);const data=method===8?await new Response(new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text():new TextDecoder().decode(compressed);files.push({name,data})}i+=46+nameLength+extraLength+commentLength}const all=files.map(file=>file.data).join(' ');return{name:item.name,type:item.blob.type,bytes:bytes.length,zip:bytes[0]===0x50&&bytes[1]===0x4b,metadataSheet:all.includes('Сведения о Final'),deviceSheet:all.includes('Устройства'),deviceCount:all.includes('00:11:22:33:44:51')&&all.includes('00:11:22:33:44:53'),authenticationHeader:all.includes('Время аутентификации'),authenticationValue:all.includes('2026-10-16T10:00:00.000Z')}})()`);
+finalXlsxExport = await evaluate(`(async()=>{const item=window.__smokeFinalXlsx;if(!item?.blob||!item.name)return null;const bytes=new Uint8Array(await item.blob.arrayBuffer());const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);const files=[];for(let i=0;i+46<=bytes.length;){if(view.getUint32(i,true)!==0x02014b50){i++;continue}const method=view.getUint16(i+10,true),size=view.getUint32(i+20,true),nameLength=view.getUint16(i+28,true),extraLength=view.getUint16(i+30,true),commentLength=view.getUint16(i+32,true),localOffset=view.getUint32(i+42,true),name=new TextDecoder().decode(bytes.slice(i+46,i+46+nameLength));if(name.startsWith('xl/')){const localNameLength=view.getUint16(localOffset+26,true),localExtraLength=view.getUint16(localOffset+28,true),start=localOffset+30+localNameLength+localExtraLength,compressed=bytes.slice(start,start+size);const data=method===8?await new Response(new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text():new TextDecoder().decode(compressed);files.push({name,data})}i+=46+nameLength+extraLength+commentLength}const all=files.map(file=>file.data).join(' ');return{name:item.name,type:item.blob.type,bytes:bytes.length,zip:bytes[0]===0x50&&bytes[1]===0x4b,metadataSheet:all.includes('Сведения о снимке объединения'),deviceSheet:all.includes('Устройства'),deviceCount:all.includes('00:11:22:33:44:51')&&all.includes('00:11:22:33:44:53'),authenticationHeader:all.includes('Время аутентификации'),authenticationValue:all.includes('2026-10-16T10:00:00.000Z')}})()`);
   if (finalXlsxExport) break;
 }
 if (!finalXlsxExport?.zip || finalXlsxExport.name !== 'final.xlsx' || finalXlsxExport.type !== 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || !finalXlsxExport.metadataSheet || !finalXlsxExport.deviceSheet || !finalXlsxExport.deviceCount || !finalXlsxExport.authenticationHeader || !finalXlsxExport.authenticationValue) {
   const exportUiState = await evaluate(`({buttonDisabled:document.querySelector('#exportFinalXlsxButton')?.disabled,error:document.querySelector('#errorBanner span')?.textContent||'',activeFinal:document.querySelector('#databaseStatus')?.textContent||''})`);
-  throw new Error(`XLSX-экспорт активного Final не содержит валидную книгу с метаданными и устройствами: ${JSON.stringify({ export: finalXlsxExport, ui: exportUiState })}`);
+  throw new Error(`XLSX-экспорт активного снимка объединения не содержит валидную книгу с метаданными и устройствами: ${JSON.stringify({ export: finalXlsxExport, ui: exportUiState })}`);
 }
 console.log("browser smoke: Final XLSX includes metadata, every device row, and the imported authentication timestamp");
 await evaluate(`document.querySelector('#exportFinalTxtButton').click()`);
 let finalTxtExport = null;
 for (let attempt = 0; attempt < 100; attempt += 1) {
   await wait(100);
-  finalTxtExport = await evaluate(`(async()=>{const item=window.__smokeFinalXlsx;if(!item?.textBlob||!item.textName)return null;const text=new TextDecoder().decode(await item.textBlob.arrayBuffer());return{name:item.textName,type:item.textBlob.type,bytes:text.length,metadata:text.includes('ID Final:'),rows:text.includes('00:11:22:33:44:51')&&text.includes('00:11:22:33:44:53'),sample:text.slice(0,400)}})()`);
+  finalTxtExport = await evaluate(`(async()=>{const item=window.__smokeFinalXlsx;if(!item?.textBlob||!item.textName)return null;const text=new TextDecoder().decode(await item.textBlob.arrayBuffer());return{name:item.textName,type:item.textBlob.type,bytes:text.length,metadata:text.includes('ID снимка объединения:'),rows:text.includes('00:11:22:33:44:51')&&text.includes('00:11:22:33:44:53'),sample:text.slice(0,400)}})()`);
   if (finalTxtExport) break;
 }
-if (!finalTxtExport || finalTxtExport.name !== 'final.txt' || finalTxtExport.type !== 'text/plain;charset=utf-8' || !finalTxtExport.metadata || !finalTxtExport.rows) throw new Error(`TXT-экспорт активного Final не содержит метаданные или полный состав устройств: ${JSON.stringify(finalTxtExport)}`);
+if (!finalTxtExport || finalTxtExport.name !== 'final.txt' || finalTxtExport.type !== 'text/plain;charset=utf-8' || !finalTxtExport.metadata || !finalTxtExport.rows) throw new Error(`TXT-экспорт активного снимка объединения не содержит метаданные или полный состав устройств: ${JSON.stringify(finalTxtExport)}`);
 console.log("browser smoke: Final TXT includes metadata and every device row");
 const finalCatalogBefore = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').getAll();tx.oncomplete=()=>{const selected=snapshots.result.filter((item)=>item.snapshotType==='final').sort((a,b)=>String(a.createdAt).localeCompare(String(b.createdAt)))[0];db.close();resolve({activeId:active.result?.value,selectedId:selected?.id})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
-if (!finalCatalogBefore.activeId || !finalCatalogBefore.selectedId || !await evaluate(`Boolean(document.querySelector('[data-open-final="${finalCatalogBefore.selectedId}"]'))`)) throw new Error(`Каталог не содержит открываемую раннюю запись Final: ${JSON.stringify(finalCatalogBefore)}`);
+if (!finalCatalogBefore.activeId || !finalCatalogBefore.selectedId || !await evaluate(`Boolean(document.querySelector('[data-open-final="${finalCatalogBefore.selectedId}"]'))`)) throw new Error(`Каталог не содержит открываемую раннюю запись снимок объединения: ${JSON.stringify(finalCatalogBefore)}`);
 await evaluate(`document.querySelector('[data-open-final="${finalCatalogBefore.selectedId}"]').click()`);
 let finalCatalogDetail = '';
 for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -6499,7 +6567,7 @@ for (let attempt = 0; attempt < 30; attempt += 1) {
   if (finalCatalogDetail.includes('00:11:22:33:44:52')) break;
 }
 const finalCatalogAfter = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const request=db.transaction('settings','readonly').objectStore('settings').get('activeSnapshotId');request.onsuccess=()=>{db.close();resolve(request.result?.value||'')};request.onerror=()=>{db.close();reject(request.error)}}})})()`);
-if (!finalCatalogDetail.includes('00:11:22:33:44:52') || finalCatalogBefore.activeId !== finalCatalogAfter) throw new Error(`Просмотр раннего Final потерял строки или переключил активный снимок: ${JSON.stringify({detail: finalCatalogDetail, before: finalCatalogBefore.activeId, after: finalCatalogAfter})}`);
+if (!finalCatalogDetail.includes('00:11:22:33:44:52') || finalCatalogBefore.activeId !== finalCatalogAfter) throw new Error(`Просмотр раннего снимок объединения потерял строки или переключил активный снимок: ${JSON.stringify({detail: finalCatalogDetail, before: finalCatalogBefore.activeId, after: finalCatalogAfter})}`);
 await evaluate(`document.querySelector('#detailsDialog').close()`);
 await wait(1000);
 let localArchiveRow = null;
@@ -6533,7 +6601,7 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
   if (localArchiveRestored.includes('Архив объединён')) break;
 }
 const archiveRestoreState = await evaluate(`({rows:document.querySelectorAll('#snapshotList tbody tr').length,status:document.querySelector('#databaseStatus').textContent})`);
-if (!localArchiveRestored.includes('Архив объединён') || archiveRestoreState.rows !== 3 || !archiveRestoreState.status.includes('2 в активном Final')) throw new Error(`Восстановление именованного архива нарушило текущие Final/активный Final: ${JSON.stringify({message:localArchiveRestored,state:archiveRestoreState})}`);
+if (!localArchiveRestored.includes('Архив объединён') || archiveRestoreState.rows !== 3 || !archiveRestoreState.status.includes('2 в активном снимке объединения')) throw new Error(`Восстановление именованного архива нарушило текущие снимок объединения/активный снимок объединения: ${JSON.stringify({message:localArchiveRestored,state:archiveRestoreState})}`);
 await evaluate(`document.querySelector('[data-delete-local-archive="${localArchiveRow.id}"]').click()`);
 let localArchiveDeleted = null;
 for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -6594,9 +6662,9 @@ async function openDashboardAggregateKpi(key, title) {
 }
 
 await resetDashboardDrilldownFilters();
-const manufacturerKpiDrilldown = await openDashboardAggregateKpi("manufacturers", "Производители выбранного Final");
+const manufacturerKpiDrilldown = await openDashboardAggregateKpi("manufacturers", "Производители выбранного снимка объединения");
 await resetDashboardDrilldownFilters();
-const roomKpiDrilldown = await openDashboardAggregateKpi("rooms", "Помещения выбранного Final");
+const roomKpiDrilldown = await openDashboardAggregateKpi("rooms", "Помещения выбранного снимка объединения");
 await resetDashboardDrilldownFilters();
 console.log(JSON.stringify({ browserSmokeDashboardAggregateKpis: { manufacturers: manufacturerKpiDrilldown, rooms: roomKpiDrilldown } }));
 
@@ -6621,7 +6689,7 @@ if (changedRoomDialog.rooms[0]?.loadButton) {
     if (rosterReady) break;
   }
   const rosterState = await evaluate("document.querySelector('#detailsDialog [data-dialog-content]')?.textContent||''");
-  if (!rosterReady || !rosterState.includes("Состав Final")) throw new Error("Expanded all-changed room did not load its Final roster: " + rosterState);
+  if (!rosterReady || !rosterState.includes("Состав снимка объединения")) throw new Error("Expanded all-changed room did not load its Final roster: " + rosterState);
 }
 const chartGroupState = await evaluate("(()=>{const groups=[...document.querySelectorAll('#analyticsView .analytics-groups > details.analytics-group')];return{labels:groups.map((group)=>group.querySelector('summary span')?.textContent.trim()||''),canCollapse:groups[0]?.querySelector('summary')?.tagName==='SUMMARY'}})()");
 if (chartGroupState.labels.join("|") !== "Ключевые графики|Состав и качество данных|Расширенная аналитика" || !chartGroupState.canCollapse) throw new Error("Dashboard chart groups are not compact/collapsible: " + JSON.stringify(chartGroupState));
@@ -6668,14 +6736,14 @@ for (let attempt = 0; attempt < 150; attempt += 1) {
   if (roomPairUi.cards.length >= 6) break;
 }
 if (!roomPairUi?.text.includes('Изменилось всё оборудование') || !roomPairUi.cards.some(([label])=>label==='Добавлено') || !roomPairUi.cards.some(([label])=>label==='Отсутствует') || !roomPairUi.cards.some(([label])=>label==='Изменено') || !roomPairUi.statuses.includes('Добавлено') || !roomPairUi.statuses.includes('Отсутствует') || !roomPairUi.statuses.includes('Изменено')) {
-  throw new Error(`Сравнение двух последних Final комнаты не показало добавления, отсутствия и изменения: ${JSON.stringify(roomPairUi)}`);
+  throw new Error(`Сравнение двух последних снимок объединения комнаты не показало добавления, отсутствия и изменения: ${JSON.stringify(roomPairUi)}`);
 }
 console.log("browser smoke: room cascade, all three Final dates and one selected snapshot, and latest room additions/absences/changes verified");
 
 await evaluate(`document.querySelector('[data-view="single"]').click()`);
 await wait(500);
 const singleFileNotice = await evaluate(`document.querySelector('#singleView .notice')?.textContent||""`);
-if (!singleFileNotice.includes("активный Final не переключается") || !singleFileNotice.includes("обновляют Inventory")) throw new Error(`Single-file notice does not match the persisted behavior: ${singleFileNotice}`);
+if (!singleFileNotice.includes("активный снимок объединения не переключается") || !singleFileNotice.includes("обновляют Inventory")) throw new Error(`Single-file notice does not match the persisted behavior: ${singleFileNotice}`);
 await evaluate(`(()=>{const input=document.querySelector('#singleFileInput');const transfer=new DataTransfer();transfer.items.add(new File(['MAC;Производитель;Модель;IP адрес;Название комнаты\\n00:11:22:33:44:51;Vendor;Model A;192.168.1.51;Переговорная 1\\n00:11:22:33:44:54;Vendor;Model D;192.168.1.54;Переговорная 1'],'single_2026-09-05.csv',{type:'text/csv',lastModified:Date.UTC(2026,8,5)}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
 let singleMappingReady = false;
 for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -6715,7 +6783,7 @@ for (let attempt = 0; attempt < 150; attempt += 1) {
 }
 if (!singleHistoryRestored) throw new Error("Сохранённый одиночный анализ не появился в истории UI");
 const postAnalysisStatus = await evaluate(`document.querySelector('#databaseStatus').textContent`);
-if (!postAnalysisStatus.includes("3 Final") || !postAnalysisStatus.includes("2 в активном Final")) throw new Error(`Одиночный анализ изменил каталог Final или активный Final: ${postAnalysisStatus}`);
+if (!postAnalysisStatus.includes("3 снимок объединения") || !postAnalysisStatus.includes("2 в активном снимке объединения")) throw new Error(`Одиночный анализ изменил каталог снимков объединения или активный снимок объединения: ${postAnalysisStatus}`);
 await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
 await wait(200);
 const finalSelectorOptions = await evaluate(`([...document.querySelectorAll('#baseSnapshotSelect option,#currentSnapshotSelect option')].map(option=>option.textContent).join(' '))`);
@@ -6896,10 +6964,10 @@ const scheduledState = await evaluate(`(()=>{const dbName=new URL(location.href)
 const scheduledInventoryRows = scheduledState.inventory;
 const secondaryIdentityRows = scheduledInventoryRows.filter((device) => device.mac === "00:11:22:33:44:54" || device.mac === "00:11:22:33:44:99" || device.alternateMacs?.includes("00:11:22:33:44:54"));
 const uniqueInventoryMacs = new Set(scheduledInventoryRows.map(({ mac }) => mac).filter(Boolean));
-if (!scheduledSnapshotStatus.includes("3 Final") || !scheduledSnapshotStatus.includes("2 в активном Final") || scheduledInventoryRows.length !== 5 || uniqueInventoryMacs.size !== 5
+if (!scheduledSnapshotStatus.includes("3 снимок объединения") || !scheduledSnapshotStatus.includes("2 в активном снимке объединения") || scheduledInventoryRows.length !== 5 || uniqueInventoryMacs.size !== 5
   || !scheduledState.activeId || scheduledState.activeMacs.includes("AA:BB:CC:DD:EE:66") || scheduledState.singleAnalyses < 3
   || secondaryIdentityRows.length !== 1 || secondaryIdentityRows[0].mac !== "00:11:22:33:44:54" || !secondaryIdentityRows[0].alternateMacs.includes("00:11:22:33:44:99")) {
-  throw new Error(`Отдельные анализы изменили активный Final, потеряли уникальные Inventory или создали дубликат: ${scheduledSnapshotStatus}; ${JSON.stringify(scheduledState)}`);
+  throw new Error(`Отдельные анализы изменили активный снимок объединения, потеряли уникальные Inventory или создали дубликат: ${scheduledSnapshotStatus}; ${JSON.stringify(scheduledState)}`);
 }
 console.log("browser smoke: a due timer processed all requeued files; each single-analysis stayed out of active Final and added only its unique Inventory MAC");
 
@@ -6927,9 +6995,9 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
   staleAliasStatus = await evaluate(`document.querySelector('#databaseStatus').textContent`);
   const error = await evaluate(`!document.querySelector('#errorBanner').hidden`);
   if (error) throw new Error(`Stale-alias browser run failed: ${await evaluate(`document.querySelector('#errorBanner span').textContent`)}`);
-  if (staleAliasStatus.includes("4 Final")) { staleAliasFinal = true; break; }
+  if (staleAliasStatus.includes("4 снимок объединения")) { staleAliasFinal = true; break; }
 }
-if (!staleAliasFinal) throw new Error(`Импорт с сильным Device ID не сохранил ожидаемый четвёртый Final: ${staleAliasStatus}`);
+if (!staleAliasFinal) throw new Error(`Импорт с сильным Device ID не сохранил ожидаемый четвёртый снимок объединения: ${staleAliasStatus}`);
 const staleAliasState = await evaluate(`(()=>{
   const dbName=new URL(location.href).searchParams.get('db');
   return new Promise((resolve,reject)=>{
@@ -6989,10 +7057,10 @@ for (let attempt = 0; attempt < 300; attempt += 1) {
   await wait(250);
   stressStatus = await evaluate(`document.querySelector('#databaseStatus').textContent`);
   const error = await evaluate(`!document.querySelector('#errorBanner').hidden`);
-  if (error) throw new Error(`Большой браузерный Final завершился ошибкой: ${await evaluate(`document.querySelector('#errorBanner span').textContent`)}`);
-  if (stressStatus.includes("5 Final")) { stressFinalReady = true; break; }
+  if (error) throw new Error(`Большой браузерный снимок объединения завершился ошибкой: ${await evaluate(`document.querySelector('#errorBanner span').textContent`)}`);
+  if (stressStatus.includes("5 снимок объединения")) { stressFinalReady = true; break; }
 }
-if (!stressFinalReady) throw new Error(`Браузер не завершил первый 5 000-device Final: ${stressStatus}`);
+if (!stressFinalReady) throw new Error(`Браузер не завершил первый 5 000-device снимок объединения: ${stressStatus}`);
 console.log("browser smoke: first 5,000-device Final persisted for large-pair comparison");
 
 const secondStressCsv = ["CallingStationID;Device ID", ...Array.from({ length: 5_000 }, (_, offset) => {
@@ -7009,7 +7077,7 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
   stressSourcesReset = await evaluate(`(()=>{const input=document.querySelector('#mainFileInput');return input?.files?.length===0&&document.querySelector('#mainFileStatus')?.textContent==='Не выбран'})()`);
   if (stressSourcesReset) break;
 }
-if (!stressSourcesReset) throw new Error("Сброс предыдущего набора файлов не завершился перед импортом второго stress Final");
+if (!stressSourcesReset) throw new Error("Сброс предыдущего набора файлов не завершился перед импортом второго stress снимок объединения");
 await evaluate(`(()=>{const input=document.querySelector('#mainFileInput');const transfer=new DataTransfer();transfer.items.add(new File([${secondStressPayload}],'main_5000_devices_second.csv',{type:'text/csv'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
 let secondStressFileReady = false;
 for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -7024,10 +7092,10 @@ for (let attempt = 0; attempt < 300; attempt += 1) {
   await wait(250);
   const status = await evaluate(`document.querySelector('#databaseStatus').textContent`);
   const error = await evaluate(`!document.querySelector('#errorBanner').hidden`);
-  if (error) throw new Error(`Второй большой браузерный Final завершился ошибкой: ${await evaluate(`document.querySelector('#errorBanner span').textContent`)}`);
-  if (status.includes("6 Final")) { secondStressFinalReady = true; break; }
+  if (error) throw new Error(`Второй большой браузерный снимок объединения завершился ошибкой: ${await evaluate(`document.querySelector('#errorBanner span').textContent`)}`);
+  if (status.includes("6 снимок объединения")) { secondStressFinalReady = true; break; }
 }
-if (!secondStressFinalReady) throw new Error("Браузер не завершил второй 5 000-device Final");
+if (!secondStressFinalReady) throw new Error("Браузер не завершил второй 5 000-device снимок объединения");
 const stressChunkState = await evaluate(`(()=>{
   const dbName=new URL(location.href).searchParams.get('db');
   return new Promise((resolve,reject)=>{
@@ -7061,7 +7129,7 @@ const stressChunkState = await evaluate(`(()=>{
   });
 })()`);
 if (stressChunkState.snapshotCount !== 5000 || stressChunkState.chunkCount !== 10 || stressChunkState.chunkSizes.length !== 10 || stressChunkState.chunkSizes.some((size) => size !== 500) || stressChunkState.inventoryStressCount !== 10000) {
-  throw new Error(`Большой браузерный Final не сохранился порциями по 500 с полным Inventory: ${JSON.stringify(stressChunkState)}`);
+  throw new Error(`Большой браузерный снимок объединения не сохранился порциями по 500 с полным Inventory: ${JSON.stringify(stressChunkState)}`);
 }
 console.log("browser smoke: two 5,000-device Finals persisted as 10 IndexedDB chunks of at most 500 rows each");
 await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
@@ -7071,9 +7139,9 @@ for (let attempt = 0; attempt < 600; attempt += 1) {
   largeAnalyticsSelectorsReady = await evaluate(`Boolean([...document.querySelector('#currentSnapshotSelect').options].some((option)=>option.value===${JSON.stringify(stressChunkState.activeSnapshotId)}))`);
   if (largeAnalyticsSelectorsReady) break;
 }
-if (!largeAnalyticsSelectorsReady) throw new Error(`Аналитика не предложила активный 5 000-device Final после завершения обновления: ${stressChunkState.activeSnapshotId}`);
+if (!largeAnalyticsSelectorsReady) throw new Error(`Аналитика не предложила активный 5 000-device снимок объединения после завершения обновления: ${stressChunkState.activeSnapshotId}`);
 const largeAnalyticsPair = await evaluate(`(()=>{const current=document.querySelector('#currentSnapshotSelect');const base=document.querySelector('#baseSnapshotSelect');const index=[...current.options].findIndex((option)=>option.value===${JSON.stringify(stressChunkState.activeSnapshotId)});if(index<2)return {current:current.value,index,options:current.options.length};const expectedBase=current.options[index-1].value;const needsApply=current.value!==${JSON.stringify(stressChunkState.activeSnapshotId)}||base.value!==expectedBase||document.querySelector('#dashboardComparisonMode').value!=='snapshots';current.value=${JSON.stringify(stressChunkState.activeSnapshotId)};base.value=expectedBase;if(needsApply)document.querySelector('#applyComparisonButton').click();return {current:current.value,base:base.value,index,applied:needsApply}})()`);
-if (!largeAnalyticsPair.current || !largeAnalyticsPair.base || largeAnalyticsPair.current !== stressChunkState.activeSnapshotId) throw new Error(`Не удалось выбрать активный 5 000-device Final и предыдущий снимок: ${JSON.stringify(largeAnalyticsPair)}`);
+if (!largeAnalyticsPair.current || !largeAnalyticsPair.base || largeAnalyticsPair.current !== stressChunkState.activeSnapshotId) throw new Error(`Не удалось выбрать активный 5 000-device снимок объединения и предыдущий снимок: ${JSON.stringify(largeAnalyticsPair)}`);
 let fullFinalAnalytics = null;
 let previousAnalyticsProgress = "";
 let analyticsProgressChangedAt = Date.now();
@@ -7104,7 +7172,7 @@ for (let attempt = 0; attempt < 7200; attempt += 1) {
         await wait(50);
       }
       if (restartedAnalytics?.view !== "analytics" || restartedAnalytics.current !== largeAnalyticsPair.current || !restartedAnalytics.loading || !restartedAnalytics.overview.includes("Подробнаясводкавыбранногостатусарассчитывается") || restartedAnalytics.error) {
-        throw new Error(`Повторный вход не начал полную загрузку актуальной пары Final: ${JSON.stringify({largeAnalyticsPair,restartedAnalytics})}`);
+        throw new Error(`Повторный вход не начал полную загрузку актуальной пары снимок объединения: ${JSON.stringify({largeAnalyticsPair,restartedAnalytics})}`);
       }
       analyticsInterruptedAndRestarted = true;
       analyticsProgressChangedAt = Date.now();
@@ -7117,8 +7185,8 @@ for (let attempt = 0; attempt < 7200; attempt += 1) {
 if ((fullFinalAnalytics.overview.includes('Устройств5000') && !fullFinalAnalytics.loading)
     || fullFinalAnalytics.loadingText.includes('остановлены') || (fullFinalAnalytics.error && !fullFinalAnalytics.loading)) break;
 }
-if (fullFinalAnalytics?.error || fullFinalAnalytics?.historyError || fullFinalAnalytics?.loading || !fullFinalAnalytics?.overview.includes('Устройств5000') || !fullFinalAnalytics?.kpis.includes('Отсутствуют 5 000') || !fullFinalAnalytics?.kpis.includes('Без изменений 0') || fullFinalAnalytics.current !== largeAnalyticsPair.current) throw new Error(`Dashboard удержал неверные KPI или не сравнил два Final по 5 000 устройств: ${JSON.stringify({largeAnalyticsPair,fullFinalAnalytics})}`);
-if (!selectedPairKpisVisibleBeforeDetails) throw new Error(`KPI выбранной пары Final не появились до завершения фоновых подробных сводок: ${JSON.stringify({largeAnalyticsPair,fullFinalAnalytics})}`);
+if (fullFinalAnalytics?.error || fullFinalAnalytics?.historyError || fullFinalAnalytics?.loading || !fullFinalAnalytics?.overview.includes('Устройств5000') || !fullFinalAnalytics?.kpis.includes('Отсутствуют 5 000') || !fullFinalAnalytics?.kpis.includes('Без изменений 0') || fullFinalAnalytics.current !== largeAnalyticsPair.current) throw new Error(`Dashboard удержал неверные KPI или не сравнил два снимок объединения по 5 000 устройств: ${JSON.stringify({largeAnalyticsPair,fullFinalAnalytics})}`);
+if (!selectedPairKpisVisibleBeforeDetails) throw new Error(`KPI выбранной пары снимок объединения не появились до завершения фоновых подробных сводок: ${JSON.stringify({largeAnalyticsPair,fullFinalAnalytics})}`);
 if (!analyticsInterruptedAndRestarted) throw new Error("Dashboard loading was not interrupted and restarted after navigation");
 await evaluate(`document.querySelector('[data-view="search"]').click()`);
 await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
@@ -7145,9 +7213,9 @@ for (let attempt = 0; attempt < 120; attempt += 1) {
     largeInventoryReload = await evaluate(`({status:document.querySelector('#databaseStatus')?.textContent||"",error:!document.querySelector('#errorBanner')?.hidden})`);
     largeInventoryPage = await evaluate(`({total:document.querySelector('#searchCount').textContent.replace(/\s+/g,' ').trim(),page:document.querySelector('#pageLabel').textContent.replace(/\s+/g,' ').trim(),rows:document.querySelectorAll('#deviceTable tbody tr').length})`);
   } catch { continue; }
-  if (largeInventoryReload.status.includes("6 Final") && largeInventoryPage.total.includes("10 005") && largeInventoryPage.rows === 50) break;
+  if (largeInventoryReload.status.includes("6 снимок объединения") && largeInventoryPage.total.includes("10 005") && largeInventoryPage.rows === 50) break;
 }
-if (!largeInventoryReload?.status.includes("6 Final") || largeInventoryReload.error) throw new Error(`Large Final was not restored before pagination check: ${JSON.stringify(largeInventoryReload)}`);
+if (!largeInventoryReload?.status.includes("6 снимок объединения") || largeInventoryReload.error) throw new Error(`Large Final was not restored before pagination check: ${JSON.stringify(largeInventoryReload)}`);
 const largeInventoryTotal = Number(largeInventoryPage.total.replace(/\D/g, "")); const largeInventoryPageText = largeInventoryPage.page.replaceAll("\u00a0", " ");
 if (largeInventoryTotal !== 10005 || !largeInventoryPageText.includes("Страница 1 из 201") || !largeInventoryPageText.includes("на странице 50") || !largeInventoryPageText.includes("всего найдено 10 005") || largeInventoryPage.rows !== 50) {
   throw new Error(`Большая Inventory не разделяет полный итог и страницу из 50 строк: ${JSON.stringify(largeInventoryPage)}`);
@@ -7202,9 +7270,9 @@ for (let attempt = 0; attempt < 150; attempt += 1) {
   } catch {
     continue;
   }
-  if (restartedState.status.includes("6 Final")) break;
+  if (restartedState.status.includes("6 снимок объединения")) break;
 }
-if (!restartedState?.status.includes("6 Final") || !restartedState.status.includes("в активном Final") || restartedState.error) throw new Error(`Данные не восстановились после перезапуска страницы: ${JSON.stringify(restartedState)}`);
+if (!restartedState?.status.includes("6 снимок объединения") || !restartedState.status.includes("в активном снимке объединения") || restartedState.error) throw new Error(`Данные не восстановились после перезапуска страницы: ${JSON.stringify(restartedState)}`);
 console.log("browser smoke: IndexedDB state restored after page restart");
 
 await evaluate(`document.querySelector('#engineeringModeButton').click()`);
@@ -7239,7 +7307,7 @@ console.log("browser smoke: compatible MAC Analyzer Pro v2 export contains all s
 const referenceArchiveSourceDatabase = new URL(target.url).searchParams.get("db");
 const referenceSourceBeforeImport = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(referenceArchiveSourceDatabase)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshotCount:snapshots.result,inventoryCount:inventory.result,historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
 await evaluate(`window.confirm=(message)=>{window.__smokeConfirmMessages=[...(window.__smokeConfirmMessages||[]),String(message)];return true}`);
-await evaluate(`(()=>{const archive={format:'mac-analyzer-full-json',version:2,exportedAt:'2026-10-15T00:00:00.000Z',analytics:{},workspace:{theme:'dark',dashboardSettings:{status:'all'}},currentDevices:[],allDevices:[{internalDeviceId:'DEV-REFERENCE-SMOKE',mac:'00:11:22:33:44:61',vendor:'Reference Vendor',model:'Reference Model'}],invalidRows:[],movementHistory:[{mac:'00:11:22:33:44:61',type:'Изменено',field:'vendor',before:'Old Vendor',after:'Reference Vendor',changedAt:'2026-10-15T11:00:00.000Z'}],snapshots:[{metadata:{id:'reference-smoke-final',name:'Reference imported Final',source:'reference.csv',kind:'Final',fileCreatedAt:'2026-10-15T10:00:00.000Z',savedAt:'2026-10-15T10:01:00.000Z',deviceCount:1,invalidCount:0},devices:[{internalDeviceId:'DEV-REFERENCE-SMOKE',mac:'00:11:22:33:44:61',vendor:'Reference Vendor',model:'Reference Model'}]}]};const input=document.querySelector('#importDatabaseInput');const transfer=new DataTransfer();transfer.items.add(new File([JSON.stringify(archive)],'reference-smoke.macarchive.json',{type:'application/json'}));input.files=transfer.files;setTimeout(()=>input.dispatchEvent(new Event('change',{bubbles:true})),0);return input.files[0]?.name})()`);
+await evaluate(`(()=>{const archive={format:'mac-analyzer-full-json',version:2,exportedAt:'2026-10-15T00:00:00.000Z',analytics:{},workspace:{theme:'dark',dashboardSettings:{status:'all'}},currentDevices:[],allDevices:[{internalDeviceId:'DEV-REFERENCE-SMOKE',mac:'00:11:22:33:44:61',vendor:'Reference Vendor',model:'Reference Model'}],invalidRows:[],movementHistory:[{mac:'00:11:22:33:44:61',type:'Изменено',field:'vendor',before:'Old Vendor',after:'Reference Vendor',changedAt:'2026-10-15T11:00:00.000Z'}],snapshots:[{metadata:{id:'reference-smoke-final',name:'Reference imported снимок объединения',source:'reference.csv',kind:'снимок объединения',fileCreatedAt:'2026-10-15T10:00:00.000Z',savedAt:'2026-10-15T10:01:00.000Z',deviceCount:1,invalidCount:0},devices:[{internalDeviceId:'DEV-REFERENCE-SMOKE',mac:'00:11:22:33:44:61',vendor:'Reference Vendor',model:'Reference Model'}]}]};const input=document.querySelector('#importDatabaseInput');const transfer=new DataTransfer();transfer.items.add(new File([JSON.stringify(archive)],'reference-smoke.macarchive.json',{type:'application/json'}));input.files=transfer.files;setTimeout(()=>input.dispatchEvent(new Event('change',{bubbles:true})),0);return input.files[0]?.name})()`);
 let referenceArchiveImport = null;
 for (let attempt = 0; attempt < 240; attempt += 1) {
   await wait(250);
@@ -7250,12 +7318,12 @@ for (let attempt = 0; attempt < 240; attempt += 1) {
     await attachToTarget(target.webSocketDebuggerUrl, { force: true });
     await command("Runtime.enable");
     referenceArchiveImport = await evaluate(`(()=>({db:new URL(location.href).searchParams.get('db'),status:document.querySelector('#databaseStatus').textContent,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}))()`);
-    if (referenceArchiveImport.status.includes("1 Final") && referenceArchiveImport.status.includes("1 в активном Final")) break;
+    if (referenceArchiveImport.status.includes("1 снимок объединения") && referenceArchiveImport.status.includes("1 в активном снимке объединения")) break;
   }
 }
 const referenceArchiveImportState = await evaluate(`(()=>{const dbName=new URL(location.href).searchParams.get('db');return new Promise((resolve,reject)=>{const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const imported=tx.objectStore('snapshots').get('reference-smoke-final');const device=tx.objectStore('inventory').get('DEV-REFERENCE-SMOKE');const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshot:Boolean(imported.result),device:device.result?.manufacturer||'',historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}})})()`);
 const referenceSourcePreserved = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(referenceArchiveSourceDatabase)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshotCount:snapshots.result,inventoryCount:inventory.result,historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
-if (referenceArchiveImport?.error || !referenceArchiveImport?.db || !referenceArchiveImport.status.includes("1 Final") || !referenceArchiveImport.status.includes("1 в активном Final") || referenceArchiveImportState.activeId !== "reference-smoke-final" || !referenceArchiveImportState.snapshot || referenceArchiveImportState.device !== "Reference Vendor" || referenceArchiveImportState.historyCount !== 1 || referenceSourcePreserved.activeId !== referenceSourceBeforeImport.activeId || referenceSourcePreserved.snapshotCount !== referenceSourceBeforeImport.snapshotCount || referenceSourcePreserved.inventoryCount !== referenceSourceBeforeImport.inventoryCount || referenceSourcePreserved.historyCount !== referenceSourceBeforeImport.historyCount) throw new Error(`Эталонный .macarchive.json не открыл отдельный профиль или изменил исходную базу: ${JSON.stringify({referenceArchiveImport,referenceArchiveImportState,referenceSourceBeforeImport,referenceSourcePreserved,expectedActiveId:stressChunkState.activeSnapshotId})}`);
+if (referenceArchiveImport?.error || !referenceArchiveImport?.db || !referenceArchiveImport.status.includes("1 снимок объединения") || !referenceArchiveImport.status.includes("1 в активном снимке объединения") || referenceArchiveImportState.activeId !== "reference-smoke-final" || !referenceArchiveImportState.snapshot || referenceArchiveImportState.device !== "Reference Vendor" || referenceArchiveImportState.historyCount !== 1 || referenceSourcePreserved.activeId !== referenceSourceBeforeImport.activeId || referenceSourcePreserved.snapshotCount !== referenceSourceBeforeImport.snapshotCount || referenceSourcePreserved.inventoryCount !== referenceSourceBeforeImport.inventoryCount || referenceSourcePreserved.historyCount !== referenceSourceBeforeImport.historyCount) throw new Error(`Эталонный .macarchive.json не открыл отдельный профиль или изменил исходную базу: ${JSON.stringify({referenceArchiveImport,referenceArchiveImportState,referenceSourceBeforeImport,referenceSourcePreserved,expectedActiveId:stressChunkState.activeSnapshotId})}`);
 const referenceDeviceTransferState = await importDeviceArchiveAndVerify(referenceArchiveImport.db, referenceArchiveImportState.activeId);
 const referenceSourceBackState = await navigateToHistoryDatabase(-1, referenceArchiveSourceDatabase);
 const referenceSourceAfterBack = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(${JSON.stringify(referenceArchiveSourceDatabase)});opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','inventory','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const snapshots=tx.objectStore('snapshots').count();const inventory=tx.objectStore('inventory').count();const history=tx.objectStore('history').count();tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,snapshotCount:snapshots.result,inventoryCount:inventory.result,historyCount:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
@@ -7267,7 +7335,7 @@ if (referenceProfileForwardState.db !== referenceArchiveImport.db || referencePr
 console.log("browser smoke: reference .macarchive.json v2 opened a UUID profile; Back restored the unchanged source and Forward/reload restored its data; devices-json v2 added Inventory without changing Final");
 
 const startupRecoverySeed = await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots'],'readwrite');tx.objectStore('settings').put({key:'activeSnapshotId',value:'smoke-incomplete-newest'});tx.objectStore('snapshots').put({id:'smoke-incomplete-newest',name:'Incomplete newer Final',snapshotType:'final',createdAt:'2099-12-31T23:59:59.000Z',deviceCount:1,chunkCount:1});tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
-if (!startupRecoverySeed) throw new Error("Не удалось подготовить disposable повреждённый Final для startup recovery");
+if (!startupRecoverySeed) throw new Error("Не удалось подготовить disposable повреждённый снимок объединения для startup recovery");
 await command("Page.reload", { ignoreCache: true });
 let startupRecoveryState = null;
 for (let attempt = 0; attempt < 600; attempt += 1) {
@@ -7275,10 +7343,10 @@ for (let attempt = 0; attempt < 600; attempt += 1) {
   try {
     startupRecoveryState = await evaluate(`({db:new URL(location.href).searchParams.get('db'),status:document.querySelector('#databaseStatus')?.textContent||'',ready:Boolean(document.querySelector('#progressPanel')?.hidden),error:!document.querySelector('#errorBanner')?.hidden,message:document.querySelector('#errorBanner span')?.textContent||''})`);
   } catch { continue; }
-  if (startupRecoveryState.ready && startupRecoveryState.status.includes('1 Final') && startupRecoveryState.status.includes('активный Final восстановлен')) break;
+  if (startupRecoveryState.ready && startupRecoveryState.status.includes('1 снимок объединения') && startupRecoveryState.status.includes('активный снимок объединения восстановлен')) break;
 }
 const startupRecoveryPointer = await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','snapshotChunks'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const corrupt=tx.objectStore('snapshots').get('smoke-incomplete-newest');const valid=tx.objectStore('snapshots').get('reference-smoke-final');const corruptChunks=tx.objectStore('snapshotChunks').count(IDBKeyRange.bound(['smoke-incomplete-newest',0],['smoke-incomplete-newest',Number.MAX_SAFE_INTEGER]));tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value,corrupt:Boolean(corrupt.result),valid:Boolean(valid.result),corruptChunkCount:corruptChunks.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
-if (startupRecoveryState?.error || !startupRecoveryState?.ready || startupRecoveryState?.db !== referenceArchiveImport.db || !startupRecoveryState?.status.includes('1 Final') || !startupRecoveryState.status.includes('активный Final восстановлен') || startupRecoveryPointer.activeId !== 'reference-smoke-final' || !startupRecoveryPointer.valid || !startupRecoveryPointer.corrupt || startupRecoveryPointer.corruptChunkCount !== 0) throw new Error(`Startup recovery kept a stale pointer or selected a newer incomplete Final: ${JSON.stringify({startupRecoveryState,startupRecoveryPointer})}`);
+if (startupRecoveryState?.error || !startupRecoveryState?.ready || startupRecoveryState?.db !== referenceArchiveImport.db || !startupRecoveryState?.status.includes('1 снимок объединения') || !startupRecoveryState.status.includes('активный снимок объединения восстановлен') || startupRecoveryPointer.activeId !== 'reference-smoke-final' || !startupRecoveryPointer.valid || !startupRecoveryPointer.corrupt || startupRecoveryPointer.corruptChunkCount !== 0) throw new Error(`Startup recovery kept a stale pointer or selected a newer incomplete Final: ${JSON.stringify({startupRecoveryState,startupRecoveryPointer})}`);
 await evaluate(`(()=>new Promise((resolve,reject)=>{const dbName=new URL(location.href).searchParams.get('db');const opening=indexedDB.open(dbName);opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('snapshots','readwrite');tx.objectStore('snapshots').delete('smoke-incomplete-newest');tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
 console.log("browser smoke: startup recovery ignored a stale active pointer and a newer incomplete Final, restored the newest complete snapshot, and preserved its data");
 

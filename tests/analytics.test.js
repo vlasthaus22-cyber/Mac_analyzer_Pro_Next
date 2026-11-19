@@ -1433,7 +1433,7 @@ test("presence transition details fall back to valid macFormatted when legacy ma
     ["three", [{ mac: "", macFormatted: "0011.2233.4455" }]],
   ]);
   const transitions = await collectPresenceTransitions("00:11:22:33:44:55", snapshots, async (snapshotId, visit) => visit(rows.get(snapshotId)), { snapshotsAscending: true });
-  assert.deepEqual(transitions, [
+  assert.deepEqual(transitions.map(({ type, snapshotId, name, date }) => ({ type, snapshotId, name, date })), [
     { type: "absent", snapshotId: "two", name: "Second", date: "2026-01-02" },
     { type: "present", snapshotId: "three", name: "Third", date: "2026-01-03" },
   ]);
@@ -1459,7 +1459,7 @@ test("presence transition details are loaded by snapshot chunks and retain order
     await visit(rows.get(snapshotId));
   }, { filters: { manufacturer: "Acme" } });
   assert.deepEqual(visited, ["one", "two", "three", "four"]);
-  assert.deepEqual(transitions, [
+  assert.deepEqual(transitions.map(({ type, snapshotId, name, date }) => ({ type, snapshotId, name, date })), [
     { type: "absent", snapshotId: "two", name: "Second", date: "2026-01-02" },
     { type: "present", snapshotId: "three", name: "Third", date: "2026-01-03" },
     { type: "absent", snapshotId: "four", name: "Fourth", date: "2026-01-04" },

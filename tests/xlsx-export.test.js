@@ -89,7 +89,7 @@ test("Final XLSX exporter produces a valid multi-sheet workbook with snapshot me
     deviceCount: devices.length, invalidCount: 1,
   }, [{ key: "mac", label: "MAC" }, { key: "room", label: "Помещение" }], { maxDataRowsPerSheet: 2 });
   const entries = await readZip(createXlsxWorkbookStream(sheets));
-  assert.match(entries.get("xl/workbook.xml"), /name="Сведения о Final"/);
+  assert.match(entries.get("xl/workbook.xml"), /name="Сведения о снимке объединения"/);
   assert.match(entries.get("xl/workbook.xml"), /name="Устройства"/);
   assert.match(entries.get("xl/workbook.xml"), /name="Устройства 2"/);
   assert.match(entries.get("xl/worksheets/sheet1.xml"), /Room inventory/);

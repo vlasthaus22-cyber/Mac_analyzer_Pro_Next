@@ -109,7 +109,7 @@ test("dashboard fleet dialog pages its history and escapes imported snapshot nam
     })),
   };
   const first = dashboardFleetDialogContent(fleet);
-  assert.match(first, /Уникальных MAC во всех Final/);
+  assert.match(first, /Уникальных MAC во всех снимках объединения/);
   assert.match(first, /data-dashboard-fleet-page="100"/);
   assert.match(first, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   assert.doesNotMatch(first, /<script>alert/);
@@ -570,7 +570,7 @@ test("model prefix detail renders counts and escapes imported model and source v
     metrics: { prefixes: 1, matchedDevices: 3, vendors: 2 },
     prefixes: [{ prefix: "0011223344", formattedPrefix: "00:11:22:33:44", model: "<unsafe>", source: "<file>", occurrences: 27 }],
   });
-  assert.match(html, /Устройств в выбранном Final/);
+  assert.match(html, /Устройств в выбранном снимке объединения/);
   assert.match(html, /<th>Количество вхождений<\/th>/);
   assert.match(html, /data-export-model-prefix-analytics-xlsx/);
   assert.match(html, /<td>27<\/td>/);
@@ -735,12 +735,12 @@ test("room coverage shows address and an action to open the room's full snapshot
   assert.match(details, /Открыть хронологию помещения/);
   assert.match(details, /data-open-room-history=/);
   assert.match(details, /2\/2 изменено/);
-  assert.match(details, /Загрузить состав Final · 2 устройств/);
+  assert.match(details, /Загрузить состав снимка объединения · 2 устройств/);
   assert.doesNotMatch(details, /data-device-context-row/);
   const page = roomCoverageContent([{
     key: "sr:sr-1", smartroomId: "SR-1", room: "Room A", changedCount: 2, deviceCount: 2, rosterCount: 2, allChanged: true,
   }], true, { "sr:sr-1": { devices: [{ mac: "00:11:22:33:44:55" }], total: 2, page: 1, pageCount: 1 } });
-  assert.match(page, /Состав Final · страница 1 из 1 · 2 устройств/);
+  assert.match(page, /Состав снимка объединения · страница 1 из 1 · 2 устройств/);
   assert.match(page, /data-device-field="mac">00:11:22:33:44:55/);
 });
 
@@ -763,7 +763,7 @@ test("room chronology explains field changes, additions, removals and keeps the 
   assert.match(html, /IP устройства/);
   assert.match(html, /Добавлены \(1\)/);
   assert.match(html, /Отсутствуют \(1\)/);
-  assert.match(html, /Состав комнаты в этом Final/);
+  assert.match(html, /Состав комнаты в этом снимке объединения/);
   assert.match(html, /10\.0\.1\.1/);
 });
 
@@ -898,8 +898,8 @@ test("Final result tables use the saved visible column order and values", () => 
 
 test("first room chronology observation is explicitly identified", () => {
   const html = roomTimelineObservationContent({ name: "Final 1", createdAt: "2026-01-01T00:00:00Z" }, [], null, { room: "Room A" });
-  assert.match(html, /Первый сохранённый Final для выбранной комнаты/);
-  assert.match(html, /Помещение отсутствует в этом Final/);
+  assert.match(html, /Первый сохранённый снимок объединения для выбранной комнаты/);
+  assert.match(html, /Помещение отсутствует в этом снимке объединения/);
 });
 
 test("room Final comparison shows the two snapshot labels and every change category safely", () => {
@@ -1061,8 +1061,8 @@ test("MAC timeline renders every device field and highlights only confirmed chan
   assert.match(html, /class="changed-value">&lt;Office&gt;/);
   assert.match(html, /02\.01\.2026, 00:00:00 UTC/);
   assert.doesNotMatch(html, /class="changed-value">ID-1/);
-  assert.match(html, /Было в предыдущем Final «Final»/);
-  assert.match(html, /Стало в новом Final «Final»/);
+  assert.match(html, /Было в предыдущем снимке объединения «снимок объединения»/);
+  assert.match(html, /Стало в новом снимке объединения «снимок объединения»/);
   assert.match(html, /<details class="timeline-card mac-timeline-item mac-timeline-changed">/);
   assert.match(html, /<summary title="Открыть полную информацию о событии">/);
 });
@@ -1098,7 +1098,7 @@ test("MAC timeline distinguishes explicit optional-host appearance and absence o
   assert.equal((html.match(/mac-timeline-observed/g) || []).length, 2);
 });
 
-test("MAC timeline summary counts appearances, distinct sources, and saved movements without absences or ambiguity", () => {
+test("MAC timeline summary counts ambiguous observations as appearances and preserves sources", () => {
   const html = macTimelineSummaryContent([
     { date: "2026-01-01T00:00:00Z", snapshotId: "one", status: "first", snapshotName: "Main A", changes: [] },
     { date: "2026-01-02T00:00:00Z", snapshotId: "two", status: "changed", snapshotName: "Main B", changes: [{ field: "model", oldValue: "A", newValue: "B", historyEventIds: ["10", "11"] }] },
@@ -1107,9 +1107,9 @@ test("MAC timeline summary counts appearances, distinct sources, and saved movem
     { date: "2026-01-05T00:00:00Z", status: "ambiguous", candidates: [{ mac: "AA:BB:CC:DD:EE:FF" }], changes: [] },
   ]);
   assert.match(html, /Событий<\/span><strong>5<\/strong>/);
-  assert.match(html, /Выгрузок<\/span><strong>3<\/strong>/);
+  assert.match(html, /Выгрузок<\/span><strong>4<\/strong>/);
   assert.match(html, /Первое появление<\/span><strong>01\.01\.2026, 00:00:00 UTC<\/strong>/);
-  assert.match(html, /Последнее появление<\/span><strong>03\.01\.2026, 00:00:00 UTC<\/strong>/);
+  assert.match(html, /Последнее появление<\/span><strong>05\.01\.2026, 00:00:00 UTC<\/strong>/);
   assert.match(html, /Источников<\/span><strong>3<\/strong>/);
   assert.match(html, /Изменений<\/span><strong>1<\/strong>/);
 });

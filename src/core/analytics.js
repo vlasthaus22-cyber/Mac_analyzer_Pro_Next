@@ -1,6 +1,6 @@
 import { compareFinals } from "./comparison.js";
 import { stableIdentity } from "./identity.js";
-import { firstMac, keyText, locationKey, normalizeIp, normalizeMac, text } from "./normalize.js";
+import { firstMac, hasKnownRoom, keyText, locationKey, normalizeIp, normalizeMac, text } from "./normalize.js";
 import { createFinalComparisonSummary } from "./comparison.js";
 import { compactComparisonDevice } from "./compact-final-analytics.js";
 import { createDashboardDeviceMatcher } from "./dashboard-filter.js";
@@ -9,6 +9,18 @@ import { compareSnapshotHistoryMetadata, SnapshotHistorySignatureAccumulator } f
 
 function deviceManufacturer(device = {}) {
   return text(device.manufacturer) || text(device.vendor);
+}
+
+export function createUniqueAnalyticsDeviceFilter() {
+  const seen = new Set();
+  return (device) => {
+    const mac = firstMac(device.mac, device.macFormatted, device.mac_formatted);
+    const key = mac ? `mac:${mac}` : device.id ? `id:${device.id}` : "";
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  };
 }
 
 function sortCountRows(counts, limit = null) {
@@ -387,7 +399,7 @@ function buildSelectedAnalytics(previous = { devices: [] }, current = { devices:
     if (manufacturer) manufacturerKeys.add(keyText(manufacturer));
     const room = reconciledRoomDescriptor(device, currentRoomLocations);
     if (room.key) currentRoomKeys.add(room.key);
-    else {
+    if (!hasKnownRoom(device)) {
       unassignedCount += 1;
       const vendor = manufacturer || "Unknown";
       const model = text(device.model) || "Unknown";
@@ -851,7 +863,7 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
       if (manufacturer) addUniqueMetric("manufacturer-key", keyText(manufacturer));
       const room = reconciledRoomDescriptor(device, currentRoomLocationsForBatch);
       if (room.key) addUniqueMetric("room-key", room.key);
-      else {
+      if (!hasKnownRoom(device)) {
         unassignedCount += 1;
         countMetric("unassigned-vendor", manufacturer || "Unknown");
         countMetric("unassigned-model", model || "Unknown");
@@ -1475,24 +1487,30 @@ export async function collectPresenceTransitions(mac, snapshots = [], visitSnaps
   const transitions = [];
   let everSeen = false;
   let previousPresent = false;
+  let lastSeen = null;
+  let lastDevice = null;
   for (const snapshot of orderedSnapshots) {
-    let present = false;
+    let currentDevice = null;
     await visitSnapshotChunks(snapshot.id, (devices = []) => {
-      if (present) return false;
+      if (currentDevice) return false;
       for (const device of devices) {
         if (!matchesFilters(device)) continue;
         if (presenceMac(device) === normalizedMac) {
-          present = true;
+          currentDevice = { ...compactComparisonDevice(device), mac: normalizedMac };
           return false;
         }
       }
     });
     const date = String(snapshot.fileCreatedAt || snapshot.createdAt || snapshot.savedAt || "");
     const details = { snapshotId: String(snapshot.id || ""), name: String(snapshot.name || ""), date };
-    if (previousPresent && !present) transitions.push({ type: "absent", ...details });
-    else if (present && everSeen && !previousPresent) transitions.push({ type: "present", ...details });
-    if (present) everSeen = true;
-    previousPresent = present;
+    if (previousPresent && !currentDevice) transitions.push({ type: "absent", ...details, lastSeen, before: lastDevice });
+    else if (currentDevice && everSeen && !previousPresent) transitions.push({ type: "present", ...details, lastSeen, before: lastDevice, after: currentDevice });
+    if (currentDevice) {
+      everSeen = true;
+      lastSeen = details;
+      lastDevice = currentDevice;
+    }
+    previousPresent = Boolean(currentDevice);
   }
   return transitions;
 }
@@ -1556,7 +1574,7 @@ export async function aggregateSnapshotHistory(snapshots = [], visitSnapshotChun
       snapshotChanges.push({ label: snapshot.name || snapshot.createdAt, added: summary.added, absent: summary.absent });
     }
     previousDevices = currentDevices;
-    snapshotTotals.push({ id: String(snapshot.id || ""), label: snapshot.name || snapshot.createdAt, value: uniqueMacCount });
+    snapshotTotals.push({ id: String(snapshot.id || ""), label: snapshot.name || snapshot.createdAt, value: Number.isSafeInteger(snapshot.mainUniqueMacs) ? snapshot.mainUniqueMacs : uniqueMacCount });
     deviceTotal += uniqueMacCount;
   }
   return {

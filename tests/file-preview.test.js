@@ -33,8 +33,8 @@ test("full location paths preserve street and actual room; a known room is not c
   collector.accept([device, { id: "different-identity", mac: device.mac, smartroomId: "S1" }, { id: "no-room" }]);
   const dataset = collector.finish();
   assert.equal(dataset.summary.devices, 3);
-  assert.equal(dataset.roomOccupancy.assignedDevices, 2);
-  assert.equal(dataset.roomOccupancy.unassignedDevices, 1);
+  assert.equal(dataset.roomOccupancy.assignedDevices, 1);
+  assert.equal(dataset.roomOccupancy.unassignedDevices, 2);
 });
 
 test("file preview fills blanks on a copy and refuses conflicting identifiers", () => {

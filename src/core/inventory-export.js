@@ -8,7 +8,7 @@ export const INVENTORY_EXPORT_COLUMNS = Object.freeze([
   ["address", "Адрес"], ["room", "Помещение"], ["smartroomId", "Smartroom ID"],
   ["serial", "Серийный номер"], ["deviceId", "Device ID"], ["hostname", "Hostname"],
   ["firstSeen", "Первое наблюдение"], ["lastSeen", "Последнее наблюдение"],
-  ["observationCount", "Наблюдений в Final"], ["present", "Присутствует в последнем Final"],
+  ["observationCount", "Наблюдений в снимках объединения"], ["present", "Присутствует в последнем снимке объединения"],
 ]);
 
 export async function createInventoryXlsxSheets(database, {
