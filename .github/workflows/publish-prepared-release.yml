@@ -21,6 +21,17 @@ jobs:
       GH_REPO: vlasthaus22-cyber/Mac_analyzer_Pro_Next
     steps:
       - uses: actions/checkout@v4
+      - name: Check out pinned parity reference
+        uses: actions/checkout@v4
+        with:
+          repository: vlasthaus22-cyber/Mac_analyzer_Pro
+          ref: ceb0f544ad4c5e931902817ff7a7b08109e7aecc
+          path: .reference/Mac_analyzer_Pro
+      - name: Arrange reference files for parity tests
+        shell: pwsh
+        run: |
+          Copy-Item -LiteralPath '.reference/Mac_analyzer_Pro' -Destination '../Mac_analyzer_Pro' -Recurse
+          Copy-Item -LiteralPath '.reference/Mac_analyzer_Pro/MAC_ANALYZER финальная.py' -Destination '../MAC_ANALYZER финальная.py'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
