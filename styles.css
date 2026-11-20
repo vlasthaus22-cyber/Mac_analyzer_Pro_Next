@@ -409,3 +409,9 @@ body.is-resizing-column, body.is-resizing-column * { cursor: col-resize !importa
 .dashboard-settings-tabs [role="tab"][aria-selected="true"] { color: var(--primary-dark); border-bottom-color: var(--primary); font-weight: 750; }
 .dashboard-widget-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
 .dashboard-widget-hidden { display: none !important; }
+.mapping-extra-fields { grid-column: 1 / -1; padding: 12px; border: 1px solid var(--border, #ccd5dd); border-radius: 10px; }
+.mapping-extra-fields > summary { cursor: pointer; font-weight: 600; padding: 6px; }
+.mapping-extra-fields .mapping-grid { margin-top: 12px; }
+.analytics-scope-note { grid-column: 1 / -1; margin: 0; padding: 12px; background: var(--surface); border-left: 4px solid var(--primary); line-height: 1.6; }
+.timeline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 850px) { .timeline { grid-template-columns: minmax(0, 1fr); } }

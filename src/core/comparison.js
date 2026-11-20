@@ -1395,6 +1395,8 @@ export function createMacTimelineAccumulator(mac, {
   let previous = null;
   let previousSnapshot = null;
   let lastKnown = new Map();
+  let lastSeenDevice = null;
+  let lastSeenSnapshot = null;
   return {
     events,
     addSnapshot(snapshot, matches = [], { matchCount = matches.length, candidatesInScratch = false } = {}) {
@@ -1407,6 +1409,8 @@ export function createMacTimelineAccumulator(mac, {
         previous = null;
         previousSnapshot = null;
         lastKnown = new Map();
+        lastSeenDevice = null;
+        lastSeenSnapshot = null;
         return;
       }
       const device = matches[0];
@@ -1416,7 +1420,7 @@ export function createMacTimelineAccumulator(mac, {
         previousSnapshot = null;
         return;
       }
-      const before = previous ? backfillTimelineState(previous, lastKnown) : null;
+      const before = previous ? backfillTimelineState(previous, lastKnown) : lastSeenDevice;
       const changes = previous ? COMPARED_FIELDS.filter(([field]) => {
         const oldValue = comparableValue(before, field);
         const after = comparableValue(device, field);
@@ -1426,9 +1430,10 @@ export function createMacTimelineAccumulator(mac, {
         date: snapshot.createdAt,
         snapshotId: snapshot.id,
         snapshotName: snapshot.name || snapshot.id || "",
-        previousSnapshotId: previousSnapshot?.id || "",
-        previousSnapshotName: previousSnapshot?.name || previousSnapshot?.id || "",
+        previousSnapshotId: previousSnapshot?.id || lastSeenSnapshot?.id || "",
+        previousSnapshotName: previousSnapshot?.name || previousSnapshot?.id || lastSeenSnapshot?.name || lastSeenSnapshot?.id || "",
         status: previous ? (changes.length ? "changed" : "present") : "first",
+        ...(!previous && lastSeenDevice ? { returned: true } : {}),
         before,
         after: device,
         changes,
@@ -1436,6 +1441,8 @@ export function createMacTimelineAccumulator(mac, {
       rememberTimelineState(device, lastKnown);
       previous = device;
       previousSnapshot = snapshot;
+      lastSeenDevice = compactMacTimelineDevice(device);
+      lastSeenSnapshot = { id: snapshot.id, name: snapshot.name };
     },
     addHistory(item, snapshots = []) {
       if (!normalized) return false;

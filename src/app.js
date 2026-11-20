@@ -101,7 +101,7 @@ import { installTableSorter } from "./ui/table-sorter.js";
 import { selectContextTableRow } from "./ui/table-context-selection.js";
 import { Database, database } from "./data/database.js";
 import { getDirectoryArchiveFile, MAX_PORTABLE_ARCHIVE_BYTES, pickDataDirectory, queryDirectoryPermission, reauthorizeDirectoryHandle, requestDirectoryPermission, writeDirectoryArchive, writeDirectoryFile } from "./data/data-directory.js";
-import { consumeStoredTableRows, detectMappingReport, FIELD_LABELS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches, setFileObservationDateOverride, supportsBoundedTableRows } from "./data/importer.js";
+import { consumeStoredTableRows, detectMappingReport, FIELD_LABELS, SMARTROOM_DEFAULT_FIELDS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches, setFileObservationDateOverride, supportsBoundedTableRows } from "./data/importer.js";
 import {
   comparisonContent,
   comparisonDiagnosticsPageContent,
@@ -179,6 +179,21 @@ const ROLE_FIELDS = Object.freeze({
   smartroom: ["id", "deviceId", "serial", "mac", "mac2", "hostname", "ip", "switchIp", "switchPort", "authenticationTime", "manufacturer", "model", "deviceType", "deviceName", "smartroomId", "businessUnit", "city", "site", "floor", "room", "address", "physicalAddress", "locationPath"],
   ddio: ["reservationMac", "reservationIp", "leaseMac", "leaseIp"],
 });
+
+function collapseSmartRoomMapping(container, selector, fieldAttribute) {
+  const controls = [...container.querySelectorAll(selector)];
+  const extra = controls.filter((control) => !SMARTROOM_DEFAULT_FIELDS.includes(control.dataset[fieldAttribute]));
+  if (!extra.length) return;
+  const details = document.createElement("details");
+  details.className = "mapping-extra-fields";
+  const summary = document.createElement("summary");
+  summary.textContent = "＋ Дополнительные поля SmartRoom";
+  const grid = document.createElement("div");
+  grid.className = "mapping-grid";
+  details.append(summary, grid);
+  for (const control of extra) grid.append(control.closest("label"));
+  container.append(details);
+}
 
 function allowedSourceMapping(role, mapping = {}) {
   const customFields = state.inventoryColumnConfig.columns.filter(({ custom }) => custom).map(({ key }) => key);
@@ -2610,6 +2625,7 @@ function renderMapping(role) {
     const helper = `Подсказка: ${escapeHtml(suggestedHeader)} · совпадение ${detail?.recommendedConfidence || 0}%${examples}${alternatives}${reason}${warning}`;
     return `<label><span>${escapeHtml(FIELD_LABELS[field])}</span><select data-mapping-role="${role}" data-mapping-field="${field}"><option value="">Не использовать</option>${table.headers.map((header, index) => `<option value="${index}" ${Number(state.mappings[role][field]) === index ? "selected" : ""}>${escapeHtml(`${excelColumnLabel(index)} · ${header || `Колонка ${index + 1}`}`)}</option>`).join("")}</select><small class="mapping-hint">${helper}</small></label>`;
   }).join("")}${customColumns.map(({ key, label }) => mappingControl(key, label)).join("")}${isEngineerActive() ? `<div class="toolbar mapping-custom-field"><label>Новое пользовательское поле<input type="text" data-source-custom-label maxlength="60" autocomplete="off"></label><label>Колонка источника<select data-source-custom-column><option value="">Не указано</option>${table.headers.map((header, index) => `<option value="${index}">${escapeHtml(`${excelColumnLabel(index)} · ${header || `Колонка ${index + 1}`}`)}</option>`).join("")}</select></label><button class="button secondary" type="button" data-add-source-custom-field>Добавить поле</button></div>` : ""}`;
+  if (role === "smartroom") collapseSmartRoomMapping(container, "[data-mapping-field]", "mappingField");
   container.querySelectorAll("select").forEach((select) => select.addEventListener("change", () => {
     if (select.value === "") delete state.mappings[role][select.dataset.mappingField];
     else state.mappings[role][select.dataset.mappingField] = Number(select.value);
@@ -5056,8 +5072,8 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
   const matchesDashboard = createDashboardDeviceMatcher(analytics.dashboardFilters || {});
   const datasetSnapshotId = dashboardStatus === "missing" ? analytics.previous?.id || "" : analytics.current?.id || "";
   const datasetCacheSnapshotId = `${datasetSnapshotId}:dashboard:${dashboardStatus}`;
-  const datasetCacheKey = `selected-final-dataset-v10:${JSON.stringify([analytics.comparisonPairSignature || analytics.dashboardFilters || {}, state.ipEnrichmentSettings.historicalAddress])}`;
-  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 10);
+  const datasetCacheKey = `selected-final-dataset-v11:${JSON.stringify([analytics.comparisonPairSignature || analytics.dashboardFilters || {}, state.ipEnrichmentSettings.historicalAddress])}`;
+  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 11);
   if (!state.analyticsRequests.isCurrent(revision)) return null;
   let dataset = cachedDataset?.snapshotId === datasetCacheSnapshotId ? cachedDataset.dataset : null;
   if (!dataset) {
@@ -5154,7 +5170,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       };
       stage("Сохранение рассчитанной сводки Dashboard…");
     }
-    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 10, {
+    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 11, {
       onProgress: ({ phase }) => {
         const labels = {
           started: "Сохранение сводки: открыта транзакция…",
@@ -6592,6 +6608,10 @@ function paintSelectedMainMacs(analytics) {
     ["Уникальных MAC в Main выбранного снимка объединения", mainCount],
     ...(!Number.isInteger(mainCount) && Number.isInteger(legacyCount) ? [["Уникальных MAC в старом снимок объединения · число из Main не сохранено", legacyCount]] : []),
   ].map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number.isInteger(value) ? value.toLocaleString("ru-RU") : "—"}</strong></article>`).join("");
+  const filters = analytics.dashboardFilters || {};
+  const filtered = Boolean(filters.query || filters.manufacturer || filters.room || (filters.status && filters.status !== "all"));
+  const source = analytics.current?.sourceFiles?.main?.name || analytics.current?.name || "не выбран";
+  $("#analyticsHistoryKpis").insertAdjacentHTML("beforeend", `<p class="analytics-scope-note">Основной файл / снимок: <strong>${escapeHtml(source)}</strong>. ${filtered ? 'Включены фильтры: карточки и графики показывают выбранную часть устройств. Для всего основного файла нажмите «Сбросить фильтры».' : "Показан весь выбранный снимок. История и другие снимки не прибавляются к числу устройств."} Без помещения — нет ни ID помещения SmartRoom, ни названия комнаты. Адрес здания сам по себе не является назначением помещения.</p>`);
 }
 
 function paintAnalyticsDetails(analytics) {
@@ -8538,6 +8558,14 @@ function renderBatchPreview() {
   }
   const unmatched = unmatchedBatchEntries(state.batch.pairs, state.batch.entries);
   host.innerHTML = `<p class="notice"><strong>Принцип:</strong> каждый включённый Main создаёт один снимок объединения. SmartRoom/DDIO назначаются не более чем одному Main. Выберите одинаковую календарную дату либо ближайшую дату с допуском. Файлы без достоверной даты остаются неназначенными. Можно отключить цикл, переназначить источники и увидеть неназначенные файлы до запуска.</p>${unmatched.length ? `<p class="batch-validation error">Без пары (${unmatched.length}): ${unmatched.map((entry) => escapeHtml(`${entry.role}: ${batchEntryDisplayName(entry)}`)).join(" · ")}</p>` : ""}<div class="table-scroll"><table class="data-table batch-table"><thead><tr><th>Цикл</th><th>№</th><th>Дата</th><th>Main</th><th>SmartRoom</th><th>DDIO</th></tr></thead><tbody>${state.batch.pairs.map((pair, index) => `<tr><td><input type="checkbox" aria-label="Включить цикл ${index + 1}" data-batch-pair-enabled="${index}" ${pair.enabled !== false ? "checked" : ""}></td><td>${index + 1}</td><td>${escapeHtml(pair.date.date.slice(0, 10) || "Дата неизвестна")}</td><td>${escapeHtml(batchEntryDisplayName(pair.main))}</td><td>${batchSourceSelect(pair, index, "smartroom")}</td><td>${batchSourceSelect(pair, index, "ddio")}</td></tr><tr class="batch-details-row"><td colspan="6"><details ${index === 0 ? "open" : ""}><summary>Проверить и изменить сопоставление колонок</summary><p data-batch-problems="${index}"></p><div class="batch-mapping-grid">${batchMappingEditor(pair.main)}${batchMappingEditor(pair.smartroom)}${batchMappingEditor(pair.ddio)}</div><label class="batch-review"><input type="checkbox" data-batch-pair-reviewed="${index}" ${pair.reviewed ? "checked" : ""}>Я проверил файлы и mapping этой пары</label></details></td></tr>`).join("")}</tbody></table></div>`;
+  host.insertAdjacentHTML("afterbegin", '<button type="button" class="button secondary" data-review-valid-batch>Подтвердить все корректные пары</button>');
+  host.querySelector("[data-review-valid-batch]").addEventListener("click", () => {
+    for (const pair of state.batch.pairs) if (!batchPairProblems(pair).length) pair.reviewed = true;
+    renderBatchPreview();
+  });
+  for (const panel of host.querySelectorAll(".batch-mapping")) {
+    if (panel.querySelector('[data-batch-entry-role="smartroom"]')) collapseSmartRoomMapping(panel, "[data-batch-mapping-field]", "batchMappingField");
+  }
   host.querySelectorAll("[data-batch-pair-source]").forEach((select) => select.addEventListener("change", () => {
     reassignBatchSource(state.batch.pairs, state.batch.entries, Number(select.dataset.batchPairIndex), select.dataset.batchPairSource, select.value);
     renderBatchPreview();
@@ -11956,8 +11984,9 @@ async function bootstrap() {
   state.ipEnrichmentSettings = normalizeIpEnrichmentSettings(await database.getSetting("ipEnrichmentSettings", DEFAULT_IP_ENRICHMENT_SETTINGS));
   applyIpEnrichmentSettings(state.ipEnrichmentSettings);
   const savedEnrichmentStrategy = await database.getSetting("enrichmentStrategy", "NO_EXPANSION");
-  const strategyInput = document.querySelector(`input[name="strategy"][value="${savedEnrichmentStrategy}"]`);
+  const strategyInput = document.querySelector('input[name="strategy"][value="NO_EXPANSION"]');
   if (strategyInput) strategyInput.checked = true;
+  if (savedEnrichmentStrategy !== "NO_EXPANSION") await database.setSetting("enrichmentStrategy", "NO_EXPANSION");
   applyEnrichmentFieldSettings(await database.getSetting("enrichmentFieldSettings", DEFAULT_ENRICHMENT_FIELD_SETTINGS));
   applyComparisonSettings(await database.getSetting("comparisonSettings", DEFAULT_COMPARISON_SETTINGS));
   applyOuiFormatSettings(await database.getSetting("ouiFormats", DEFAULT_OUI_FORMATS));

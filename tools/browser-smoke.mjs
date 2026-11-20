@@ -507,12 +507,16 @@ if (process.argv.includes("--address-roster-regression-only")) {
     throw new Error(label + " timed out");
   };
   await evaluate("document.querySelector('[data-view=\"enrichment\"]').click()");
-  const mainRows = Array.from({length:104}, (_,i) => [macAt(i), "D-"+i, "10.45.0.1", "SR-"+i, "1"].join(";"));
-  mainRows.push([macAt(0),"CONFLICTING-ID","10.45.0.1","SR-0","1"].join(";"));
-  const smartRows = Array.from({length:104}, (_,i) => [macAt(i), address, i ? "Переговорная 2" : "", "SR-"+i].join(";"));
+  const mainRows = Array.from({length:104}, (_,i) => [macAt(i), "D-"+i, "10.45.0.1", i ? "SR-"+i : "", "1"].join(";"));
+  mainRows.push([macAt(0),"CONFLICTING-ID","10.45.0.1","","1"].join(";"));
+  const smartRows = Array.from({length:104}, (_,i) => [macAt(i), address, i ? "Переговорная 2" : "", i ? "SR-"+i : ""].join(";"));
   for (let run=1;run<=2;run+=1) {
     await assignInput("#mainFileInput", "address-main-"+run+".csv", "MAC;Device ID;NasIP;Smartroom ID;NasPortID\n"+mainRows.join("\n"));
     await assignInput("#smartroomFileInput", "address-smartroom-"+run+".csv", "MAC;Адрес локации;Название комнаты;Smartroom ID\n"+smartRows.join("\n"));
+    await check("[...document.querySelectorAll('[data-mapping-role=smartroom][data-mapping-field]')].filter(el=>!el.closest('details:not([open])')).length===9", "Nine primary SmartRoom fields");
+    await evaluate("document.querySelector('[data-mapping-role=smartroom][data-mapping-field=locationPath]').closest('details').querySelector('summary').click()");
+    await check("document.querySelector('[data-mapping-role=smartroom][data-mapping-field=locationPath]').getClientRects().length>0", "Optional SmartRoom fields expand");
+    await evaluate("document.querySelector('[data-mapping-role=smartroom][data-mapping-field=locationPath]').closest('details').querySelector('summary').click()");
     await evaluate("(()=>{for(const [role,fields] of Object.entries({main:{mac:0,deviceId:1,switchIp:2,smartroomId:3,switchPort:4},smartroom:{mac:0,address:1,room:2,smartroomId:3}})){for(const[field,index]of Object.entries(fields)){const select=document.querySelector('[data-mapping-role=\"'+role+'\"][data-mapping-field=\"'+field+'\"]');select.value=String(index);select.dispatchEvent(new Event('change',{bubbles:true}))}}window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()})()");
     await check("document.querySelector('#databaseStatus').textContent.includes("+JSON.stringify(run+" снимок объединения")+") && !document.querySelector('#runEnrichmentButton').disabled", "Commit merged snapshot "+run);
   }
@@ -1095,7 +1099,7 @@ if (process.argv.includes("--batch-all-formats-preview-only")) {
     for(const [role,fields]of Object.entries(expected))for(const select of document.querySelectorAll('[data-batch-entry-role="'+role+'"][data-batch-mapping-field]')){
       const field=select.dataset.batchMappingField;if(!(field in fields))continue;select.value=String(fields[field]);select.dispatchEvent(new Event('change',{bubbles:true}));changed[role]+=1;
     }
-    for(const input of document.querySelectorAll('[data-batch-pair-reviewed]')){input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}))}
+    document.querySelector('[data-review-valid-batch]').click();
     return{changed,reviewed:[...document.querySelectorAll('[data-batch-pair-reviewed]')].filter(input=>input.checked).length,runDisabled:document.querySelector('#runBatchButton').disabled};
   })()`);
   if(mappings.changed.main!==28||mappings.changed.smartroom!==42||mappings.changed.ddio!==28||mappings.reviewed!==7||mappings.runDisabled)throw new Error(`Seven format-specific role mappings did not produce a runnable reviewed plan: ${JSON.stringify(mappings)}`);
@@ -6503,7 +6507,7 @@ if (!reassignResult.moved[0] || reassignResult.moved[1] !== "" || reassignResult
 const reassignDdIoResult = await evaluate(`(()=>{const selects=[...document.querySelectorAll('[data-batch-pair-source="ddio"]')];const original=selects[0].value;selects[0].value=selects[1].value;selects[0].dispatchEvent(new Event('change',{bubbles:true}));const moved=[...document.querySelectorAll('[data-batch-pair-source="ddio"]')].map((select)=>select.value);let current=[...document.querySelectorAll('[data-batch-pair-source="ddio"]')];current[0].value=original;current[0].dispatchEvent(new Event('change',{bubbles:true}));current=[...document.querySelectorAll('[data-batch-pair-source="ddio"]')];current[1].value=moved[0];current[1].dispatchEvent(new Event('change',{bubbles:true}));return {moved,restored:[...document.querySelectorAll('[data-batch-pair-source="ddio"]')].map((select)=>select.value)}})()`);
 if (!reassignDdIoResult.moved[0] || reassignDdIoResult.moved[1] !== "" || reassignDdIoResult.restored.some((id) => !id)) throw new Error(`Переназначение DDIO создало дубли или не восстановило пару: ${JSON.stringify(reassignDdIoResult)}`);
 
-await evaluate(`(()=>{document.querySelectorAll('[data-batch-pair-reviewed]').forEach(input=>{input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}));});const disabled=document.querySelector('[data-batch-pair-enabled="1"]');disabled.checked=false;disabled.dispatchEvent(new Event('change',{bubbles:true}));const state={enabled:document.querySelectorAll('[data-batch-pair-enabled]:checked').length,runDisabled:document.querySelector('#runBatchButton').disabled};disabled.checked=true;disabled.dispatchEvent(new Event('change',{bubbles:true}));if(state.enabled!==1||state.runDisabled)throw new Error('Отключение цикла неверно блокирует проверенную очередь');return true})()`);
+await evaluate(`(()=>{document.querySelector('[data-review-valid-batch]').click();const disabled=document.querySelector('[data-batch-pair-enabled="1"]');disabled.checked=false;disabled.dispatchEvent(new Event('change',{bubbles:true}));const state={enabled:document.querySelectorAll('[data-batch-pair-enabled]:checked').length,runDisabled:document.querySelector('#runBatchButton').disabled};disabled.checked=true;disabled.dispatchEvent(new Event('change',{bubbles:true}));if(state.enabled!==1||state.runDisabled)throw new Error('Отключение цикла неверно блокирует проверенную очередь');return true})()`);
 console.log("browser smoke: nearest/same-date modes, configurable tolerance, unassigned file visibility, source reassignment, disabled cycle and review gate verified");
 
 await evaluate(`(()=>{

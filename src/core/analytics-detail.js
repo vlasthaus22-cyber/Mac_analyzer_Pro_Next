@@ -1,6 +1,6 @@
 import { csvQuoteMinimal } from "./csv-cell.js";
 
-import { firstMac, normalizeIp, text as normalizeText } from "./normalize.js";
+import { firstMac, hasKnownRoom, normalizeIp, text as normalizeText } from "./normalize.js";
 
   const unknownVendors = new Set(["", "unknown", "не определено", "неизвестный вендор", "unknown vendor"]);
   const unknownValues = new Set(["", "unknown", "не указано", "не определено", "без помещения"]);
@@ -390,7 +390,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
       if (!unknownVendors.has(vendor.toLowerCase())) add("known-vendor", vendor);
       if (!unknownModels.has(model.toLowerCase())) add("model", model);
       if (room) add("room", room);
-      if (room && !unknownValues.has(room.toLowerCase())) add("occupancy-room", room);
+      if (hasKnownRoom(device)) add("occupancy-room", room || `Smartroom ID ${smartroomId}`);
       else {
         add("unassigned-vendor", vendor || "Unknown");
         add("unassigned-model", model || "Unknown");
@@ -547,8 +547,8 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
         }
         if (!unknownVendors.has(vendor.toLowerCase())) knownVendors += 1;
         if (ip && !unknownValues.has(ip.toLowerCase())) withIp += 1;
-        if (room && !unknownValues.has(room.toLowerCase())) withRoom += 1;
-        if (room && !unknownValues.has(room.toLowerCase())) {
+        if (hasKnownRoom(device)) withRoom += 1;
+        if (hasKnownRoom(device)) {
           assignedRooms += 1;
           if (occupancyCounts) tally(occupancyCounts, room || `Smartroom ID ${smartroomId}`);
         }

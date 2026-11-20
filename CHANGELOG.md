@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.3.11 — 2026-11-20
+
+- SmartRoom mapping exposes nine primary fields with expandable optional controls and recognizes room-address and room-ID aliases.
+- Batch review offers one action to confirm all valid pairs. No-expansion is selected at startup; expansion requires an explicit selection.
+- Room assignment accepts a known room name or SmartRoom ID. Dashboard details and bounded missing-room pages share the criterion; analytics caches are invalidated.
+- Analytics names its source and active filtering. MAC returns preserve the last observed device and are labelled separately from first appearances.
+- Documented actual merge, analytics and chronology behavior in docs/ANALYTICS_LOGIC.md; added a 12,000-Main/15,000-SmartRoom regression.
+
 ## v2.3.10 — 2026-11-19
 
 - SmartRoom keeps the complete imported address, including city, street, building and floor. Recognized location paths no longer turn a floor into a room, and complete SmartRoom addresses can repair an existing matching address fragment.

@@ -6,12 +6,30 @@ import { enrich, mergeDevice } from "../src/core/enrichment.js";
 import { detectMappingReport } from "../src/data/importer.js";
 import { Database } from "../src/data/database.js";
 import { collectPresenceTransitions, createUniqueAnalyticsDeviceFilter } from "../src/core/analytics.js";
-import { createMacTimelineAccumulator } from "../src/core/comparison.js";
+import { buildMacTimeline, createMacTimelineAccumulator } from "../src/core/comparison.js";
 import { macTimelineContent, macTimelineCandidateRowsContent } from "../src/ui/render.js";
 import { build as buildDataset, collectAnalyticsBuckets } from "../src/core/analytics-detail.js";
 
 const mac = "00:11:22:33:44:55";
 const fullAddress = "Москва, Кутузовский проспект, 32А, второй этаж";
+
+test("returning MAC retains its previous snapshot and is not presented as a first-ever appearance", () => {
+  const events = buildMacTimeline(mac, [
+    { id: "one", name: "Первый", createdAt: "2026-11-01", devices: [{ id: "d", mac, model: "Before", address: fullAddress }] },
+    { id: "two", name: "Второй", createdAt: "2026-11-02", devices: [] },
+    { id: "three", name: "Третий", createdAt: "2026-11-03", devices: [{ id: "d", mac, model: "After", address: "Новый адрес" }] },
+  ]);
+  assert.equal(events[0].returned, undefined);
+  assert.equal(events[1].status, "absent");
+  assert.equal(events[2].returned, true);
+  assert.equal(events[2].previousSnapshotId, "one");
+  assert.equal(events[2].before.model, "Before");
+  assert.equal(events[2].after.model, "After");
+  assert.deepEqual(events[2].changes, [], "absence does not invent observed field-change events");
+  const html = macTimelineContent(events);
+  assert.ok(html.includes("Повторное появление после отсутствия"));
+  assert.ok(html.includes(fullAddress));
+});
 
 test("SmartRoom preserves a four-part Moscow address and never uses the floor as the room", () => {
   for (const field of ["room", "locationPath"]) {
@@ -74,25 +92,26 @@ test("Main roster counts each original MAC once and excludes SmartRoom-only devi
   assert.equal(next.total, result.diagnostics.counts.mainUniqueMacs);
 });
 
-test("unnamed SmartRoom IDs count as missing rooms in both charts and the detail list", async () => {
+test("SmartRoom IDs assign rooms even when a separate room name is absent", async () => {
   const database = new Database("mac-analyzer-pro-next-test-" + crypto.randomUUID());
   const devices = [
     normalizeDevice({ id: "1", mac, smartroomId: "SR-1", address: fullAddress }),
     normalizeDevice({ id: "2", mac: "00:11:22:33:44:66", room: "Переговорная" }),
+    normalizeDevice({ id: "3", mac: "00:11:22:33:44:77", address: fullAddress }),
   ];
-  assert.equal(hasKnownRoom(devices[0]), false);
+  assert.equal(hasKnownRoom(devices[0]), true);
   await database.saveFinal({ id: "room-test", devices });
   const missing = await database.loadSnapshotUnassignedRoomPage("room-test");
   const dataset = buildDataset(devices);
   assert.equal(missing.total, 1);
-  assert.equal(missing.devices[0].id, "1");
+  assert.equal(missing.devices[0].id, "3");
   assert.equal(dataset.roomOccupancy.unassignedDevices, missing.total);
 });
 
 test("duplicate MAC rows use one shared roster for chart and missing-room vendor counts", async () => {
   const rows = [
-    { id: "a", mac, smartroomId: "SR-1", manufacturer: "Vendor" },
-    { id: "conflict", mac, smartroomId: "SR-1", manufacturer: "Vendor" },
+    { id: "a", mac, manufacturer: "Vendor" },
+    { id: "conflict", mac, manufacturer: "Vendor" },
   ];
   const unique = rows.filter(createUniqueAnalyticsDeviceFilter());
   const buckets = collectAnalyticsBuckets(unique);
@@ -102,6 +121,27 @@ test("duplicate MAC rows use one shared roster for chart and missing-room vendor
   const database = new Database("mac-analyzer-pro-next-test-" + crypto.randomUUID());
   await database.saveFinal({ id: "duplicate-missing", devices: rows });
   assert.equal((await database.loadSnapshotUnassignedRoomPage("duplicate-missing")).total, 1);
+});
+
+test("SmartRoom maps all nine requested columns without substituting room IDs for device IDs", () => {
+  const headers = ["MAC-адрес", "IP-адрес", "Адрес помещения", "Серийный номер", "Тип устройства", "Модель", "Производитель", "Device ID", "ID помещения"];
+  const rows = [[mac, "192.168.1.5", fullAddress, "SN-123", "Кодек", "DX80", "Cisco", "DEV-1", "ROOM-1"]];
+  const { mapping } = detectMappingReport(headers, rows, "smartroom");
+  assert.deepEqual(mapping, { mac: 0, model: 5, ip: 1, smartroomId: 8, manufacturer: 6, serial: 3, deviceType: 4, deviceId: 7, address: 2 });
+});
+
+test("12000 Main MACs remain the only final roster while SmartRoom fills room IDs", async () => {
+  const macAt = (index) => "02:11:" + index.toString(16).padStart(8, "0").match(/../g).join(":");
+  const mainRows = Array.from({ length: 12000 }, (_, index) => [macAt(index)]);
+  const smartroomRows = Array.from({ length: 15000 }, (_, index) => [macAt(index), fullAddress, index < 10000 ? "ROOM-" + index % 100 : ""]);
+  const result = await enrich({ mainRows, smartroomRows, mappings: { main: { mac: 0 }, smartroom: { mac: 0, address: 1, smartroomId: 2 } }, strategy: "NO_EXPANSION" });
+  assert.equal(result.diagnostics.counts.mainUniqueMacs, 12000);
+  assert.equal(result.devices.length, 12000);
+  assert.equal(new Set(result.devices.map((device) => device.mac)).size, 12000);
+  const summary = buildDataset(result.devices);
+  assert.equal(summary.summary.devices, 12000);
+  assert.equal(summary.roomOccupancy.unassignedDevices, 2000);
+  assert.equal(summary.roomOccupancy.assignedDevices, 10000);
 });
 
 test("paged chronology counts ambiguous sources and appearances without discarding candidate evidence", async () => {

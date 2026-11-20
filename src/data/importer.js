@@ -53,6 +53,10 @@ export const FIELD_LABELS = Object.freeze({
   possibleIps: "Возможные IP (DDIO)",
 });
 
+export const SMARTROOM_DEFAULT_FIELDS = Object.freeze([
+  "mac", "ip", "address", "serial", "deviceType", "model", "manufacturer", "deviceId", "smartroomId",
+]);
+
 const ALIASES = Object.freeze({
   id: ["internal id", "internalid", "внутренний id", "внутренний идентификатор"],
   mac: ["callingstationid", "calling station id", "callingstarionid", "mac", "mac address", "мак", "mac-адрес"],
@@ -60,14 +64,14 @@ const ALIASES = Object.freeze({
   ip: ["ip", "ip address", "ip адрес", "ip-адрес", "ip устройства"],
   switchIp: ["nasip", "nas ip", "ip switch", "ip коммутатора", "коммутатор"],
   switchPort: ["nasportid", "nas port id", "port", "порт", "порт коммутатора"],
-  smartroomId: ["smartroom id", "smartroom id локации", "id комнаты", "id помещения"],
+  smartroomId: ["smartroom id", "smartroom id локации", "id комнаты", "id помещения", "room id", "location id"],
   locationPath: ["location path", "locationpath", "путь локации", "путь помещения", "иерархия помещения"],
   businessUnit: ["тб", "территориальный банк", "business unit"],
   city: ["город", "city"],
   site: ["площадка", "site", "локация"],
   floor: ["этаж", "floor"],
   room: ["помещение", "название комнаты", "наименование локации", "room"],
-  address: ["адрес", "адрес локации", "адрес комнаты", "address"],
+  address: ["адрес", "адрес локации", "адрес комнаты", "адрес помещения", "address", "room address", "location address"],
   physicalAddress: ["физический адрес", "physical address"],
   manufacturer: ["производитель", "vendor", "manufacturer"],
   model: ["модель", "model"],
@@ -2653,6 +2657,7 @@ export function detectMappingReport(headers = [], rows = [], role = "main") {
     }).sort((a, b) => b.score - a.score);
     return { field, ranked, bestScore: ranked[0]?.score || 0 };
   }).sort((left, right) => right.bestScore - left.bestScore
+    || (role === "smartroom" ? Number(SMARTROOM_DEFAULT_FIELDS.includes(right.field)) - Number(SMARTROOM_DEFAULT_FIELDS.includes(left.field)) : 0)
     || MAPPING_FIELD_PRIORITY.indexOf(left.field) - MAPPING_FIELD_PRIORITY.indexOf(right.field)
     || allowed.indexOf(left.field) - allowed.indexOf(right.field));
   const mapping = {};

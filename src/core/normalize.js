@@ -311,7 +311,7 @@ export function locationKey(device = {}) {
 }
 
 export function hasKnownRoom(device = {}) {
-  return Boolean(identityText(device.room || device.room_name));
+  return Boolean(identityText(device.room || device.room_name) || identityText(device.smartroomId || device.smartroom_id));
 }
 
 function parseLocationPath(value) {

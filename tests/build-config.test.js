@@ -2135,9 +2135,9 @@ test("extended selected-Final analytics reuses its loaded payload and falls back
   assert.match(app, /scheduleAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask, currentStatusMask\)/);
   assert.match(app, /function calculateAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null\)/);
   assert.match(app, /await feedAnalyticsDatasetRows\(\{[\s\S]*?devices: datasetSnapshotId \? undefined : analytics\.devices[\s\S]*?visitChunks: \(snapshotId, visit\) => database\.forEachSnapshotChunk\(snapshotId, visit, \{/);
-    assert.match(app, /selected-final-dataset-v10:/);
-  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 10\)/);
-  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 10, \{[\s\S]*?onProgress/);
+    assert.match(app, /selected-final-dataset-v11:/);
+  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 11\)/);
+  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 11, \{[\s\S]*?onProgress/);
   assert.match(app, /\.\.\.collectTopologyBuckets\(selectedChunk\)/);
   assert.match(app, /analyticsAggregateRankedPage\(clusterQueryId, "topology-switch", \{ limit: 20 \}\)/);
   assert.match(app, /dataset\.sourceRowCount !== expectedDevices/);
