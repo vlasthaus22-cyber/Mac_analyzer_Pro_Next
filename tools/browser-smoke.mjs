@@ -493,6 +493,40 @@ if (process.argv.includes("--legacy-observation-history-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--smartroom-schema-audit-only")) {
+  const address = "Москва, Кутузовский проспект, 32А, второй этаж, переговорная 204";
+  const expected = { mac: "0", serial: "1", smartroomId: "2", deviceId: "3", address: "4", model: "5", manufacturer: "6", ip: "7", deviceType: "8" };
+  const check = async (expression, label) => {
+    for (let attempt = 0; attempt < 250; attempt += 1) {
+      if (await evaluate(expression)) return;
+      const error = await evaluate("!document.querySelector('#errorBanner').hidden && document.querySelector('#errorBanner').textContent");
+      if (error) throw new Error(label + ": " + error);
+      await wait(100);
+    }
+    throw new Error(label + " timed out");
+  };
+  for (const [index, header] of ["Физический адрес", "Физический адрес локации помещения"].entries()) {
+    await evaluate("document.querySelector('[data-view=\"enrichment\"]').click()");
+    await assignInput("#mainFileInput", "audit-main-"+index+".csv", "MAC-адрес\n00:11:22:33:44:55");
+    const csv = "MAC-адрес;Серийный номер;ID помещения;ID устройства;"+header+";Модель устройства;Производитель;IP-адрес;Тип устройства\n00:11:22:33:44:55;SN-123;ROOM-5;DEV-9;"+address+";DX80;Cisco;192.168.1.5;Кодек\n00:11:22:33:44:66;OTHER-SERIAL;ROOM-5;OTHER-DEVICE;"+address+";Other model;Other vendor;;Кодек";
+    await assignInput("#smartroomFileInput", "audit-smartroom-"+index+".csv", csv);
+    await check("Object.entries("+JSON.stringify(expected)+").every(([field,value])=>document.querySelector('[data-mapping-role=smartroom][data-mapping-field='+field+']')?.value===value)", "SmartRoom source-column mapping");
+    await evaluate("window.confirm=()=>true;document.querySelector('#runEnrichmentButton').click()");
+    await check("document.querySelector('#databaseStatus').textContent.includes("+JSON.stringify((index+1)+" снимок объединения")+") && !document.querySelector('#runEnrichmentButton').disabled", "Main-only enrichment");
+    await evaluate("document.querySelector('[data-view=\"analytics\"]').click()");
+    await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#analyticsKpis [data-kpi=devices] strong')?.textContent.trim()==='1'", "Single Main MAC KPI");
+    await evaluate("document.querySelector('#analyticsKpis [data-kpi=devices]').click()");
+    await check("document.querySelector('#detailsDialog').open && document.querySelector('#detailsDialog tbody tr')", "Complete device detail");
+    const detail = await evaluate("document.querySelector('#detailsDialog').textContent");
+    for (const value of [address, "SN-123", "ROOM-5", "DEV-9", "DX80", "Cisco", "192.168.1.5"]) if (!detail.includes(value)) throw new Error("Device detail lost " + value);
+    await evaluate("document.querySelector('#detailsDialog').close()");
+  }
+  console.log(JSON.stringify({smartroomSchemaAudit:true,physicalLocationAddress:address,roomId:"ROOM-5",deviceId:"DEV-9",mainCount:1,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--address-roster-regression-only")) {
   const address = "Москва, Кутузовский проспект, 32А, второй этаж";
   const macAt = (index) => "02:80:00:00:00:" + index.toString(16).padStart(2, "0");

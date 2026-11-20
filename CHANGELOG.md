@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.3.12 — 2026-11-20
+
+- A single SmartRoom physical-address column is now selected in the primary Address control, including its mapping recommendation. Explicit separate Address and Physical Address columns remain separate.
+- Added SmartRoom schema audit regressions for reordered columns, separate device/room IDs, full location addresses, JSON preservation and no-expansion behavior; added a dedicated Chrome UI scenario.
+
 ## v2.3.11 — 2026-11-20
 
 - SmartRoom mapping exposes nine primary fields with expandable optional controls and recognizes room-address and room-ID aliases.

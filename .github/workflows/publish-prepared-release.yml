@@ -1,4 +1,4 @@
-name: Publish prepared v2.3.11 release
+name: Publish prepared v2.3.12 release
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: publish-v2.3.11
+  group: publish-v2.3.12
   cancel-in-progress: false
 
 jobs:
@@ -42,9 +42,9 @@ jobs:
       - name: Verify existing draft and version
         shell: pwsh
         run: |
-          if ((Get-Content package.json | ConvertFrom-Json).version -ne '2.3.11') { throw 'Unexpected application version' }
-          $release = gh api repos/$env:GH_REPO/releases/452361986 | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or !$release.draft -or $release.tag_name -ne 'v2.3.11') { throw 'Expected unpublished v2.3.11 draft' }
+          if ((Get-Content package.json | ConvertFrom-Json).version -ne '2.3.12') { throw 'Unexpected application version' }
+          $release = gh api repos/$env:GH_REPO/releases/452399741 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or !$release.draft -or $release.tag_name -ne 'v2.3.12') { throw 'Expected unpublished v2.3.12 draft' }
       - name: Install build dependencies
         shell: pwsh
         run: |
@@ -62,9 +62,9 @@ jobs:
       - name: Upload complete program and checksums
         shell: pwsh
         run: |
-          gh release upload v2.3.11 dist/MAC-Analyzer-Pro-Next-full.zip dist/MAC-Analyzer-Pro-Next-full.zip.sha256 dist/MAC-Analyzer-Pro-Next.html dist/MAC-Analyzer-Pro-Next.html.sha256 dist/MAC-Analyzer-Pro-Next-Host.exe dist/MAC-Analyzer-Pro-Next-Host.exe.sha256 --clobber
+          gh release upload v2.3.12 dist/MAC-Analyzer-Pro-Next-full.zip dist/MAC-Analyzer-Pro-Next-full.zip.sha256 dist/MAC-Analyzer-Pro-Next.html dist/MAC-Analyzer-Pro-Next.html.sha256 dist/MAC-Analyzer-Pro-Next-Host.exe dist/MAC-Analyzer-Pro-Next-Host.exe.sha256 --clobber
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $release = gh api repos/$env:GH_REPO/releases/452361986 | ConvertFrom-Json
+          $release = gh api repos/$env:GH_REPO/releases/452399741 | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $release.assets.Count -ne 6) { throw 'Expected six release assets' }
           foreach ($asset in $release.assets) {
             $local = Join-Path dist $asset.name
@@ -76,7 +76,5 @@ jobs:
       - name: Publish stable release
         shell: pwsh
         run: |
-          gh api --method PATCH repos/$env:GH_REPO/releases/452361986 -f "target_commitish=$env:GITHUB_SHA" --jq .id
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          gh release edit v2.3.11 --draft=false --prerelease=false --latest
+          gh api --method PATCH repos/$env:GH_REPO/releases/452399741 -f tag_name=v2.3.12 -f "target_commitish=$env:GITHUB_SHA" -F draft=false -F prerelease=false -f make_latest=true --jq .html_url
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

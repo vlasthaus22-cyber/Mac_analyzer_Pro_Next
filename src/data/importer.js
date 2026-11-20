@@ -2714,6 +2714,16 @@ export function detectMappingReport(headers = [], rows = [], role = "main") {
     mapping[field] = candidate.index;
     usedColumns.add(candidate.index);
   }
+  // SmartRoom's single physical location belongs in the primary address control.
+  // Preserve both mappings when the source explicitly contains two address columns.
+  if (role === "smartroom" && Number.isInteger(mapping.physicalAddress) && !Number.isInteger(mapping.address)) {
+    mapping.address = mapping.physicalAddress;
+    delete mapping.physicalAddress;
+    details.address = { ...details.physicalAddress };
+    details.physicalAddress = { ...details.physicalAddress, selectedIndex: null, confidence: 0, score: 0,
+      recommendedIndex: null, recommendedConfidence: 0, recommendedScore: 0,
+      reason: "Колонка используется как основной адрес помещения", recommendedReason: "Колонка используется как основной адрес помещения", alternatives: [], conflict: false };
+  }
   const recommendations = { ...mapping };
   const recommendationColumns = new Set(Object.values(recommendations).filter(Number.isInteger));
   const pyqtDialogOrder = role === "ddio" ? [] : ["mac", "manufacturer", "model", "address", "ip", "room", "switchIp", "switchPort"];
