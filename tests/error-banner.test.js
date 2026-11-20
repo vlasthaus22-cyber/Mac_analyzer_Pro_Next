@@ -392,7 +392,7 @@ test("a new analysis or file export attempt can show the same error after dismis
   assert.match(app, /async function runSingleFileAnalysis\(\) \{\s*clearError\(\);/);
   assert.match(app, /async function runFileCompare\(\) \{\s*clearError\(\);/);
   assert.match(app, /async function runEnrichment\(\) \{\s*clearError\(\);/);
-  assert.match(app, /\$\("#runBatchButton"\)\.addEventListener\("click", \(\) => \{\s*clearError\(\);\s*scheduledBatchQueue\.enqueue/);
+  assert.match(app, /\$\("#runBatchButton"\)\.addEventListener\("click", \(\) => \{\s*clearError\(\);[\s\S]*?scheduledBatchQueue\.enqueue\(\(\) => startSelectedBatch\(\)\)/);
   for (const id of ["exportSingleCsvButton", "exportSingleJsonButton", "exportFileCompareCsvButton", "exportFileCompareJsonButton", "exportFileCompareXlsxButton", "exportFileCompareTxtButton"]) {
     const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     assert.match(app, new RegExp(`\\$\\(\\"#${escaped}\\"\\)\\.addEventListener\\(\\"click\\"[^\\n]*\\n\\s*clearError\\(\\);`), `${id} clears a dismissed error before retrying`);

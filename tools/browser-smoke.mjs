@@ -493,6 +493,70 @@ if (process.argv.includes("--legacy-observation-history-only")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--batch-direct-start-regression-only")) {
+  const check = async (expression, label) => {
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      if (await evaluate(expression)) return;
+      const error = await evaluate("!document.querySelector('#errorBanner').hidden && document.querySelector('#errorBanner').textContent");
+      if (error) throw new Error(label + ": " + error);
+      await wait(100);
+    }
+    throw new Error(label + " timed out");
+  };
+  const address = "Москва, Кутузовский проспект, 32А, второй этаж";
+  await evaluate("document.querySelector('[data-view=\"batch\"]').click()");
+  const picker = await evaluate("({files:document.querySelector('#batchMainInput').webkitdirectory,folder:document.querySelector('#batchMainFolderInput').webkitdirectory})");
+  if (picker.files || !picker.folder) throw new Error("File and directory pickers are not separate");
+  for (const [role, input] of [["main", "Main"], ["smartroom", "Smartroom"], ["ddio", "DdIo"]]) {
+    const files = [1, 2].map((day) => ({
+      name: role + "_2026-11-0" + day + ".csv",
+      content: role === "main" ? "MAC-адрес;NasIP;NasPortID\n00:11:22:33:44:51;10.0.0.1;1\n00:11:22:33:44:52;10.0.0.1;2"
+        : role === "smartroom" ? "MAC-адрес;Помещение;Адрес помещения;ID помещения;ID устройства;Модель;Производитель\n00:11:22:33:44:51;Переговорная;"+address+";ROOM-1;DEV-51;Model "+day+";Vendor\n00:11:22:33:44:52;Кабинет;"+address+";ROOM-2;DEV-52;Model 2;Vendor\n00:11:22:33:44:53;Лишняя;"+address+";ROOM-3;DEV-53;Extra;Vendor"
+          : "column3;column2\n00:11:22:33:44:51;192.168.1.51",
+    }));
+    await evaluate("(()=>{const dt=new DataTransfer();for(const item of "+JSON.stringify(files)+"){dt.items.add(new File([item.content],item.name,{type:'text/csv',lastModified:Date.parse('2026-11-20T00:00:00Z')}))}const input=document.querySelector('#batch"+input+"Input');input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}))})()");
+    await check("document.querySelector('#batch"+input+"Status').textContent.includes('2 файлов')", "Selected batch files");
+  }
+  await check("!document.querySelector('#runBatchButton').disabled", "Direct queue start enabled");
+  if (await evaluate("document.querySelectorAll('#batchPreview tr.batch-details-row').length")) throw new Error("Test must start without preparing pairs");
+  await evaluate("window.__directBatchPrompts=[];window.confirm=(message)=>{window.__directBatchPrompts.push(message);return false};document.querySelector('#runBatchButton').click()");
+  await check("document.querySelector('#batchStartStatus').textContent.includes('Запуск отменён') && !document.querySelector('#runBatchButton').disabled", "Cancel automatic review");
+  if (await evaluate("document.querySelectorAll('#batchPreview tr.batch-details-row').length") !== 2) throw new Error("Automatic pairing did not create both cycles");
+  if (await evaluate("!!document.querySelector('[data-batch-entry-role=smartroom][data-batch-mapping-field=room]').closest('.mapping-extra-fields')")) throw new Error("Room is hidden in optional fields");
+  await evaluate("window.confirm=(message)=>{window.__directBatchPrompts.push(message);return true};document.querySelector('#runBatchButton').click();document.querySelector('#runBatchButton').click()");
+  await check("document.querySelector('#batchStartStatus').textContent.includes('успешно 2, ошибок 0') && !document.querySelector('#runBatchButton').disabled", "Two cycles committed after direct start");
+  const completed = await evaluate("({status:document.querySelector('#databaseStatus').textContent,prompts:window.__directBatchPrompts.length})");
+  if (!completed.status.includes("2 снимок объединения") || !completed.status.includes("2 в активном") || completed.prompts !== 2) throw new Error("Direct start duplicated or lost cycles: "+JSON.stringify(completed));
+  const layout = [];
+  for (const width of [1024, 1600]) {
+    await command("Emulation.setDeviceMetricsOverride", {width,height:900,deviceScaleFactor:1,mobile:false});
+    const boxes = await evaluate("document.querySelector('.batch-mapping-grid')?.children.length===3");
+    if (!boxes) throw new Error("Three batch mapping columns missing");
+    const positions = await evaluate("(()=>{const box=el=>{const r=el.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width}};return{sources:[...document.querySelectorAll('#batchView .source-grid > article')].map(box),mappings:[...document.querySelector('.batch-mapping-grid').children].map(box),overflow:document.documentElement.scrollWidth>innerWidth+2}})()");
+    for (const group of [positions.sources, positions.mappings]) if (group.length!==3 || !(group[0].x<group[1].x && group[1].x<group[2].x) || Math.max(...group.map(item=>item.y))-Math.min(...group.map(item=>item.y))>2) throw new Error("Batch panels stack instead of aligning: "+JSON.stringify(positions));
+    if (positions.mappings.some((box) => box.x + box.width > width + 2)) throw new Error("Batch mapping columns require horizontal scrolling");
+    if (positions.overflow) throw new Error("Batch layout overflows the page");
+    layout.push({width,...positions});
+  }
+  await evaluate("document.querySelector('.batch-mapping-grid').scrollIntoView({block:'center'})");
+  const screenshot = await command("Page.captureScreenshot", {format:"png",captureBeyondViewport:false});
+  writeFileSync(resolve("dist/batch-layout-audit.png"), Buffer.from(screenshot.data, "base64"));
+  await evaluate("document.querySelector('[data-view=\"analytics\"]').click()");
+  await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#analyticsKpis [data-kpi=devices] strong')?.textContent.trim()==='2'", "Exact Main count after batch");
+  await evaluate("document.querySelector('#analyticsKpis [data-kpi=devices]').click()");
+  await check("document.querySelector('#detailsDialog').open && document.querySelector('#detailsDialog tbody tr')", "Batch device detail");
+  const detail = await evaluate("document.querySelector('#detailsDialog').textContent");
+  for (const value of [address,"Переговорная","Кабинет","Model 2","192.168.1.51"]) if (!detail.includes(value)) throw new Error("Batch enrichment lost "+value);
+  await evaluate("document.querySelector('#detailsDialog').close();document.querySelector('[data-view=\"batch\"]').click();const room=document.querySelector('[data-batch-entry-role=smartroom][data-batch-mapping-field=room]');room.value='0';room.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#runBatchButton').click()");
+  await wait(100);
+  const blocked = await evaluate("({error:!document.querySelector('#errorBanner').hidden,status:document.querySelector('#batchStartStatus').textContent,snapshots:document.querySelector('#databaseStatus').textContent,prompts:window.__directBatchPrompts.length,enabled:!document.querySelector('#runBatchButton').disabled})");
+  if (!blocked.error || !blocked.status.includes("одна колонка") || !blocked.snapshots.includes("2 снимок объединения") || blocked.prompts!==2 || !blocked.enabled) throw new Error("Invalid batch mapping was not blocked with visible feedback: "+JSON.stringify(blocked));
+  console.log(JSON.stringify({directBatchStart:true,completed,layout,exactMainCount:2,blockedInvalidMapping:blocked,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
 if (process.argv.includes("--smartroom-schema-audit-only")) {
   const address = "Москва, Кутузовский проспект, 32А, второй этаж, переговорная 204";
   const expected = { mac: "0", serial: "1", smartroomId: "2", deviceId: "3", address: "4", model: "5", manufacturer: "6", ip: "7", deviceType: "8" };
@@ -547,7 +611,7 @@ if (process.argv.includes("--address-roster-regression-only")) {
   for (let run=1;run<=2;run+=1) {
     await assignInput("#mainFileInput", "address-main-"+run+".csv", "MAC;Device ID;NasIP;Smartroom ID;NasPortID\n"+mainRows.join("\n"));
     await assignInput("#smartroomFileInput", "address-smartroom-"+run+".csv", "MAC;Адрес локации;Название комнаты;Smartroom ID\n"+smartRows.join("\n"));
-    await check("[...document.querySelectorAll('[data-mapping-role=smartroom][data-mapping-field]')].filter(el=>!el.closest('details:not([open])')).length===9", "Nine primary SmartRoom fields");
+    await check("[...document.querySelectorAll('[data-mapping-role=smartroom][data-mapping-field]')].filter(el=>!el.closest('details:not([open])')).length===10", "Primary SmartRoom fields include room");
     await evaluate("document.querySelector('[data-mapping-role=smartroom][data-mapping-field=locationPath]').closest('details').querySelector('summary').click()");
     await check("document.querySelector('[data-mapping-role=smartroom][data-mapping-field=locationPath]').getClientRects().length>0", "Optional SmartRoom fields expand");
     await evaluate("document.querySelector('[data-mapping-role=smartroom][data-mapping-field=locationPath]').closest('details').querySelector('summary').click()");
@@ -6497,11 +6561,11 @@ await evaluate(`document.querySelector('#previewBatchButton').click()`);
 let batchReady = false;
 for (let attempt = 0; attempt < 80; attempt += 1) {
   await wait(250);
-  const state = await evaluate(`({rows:document.querySelectorAll('#batchPreview tbody tr.batch-details-row').length,disabled:document.querySelector('#runBatchButton').disabled,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span').textContent})`);
+  const state = await evaluate(`({rows:document.querySelectorAll('#batchPreview tbody tr.batch-details-row').length,reviewed:document.querySelectorAll('#batchPreview [data-batch-pair-reviewed]:checked').length,disabled:document.querySelector('#runBatchButton').disabled,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span').textContent})`);
   if (state.error) throw new Error(`Batch pairing error: ${state.message}`);
-  if (state.rows === 2 && state.disabled) { batchReady = true; break; }
+  if (state.rows === 2 && !state.disabled && state.reviewed === 0) { batchReady = true; break; }
 }
-if (!batchReady) throw new Error("Массовый preview не сформировал две пары или не заблокировал непроверенные пары");
+if (!batchReady) throw new Error("Массовый preview не сформировал две пары с доступным запуском через подтверждение");
 const batchPresetAudit = await evaluate(`({sources:[...document.querySelectorAll('#batchView .source-card h3')].map((node)=>node.textContent.trim()),mappingGrids:document.querySelectorAll('#batchPreview .batch-mapping-grid').length,reviewChecks:document.querySelectorAll('#batchPreview [data-batch-pair-reviewed]').length,fieldEditors:document.querySelectorAll('#batchPreview [data-batch-mapping-field]').length})`);
 if (batchPresetAudit.sources.join('|') !== 'Main|SmartRoom|DDIO' || batchPresetAudit.mappingGrids !== 2 || batchPresetAudit.reviewChecks !== 2 || batchPresetAudit.fieldEditors < 6) throw new Error(`Массовое объединение не показывает именованные источники и проверяемые mapping для каждой пары: ${JSON.stringify(batchPresetAudit)}`);
 const nearestAssignments = await evaluate(`({smartroom:[...document.querySelectorAll('[data-batch-pair-source="smartroom"]')].map((select)=>select.value),ddio:[...document.querySelectorAll('[data-batch-pair-source="ddio"]')].map((select)=>select.value)})`);

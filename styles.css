@@ -415,3 +415,30 @@ body.is-resizing-column, body.is-resizing-column * { cursor: col-resize !importa
 .analytics-scope-note { grid-column: 1 / -1; margin: 0; padding: 12px; background: var(--surface); border-left: 4px solid var(--primary); line-height: 1.6; }
 .timeline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (max-width: 850px) { .timeline { grid-template-columns: minmax(0, 1fr); } }
+#enrichmentView .source-grid, #batchView .source-grid, .batch-mapping-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(230px, 1fr));
+  align-items: start;
+  gap: 14px;
+  overflow-x: auto;
+}
+#enrichmentView .source-card, #batchView .source-card, .batch-mapping { min-width: 0; }
+#enrichmentView .mapping-grid label, .batch-mapping .mapping-grid label { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+#enrichmentView .mapping-grid, .batch-mapping > .mapping-grid { max-height: 54vh; overflow: auto; overscroll-behavior: contain; }
+#enrichmentView .source-card input, #enrichmentView .source-card select, #batchView .source-card input, .batch-mapping select { min-width: 0; max-width: 100%; }
+.batch-mapping { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--surface); }
+#batchStartStatus { white-space: pre-line; }
+.batch-table { width: 100%; min-width: 0; table-layout: fixed; }
+.batch-table th:first-child, .batch-table th:nth-child(2) { width: 42px; }
+.batch-table th:nth-child(3) { width: 100px; }
+.batch-table .batch-source-select { width: 100%; min-width: 0; max-width: 100%; }
+.batch-table .batch-details-row > td { white-space: normal; max-width: none; overflow: visible; }
+.batch-mapping-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); overflow-x: visible; }
+.batch-mapping h4, .batch-mapping label, .batch-mapping p { overflow-wrap: anywhere; white-space: normal; }
+#enrichmentView .source-card > .mapping-grid, .batch-mapping > .mapping-grid { max-height: none; overflow: visible; }
+.batch-mapping .mapping-extra-fields .mapping-grid, #enrichmentView .mapping-extra-fields .mapping-grid { max-height: 300px; overflow: auto; }
+.batch-mapping label, #enrichmentView .mapping-grid label { min-width: 0; }
+#enrichmentView .mapping-hint { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+@media (min-width: 1200px) {
+  #enrichmentView .mapping-grid label, .batch-mapping .mapping-grid label { grid-template-columns: minmax(100px, .8fr) minmax(130px, 1.2fr); }
+}

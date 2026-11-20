@@ -384,3 +384,17 @@ export function batchQueueProblems(pairs = []) {
     return problems;
   });
 }
+
+export function batchStartPlan(pairs = [], selected = {}) {
+  const enabled = pairs.filter((pair) => pair.enabled !== false);
+  const problems = enabled.length ? [] : ["Включите хотя бы один цикл массового объединения"];
+  for (const pair of enabled) {
+    const index = pairs.indexOf(pair);
+    problems.push(...batchPairProblems(pair).map((problem) => `Пара №${index + 1}: ${problem}`));
+  }
+  const missingSources = {};
+  for (const role of ["smartroom", "ddio"]) {
+    if (selected[role] > 0) missingSources[role] = enabled.filter((pair) => !pair[role]).length;
+  }
+  return { problems, enabledCount: enabled.length, needsReview: enabled.some((pair) => !pair.reviewed), missingSources };
+}

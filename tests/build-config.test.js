@@ -400,8 +400,11 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
   assert.ok(app.includes('for (const format of ["csv", "xlsx", "txt", "json", "yaml", "html"])'));
   assert.ok(app.includes('$(`#exportFinal${format[0].toUpperCase()}${format.slice(1)}Button`).addEventListener("click"'));
   assert.deepEqual(indirectlyWiredInputs.sort(), [
+    "batchDdIoFolderInput",
     "batchDdIoInput",
+    "batchMainFolderInput",
     "batchMainInput",
+    "batchSmartroomFolderInput",
     "batchSmartroomInput",
     "compareFile0Input",
     "compareFile1Input",
@@ -410,6 +413,7 @@ test("static UI control IDs have direct or explicitly delegated runtime wiring",
   ]);
   assert.match(app, /for \(const role of \["main", "smartroom", "ddio"\]\) \{\s*\$\(`#\$\{role\}FileInput`\)\.addEventListener\("change"/);
   assert.ok(app.includes('for (const role of ["Main", "Smartroom", "DdIo"])'));
+  assert.ok(app.includes('$(`#batch${role}FolderInput`).addEventListener("change"'));
   assert.ok(app.includes('for (const position of [0, 1]) $(`#compareFile${position}Input`).addEventListener("change"'));
   for (const id of formIds) {
     assert.ok(app.includes(`$("#${id}").addEventListener("submit"`) || app.includes(`$("#${id}").onsubmit =`), `${id} must own a submit handler`);
@@ -3675,7 +3679,7 @@ test("batch scheduler supports named queues, serial execution, and engineering-s
   assert.match(schedule, /runBatch\(schedule\.pairs, schedule\.strategy, schedule\.failurePolicy\)/);
   assert.match(app, /function renderScheduledBatches\(\)/);
   assert.match(app, /data-schedule-delete/);
-  assert.match(app, /#runBatchButton"\)\.addEventListener\("click", \(\) => \{\s*clearError\(\);\s*scheduledBatchQueue\.enqueue/);
+  assert.match(app, /#runBatchButton"\)\.addEventListener\("click", \(\) => \{[\s\S]*?if \(batchLaunchPending\) return;[\s\S]*?scheduledBatchQueue\.enqueue\(\(\) => startSelectedBatch\(\)\)/);
   assert.match(schedule, /stopScheduledBatch\("Планировщик остановлен: инженерная сессия завершилась/);
   const endSession = app.slice(app.indexOf("function endEngineeringSession("), app.indexOf("\nasync function initializeEngineeringMode", app.indexOf("function endEngineeringSession(")));
   assert.match(endSession, /stopScheduledBatch\(/);

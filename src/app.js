@@ -5,7 +5,7 @@ import { buildDashboardFleetSeries } from "./core/dashboard-fleet.js";
 import { createSnapshotTimeCache } from "./core/snapshot-time-cache.js";
 import { resolveDashboardSnapshotPair } from "./core/dashboard-selection.js";
 import { createCollector as createDatasetAnalyticsCollector, chartsSvg, collectAnalyticsBuckets, collectClusterBuckets, collectTopologyBuckets, applyAnalyticsAggregateView, pyqtFieldCoverageChartItems, pyqtRoomDistributionChartItems, pyqtVendorShareChartItems, pyqtVendorTopChartItems, renderClusters, renderOverview, renderTopology, writeClustersCsv, writeTopologyHtml } from "./core/analytics-detail.js";
-import { batchMappingProblems, batchPairProblems, batchQueueProblems, compactSupportedBatchFiles, normalizeBatchPairing, pairBatchEntries, prepareBatchEntries, reassignBatchSource, runBatchQueue, unmatchedBatchEntries } from "./core/batch.js";
+import { batchStartPlan, batchMappingProblems, batchPairProblems, batchQueueProblems, compactSupportedBatchFiles, normalizeBatchPairing, pairBatchEntries, prepareBatchEntries, reassignBatchSource, runBatchQueue, unmatchedBatchEntries } from "./core/batch.js";
 import { batchSourceFileRelativePath } from "./core/batch-directory-handles.js";
 import { matchBatchFileMetadata } from "./core/batch-file-metadata.js";
 import { createDailyScheduler, createSerialQueue, nextIntervalExecution, nextLocalExecution, normalizeScheduleName } from "./core/daily-scheduler.js";
@@ -165,6 +165,8 @@ async function loadImportedRoomIndexFromDatabase(database, ids, { signal } = {})
   return accumulator.finish();
 }
 const scheduledBatchQueue = createSerialQueue();
+let batchLaunchPending = false;
+let batchSelectionPending = 0;
 const workspaceStateQueue = createSerialQueue();
 let ieeeOuiIndex = null;
 let bundledIeeeRegistry = null;
@@ -180,14 +182,26 @@ const ROLE_FIELDS = Object.freeze({
   ddio: ["reservationMac", "reservationIp", "leaseMac", "leaseIp"],
 });
 
-function collapseSmartRoomMapping(container, selector, fieldAttribute) {
+const MAIN_PRIMARY_FIELDS = Object.freeze(["mac", "ip", "switchIp", "switchPort", "authenticationTime", "deviceId", "serial", "manufacturer", "model"]);
+
+function collapseSourceMapping(container, selector, fieldAttribute, primaryFields = SMARTROOM_DEFAULT_FIELDS, sourceLabel = "SmartRoom") {
   const controls = [...container.querySelectorAll(selector)];
-  const extra = controls.filter((control) => !SMARTROOM_DEFAULT_FIELDS.includes(control.dataset[fieldAttribute]));
+  const anchor = controls[0]?.closest("label");
+  if (anchor) {
+    const marker = document.createComment("Primary source fields");
+    anchor.before(marker);
+    for (const field of primaryFields) {
+      const label = controls.find((control) => control.dataset[fieldAttribute] === field)?.closest("label");
+      if (label) marker.before(label);
+    }
+    marker.remove();
+  }
+  const extra = controls.filter((control) => !primaryFields.includes(control.dataset[fieldAttribute]));
   if (!extra.length) return;
   const details = document.createElement("details");
   details.className = "mapping-extra-fields";
   const summary = document.createElement("summary");
-  summary.textContent = "＋ Дополнительные поля SmartRoom";
+  summary.textContent = `＋ Дополнительные поля ${sourceLabel}`;
   const grid = document.createElement("div");
   grid.className = "mapping-grid";
   details.append(summary, grid);
@@ -2625,7 +2639,8 @@ function renderMapping(role) {
     const helper = `Подсказка: ${escapeHtml(suggestedHeader)} · совпадение ${detail?.recommendedConfidence || 0}%${examples}${alternatives}${reason}${warning}`;
     return `<label><span>${escapeHtml(FIELD_LABELS[field])}</span><select data-mapping-role="${role}" data-mapping-field="${field}"><option value="">Не использовать</option>${table.headers.map((header, index) => `<option value="${index}" ${Number(state.mappings[role][field]) === index ? "selected" : ""}>${escapeHtml(`${excelColumnLabel(index)} · ${header || `Колонка ${index + 1}`}`)}</option>`).join("")}</select><small class="mapping-hint">${helper}</small></label>`;
   }).join("")}${customColumns.map(({ key, label }) => mappingControl(key, label)).join("")}${isEngineerActive() ? `<div class="toolbar mapping-custom-field"><label>Новое пользовательское поле<input type="text" data-source-custom-label maxlength="60" autocomplete="off"></label><label>Колонка источника<select data-source-custom-column><option value="">Не указано</option>${table.headers.map((header, index) => `<option value="${index}">${escapeHtml(`${excelColumnLabel(index)} · ${header || `Колонка ${index + 1}`}`)}</option>`).join("")}</select></label><button class="button secondary" type="button" data-add-source-custom-field>Добавить поле</button></div>` : ""}`;
-  if (role === "smartroom") collapseSmartRoomMapping(container, "[data-mapping-field]", "mappingField");
+  if (role === "smartroom") collapseSourceMapping(container, "[data-mapping-field]", "mappingField");
+  if (role === "main") collapseSourceMapping(container, "[data-mapping-field]", "mappingField", MAIN_PRIMARY_FIELDS, "Main");
   container.querySelectorAll("select").forEach((select) => select.addEventListener("change", () => {
     if (select.value === "") delete state.mappings[role][select.dataset.mappingField];
     else state.mappings[role][select.dataset.mappingField] = Number(select.value);
@@ -4121,11 +4136,16 @@ function renderBatchDirectoryHandleStatus(role, detail = "") {
 }
 
 async function handleBatchFileSelection(role, files, { append = false, page = null } = {}) {
+  if (batchLaunchPending) throw new Error("Дождитесь завершения или отмены текущей массовой очереди перед сменой файлов");
   if (!BATCH_DIRECTORY_ROLES.includes(role)) throw new Error("Неизвестная роль папки массового объединения");
-  await database.deleteWorkspaceBatchDirectoryHandle(role);
-  state.batchDirectoryHandles[role] = null;
-  setBatchFiles(role, files, { append, page });
-  renderBatchDirectoryHandleStatus(role, "Сохранённый доступ к папке удалён: состав списка изменён вручную.");
+  batchSelectionPending += 1;
+  refreshBatchValidation();
+  try {
+    await database.deleteWorkspaceBatchDirectoryHandle(role);
+    state.batchDirectoryHandles[role] = null;
+    setBatchFiles(role, files, { append, page });
+    renderBatchDirectoryHandleStatus(role, "Сохранённый доступ к папке удалён: состав списка изменён вручную.");
+  } finally { batchSelectionPending -= 1; refreshBatchValidation(); }
 }
 
 async function restoreWorkspaceBatchDirectories({ loadPermittedFiles = false } = {}) {
@@ -8533,6 +8553,7 @@ function batchMappingEditor(entry) {
 }
 
 function refreshBatchValidation() {
+  document.querySelectorAll('#batchView input[type="file"], #previewBatchButton, #batchPairingMode, #batchPairTolerance, #batchFailurePolicy, #batchPreview input, #batchPreview select, #batchPreview button').forEach((control) => { control.disabled = batchLaunchPending; });
   state.batch.pairs.forEach((pair, index) => {
     const element = $(`[data-batch-problems="${index}"]`);
     if (!element) return;
@@ -8546,7 +8567,7 @@ function refreshBatchValidation() {
           : pair.status === "processing" ? "Обрабатывается"
             : pair.queueMessage || (pair.status === "skipped" ? "Цикл отключён пользователем" : "Колонки готовы");
   });
-  $("#runBatchButton").disabled = batchQueueProblems(state.batch.pairs).length > 0;
+  $("#runBatchButton").disabled = batchLaunchPending || batchSelectionPending > 0 || !state.batch.main.length;
 }
 
 function renderBatchPreview() {
@@ -8564,7 +8585,8 @@ function renderBatchPreview() {
     renderBatchPreview();
   });
   for (const panel of host.querySelectorAll(".batch-mapping")) {
-    if (panel.querySelector('[data-batch-entry-role="smartroom"]')) collapseSmartRoomMapping(panel, "[data-batch-mapping-field]", "batchMappingField");
+    if (panel.querySelector('[data-batch-entry-role="smartroom"]')) collapseSourceMapping(panel, "[data-batch-mapping-field]", "batchMappingField");
+    if (panel.querySelector('[data-batch-entry-role="main"]')) collapseSourceMapping(panel, "[data-batch-mapping-field]", "batchMappingField", MAIN_PRIMARY_FIELDS, "Main");
   }
   host.querySelectorAll("[data-batch-pair-source]").forEach((select) => select.addEventListener("change", () => {
     reassignBatchSource(state.batch.pairs, state.batch.entries, Number(select.dataset.batchPairIndex), select.dataset.batchPairSource, select.value);
@@ -8668,6 +8690,7 @@ function renderBatchSourceFiles(role) {
 }
 
 function setBatchFiles(role, files, { append = false, page = null } = {}) {
+  if (batchLaunchPending) throw new Error("Нельзя менять состав файлов во время запуска массовой очереди");
   if (!["main", "smartroom", "ddio"].includes(role)) throw new Error("Неизвестная роль файлов массового объединения");
   const accepted = compactSupportedBatchFiles(files);
   state.batch[role] = append ? [...state.batch[role], ...accepted] : accepted;
@@ -8679,9 +8702,27 @@ function setBatchFiles(role, files, { append = false, page = null } = {}) {
   renderBatchSourceFiles(role);
   state.batch.entries[role] = [];
   state.batch.pairs = [];
-  $("#runBatchButton").disabled = true;
+  $("#runBatchButton").disabled = batchLaunchPending || batchSelectionPending > 0 || !state.batch.main.length;
   $("#batchPreview").classList.add("empty");
-  $("#batchPreview").textContent = "Пары изменились. Нажмите «Сформировать пары» перед запуском.";
+  $("#batchPreview").textContent = "Файлы выбраны. Нажмите «Запустить очередь»: пары сформируются автоматически. Для предварительной настройки используйте «Сформировать пары».";
+}
+
+async function startSelectedBatch() {
+  if (!state.batch.pairs.length) await pairBatchFiles();
+  const plan = batchStartPlan(state.batch.pairs, { smartroom: state.batch.smartroom.length, ddio: state.batch.ddio.length });
+  if (plan.problems.length) throw new Error(plan.problems.slice(0, 20).join("\n") + (plan.problems.length > 20 ? `\nЕщё ошибок: ${plan.problems.length - 20}. Подробности доступны в сформированных парах.` : ""));
+  const missing = Object.entries(plan.missingSources).filter(([, count]) => count > 0)
+    .map(([role, count]) => `${role === "smartroom" ? "SmartRoom" : "DDIO"}: не назначен в ${count} циклах`).join("\n");
+  if (plan.needsReview || missing) {
+    const message = `Запустить ${plan.enabledCount} циклов массового объединения?\n\nПроверьте файлы и сопоставление колонок в сформированных парах.\n${missing ? `\nВнимание: выбранные источники не назначены всем циклам:\n${missing}\nТакие циклы выполнятся без этих источников.\n` : ""}\nПодтвердить показанные пары и запустить очередь?`;
+    if (!globalThis.confirm(message)) { $("#batchStartStatus").textContent = "Запуск отменён. Пары оставлены для проверки."; return; }
+    for (const pair of state.batch.pairs) if (pair.enabled !== false) pair.reviewed = true;
+    renderBatchPreview();
+  }
+  $("#batchStartStatus").textContent = `Выполняется очередь: ${plan.enabledCount} циклов…`;
+  const result = await runBatch();
+  $("#batchStartStatus").textContent = `Очередь завершена: успешно ${result.completed}, ошибок ${result.errors.length}${result.cancelled ? " · отменена" : ""}.`;
+  return result;
 }
 
 async function runBatch(pairs = state.batch.pairs, strategy = $("input[name='strategy']:checked").value, failurePolicy = state.batch.failurePolicy) {
@@ -11069,6 +11110,11 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
       handleBatchFileSelection(key, files).catch(showError);
     });
     const key = role === "Main" ? "main" : role === "Smartroom" ? "smartroom" : "ddio";
+    $(`#batch${role}FolderInput`).addEventListener("change", (event) => {
+      const files = [...event.target.files];
+      event.target.value = "";
+      handleBatchFileSelection(key, files).catch(showError);
+    });
     bindSourceFilesDrop($(`[data-batch-file-drop="${key}"]`), $(`#batch${role}Status`), (files) => handleBatchFileSelection(key, files, { append: true }).catch(showError));
   }
   document.querySelectorAll("[data-batch-directory-handle]").forEach((button) => {
@@ -11078,7 +11124,14 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   $("#scanBatchWindowsDatesButton").addEventListener("click", () => scanWindowsBatchFolderDates().catch(showError));
   $("#runBatchButton").addEventListener("click", () => {
     clearError();
-    scheduledBatchQueue.enqueue(() => runBatch()).catch(showError);
+    if (batchLaunchPending) return;
+    batchLaunchPending = true;
+    refreshBatchValidation();
+    $("#batchStartStatus").textContent = "Подготовка очереди…";
+    scheduledBatchQueue.enqueue(() => startSelectedBatch()).catch((error) => {
+      $("#batchStartStatus").textContent = error?.message || "Не удалось запустить очередь";
+      showError(error);
+    }).finally(() => { batchLaunchPending = false; refreshBatchValidation(); });
   });
   $("#batchFailurePolicy").addEventListener("change", () => {
     state.batch.failurePolicy = $("#batchFailurePolicy").value;

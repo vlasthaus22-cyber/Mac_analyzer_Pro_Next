@@ -54,7 +54,7 @@ export const FIELD_LABELS = Object.freeze({
 });
 
 export const SMARTROOM_DEFAULT_FIELDS = Object.freeze([
-  "mac", "ip", "address", "serial", "deviceType", "model", "manufacturer", "deviceId", "smartroomId",
+  "mac", "ip", "address", "room", "serial", "deviceType", "model", "manufacturer", "deviceId", "smartroomId",
 ]);
 
 const ALIASES = Object.freeze({

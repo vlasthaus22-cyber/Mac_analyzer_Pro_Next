@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.3.13 — 2026-11-20
+
+- Manual batch start prepares and validates pairs directly from selected files, with confirmation, visible errors and duplicate-click protection.
+- Separated ordinary file and directory pickers; locked batch inputs during queued/executing runs.
+- Room is a primary SmartRoom control. Main/SmartRoom/DDIO source and mapping panels use three compact columns without scrolling primary fields.
+- Added direct-start Chrome regression for cancel, duplicate clicks, exact enrichment and 1024/1600 layouts; archive analytics regression verifies historical changes without inflating the active Main count.
+
 ## v2.3.12 — 2026-11-20
 
 - A single SmartRoom physical-address column is now selected in the primary Address control, including its mapping recommendation. Explicit separate Address and Physical Address columns remain separate.

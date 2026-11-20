@@ -5,7 +5,7 @@ import { normalizeDevice, hasKnownRoom } from "../src/core/normalize.js";
 import { enrich, mergeDevice } from "../src/core/enrichment.js";
 import { detectMappingReport } from "../src/data/importer.js";
 import { Database } from "../src/data/database.js";
-import { collectPresenceTransitions, createUniqueAnalyticsDeviceFilter } from "../src/core/analytics.js";
+import { aggregateSnapshotHistory, collectPresenceTransitions, createUniqueAnalyticsDeviceFilter } from "../src/core/analytics.js";
 import { buildMacTimeline, createMacTimelineAccumulator } from "../src/core/comparison.js";
 import { macTimelineContent, macTimelineCandidateRowsContent } from "../src/ui/render.js";
 import { build as buildDataset, collectAnalyticsBuckets } from "../src/core/analytics-detail.js";
@@ -203,5 +203,10 @@ test("restored archives join chronological analytics exactly once and preserve t
   await database.restoreLocalArchivesForAnalytics();
   assert.equal((await database.listSnapshots({ finalOnly: true })).length, 2);
   assert.equal((await database.listLocalArchivesPage()).rows[0].id, archive.id);
+  const analytics = await aggregateSnapshotHistory(await database.listSnapshots({ finalOnly: true }), (id, visit) => database.forEachSnapshotChunk(id, visit));
+  assert.deepEqual(analytics.totals.map((row) => row.value), [1, 1]);
+  assert.equal(analytics.history.snapshots, 2);
+  assert.equal(analytics.history.selectedSnapshotUniqueMacs, 1, "archived snapshot must not inflate the current device count");
+  assert.equal(analytics.weekly.reduce((sum, row) => sum + row.modified, 0), 1, "the room change must include the restored archive evidence");
 });
 
