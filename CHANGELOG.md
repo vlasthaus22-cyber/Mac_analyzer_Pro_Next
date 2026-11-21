@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.3.14 — 2026-11-21
+
+- Additional Main/SmartRoom source fields require an explicit checkbox, start unmapped, and are excluded from import when disabled. Legacy batch plans are filtered before validation.
+- Manual column selection reassigns a previously used column with a visible notice; the custom-field picker no longer writes an accidental undefined mapping.
+- Added a documented database/ transfer folder; JSON files are ignored by Git and are not packaged into releases.
+
 ## v2.3.13 — 2026-11-20
 
 - Manual batch start prepares and validates pairs directly from selected files, with confirmation, visible errors and duplicate-click protection.

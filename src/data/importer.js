@@ -57,6 +57,25 @@ export const SMARTROOM_DEFAULT_FIELDS = Object.freeze([
   "mac", "ip", "address", "room", "serial", "deviceType", "model", "manufacturer", "deviceId", "smartroomId",
 ]);
 
+export function effectiveMergeMapping(role, mapping = {}, includeExtras = false) {
+  const primary = role === "smartroom" ? SMARTROOM_DEFAULT_FIELDS : role === "main"
+    ? ["mac", "ip", "switchIp", "switchPort", "authenticationTime", "deviceId", "serial", "manufacturer", "model"] : null;
+  return Object.fromEntries(Object.entries(mapping).filter(([field, index]) => Number.isInteger(index) && index >= 0 && (!primary || includeExtras || primary.includes(field))));
+}
+
+export function assignSourceMapping(mapping, field, value) {
+  const next = { ...mapping };
+  const replaced = [];
+  if (value === "") delete next[field];
+  else {
+    const index = Number(value);
+    if (!Number.isInteger(index) || index < 0) throw new Error("Некорректная колонка источника");
+    for (const [other, selected] of Object.entries(next)) if (other !== field && selected === index) { delete next[other]; replaced.push(other); }
+    next[field] = index;
+  }
+  return { mapping: next, replaced };
+}
+
 const ALIASES = Object.freeze({
   id: ["internal id", "internalid", "внутренний id", "внутренний идентификатор"],
   mac: ["callingstationid", "calling station id", "callingstarionid", "mac", "mac address", "мак", "mac-адрес"],

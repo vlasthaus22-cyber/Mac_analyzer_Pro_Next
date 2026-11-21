@@ -101,7 +101,7 @@ import { installTableSorter } from "./ui/table-sorter.js";
 import { selectContextTableRow } from "./ui/table-context-selection.js";
 import { Database, database } from "./data/database.js";
 import { getDirectoryArchiveFile, MAX_PORTABLE_ARCHIVE_BYTES, pickDataDirectory, queryDirectoryPermission, reauthorizeDirectoryHandle, requestDirectoryPermission, writeDirectoryArchive, writeDirectoryFile } from "./data/data-directory.js";
-import { consumeStoredTableRows, detectMappingReport, FIELD_LABELS, SMARTROOM_DEFAULT_FIELDS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches, setFileObservationDateOverride, supportsBoundedTableRows } from "./data/importer.js";
+import { consumeStoredTableRows, assignSourceMapping, effectiveMergeMapping, detectMappingReport, FIELD_LABELS, SMARTROOM_DEFAULT_FIELDS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches, setFileObservationDateOverride, supportsBoundedTableRows } from "./data/importer.js";
 import {
   comparisonContent,
   comparisonDiagnosticsPageContent,
@@ -183,8 +183,9 @@ const ROLE_FIELDS = Object.freeze({
 });
 
 const MAIN_PRIMARY_FIELDS = Object.freeze(["mac", "ip", "switchIp", "switchPort", "authenticationTime", "deviceId", "serial", "manufacturer", "model"]);
+const sourceExtraFields = new Set();
 
-function collapseSourceMapping(container, selector, fieldAttribute, primaryFields = SMARTROOM_DEFAULT_FIELDS, sourceLabel = "SmartRoom") {
+function collapseSourceMapping(container, selector, fieldAttribute, primaryFields = SMARTROOM_DEFAULT_FIELDS, sourceLabel = "SmartRoom", enabled = false, onToggle = () => {}) {
   const controls = [...container.querySelectorAll(selector)];
   const anchor = controls[0]?.closest("label");
   if (anchor) {
@@ -202,17 +203,25 @@ function collapseSourceMapping(container, selector, fieldAttribute, primaryField
   details.className = "mapping-extra-fields";
   const summary = document.createElement("summary");
   summary.textContent = `＋ Дополнительные поля ${sourceLabel}`;
+  const toggle = document.createElement("input");
+  toggle.type = "checkbox";
+  toggle.checked = enabled;
+  toggle.setAttribute("aria-label", `Учитывать дополнительные поля ${sourceLabel}`);
+  toggle.dataset.includeExtraFields = sourceLabel;
+  toggle.addEventListener("click", (event) => event.stopPropagation());
+  toggle.addEventListener("change", () => onToggle(toggle.checked));
+  summary.prepend(toggle);
   const grid = document.createElement("div");
   grid.className = "mapping-grid";
   details.append(summary, grid);
-  for (const control of extra) grid.append(control.closest("label"));
+  for (const control of extra) { control.disabled = !enabled; grid.append(control.closest("label")); }
   container.append(details);
 }
 
 function allowedSourceMapping(role, mapping = {}) {
   const customFields = state.inventoryColumnConfig.columns.filter(({ custom }) => custom).map(({ key }) => key);
   const allowed = new Set([...ROLE_FIELDS[role], ...customFields]);
-  return Object.fromEntries(Object.entries(mapping || {}).filter(([field, index]) => allowed.has(field) && Number.isInteger(index) && index >= 0));
+  return effectiveMergeMapping(role, Object.fromEntries(Object.entries(mapping || {}).filter(([field, index]) => allowed.has(field) && Number.isInteger(index) && index >= 0)), sourceExtraFields.has(role));
 }
 
 let savedFinalSearchController = null;
@@ -2639,17 +2648,25 @@ function renderMapping(role) {
     const helper = `Подсказка: ${escapeHtml(suggestedHeader)} · совпадение ${detail?.recommendedConfidence || 0}%${examples}${alternatives}${reason}${warning}`;
     return `<label><span>${escapeHtml(FIELD_LABELS[field])}</span><select data-mapping-role="${role}" data-mapping-field="${field}"><option value="">Не использовать</option>${table.headers.map((header, index) => `<option value="${index}" ${Number(state.mappings[role][field]) === index ? "selected" : ""}>${escapeHtml(`${excelColumnLabel(index)} · ${header || `Колонка ${index + 1}`}`)}</option>`).join("")}</select><small class="mapping-hint">${helper}</small></label>`;
   }).join("")}${customColumns.map(({ key, label }) => mappingControl(key, label)).join("")}${isEngineerActive() ? `<div class="toolbar mapping-custom-field"><label>Новое пользовательское поле<input type="text" data-source-custom-label maxlength="60" autocomplete="off"></label><label>Колонка источника<select data-source-custom-column><option value="">Не указано</option>${table.headers.map((header, index) => `<option value="${index}">${escapeHtml(`${excelColumnLabel(index)} · ${header || `Колонка ${index + 1}`}`)}</option>`).join("")}</select></label><button class="button secondary" type="button" data-add-source-custom-field>Добавить поле</button></div>` : ""}`;
-  if (role === "smartroom") collapseSourceMapping(container, "[data-mapping-field]", "mappingField");
-  if (role === "main") collapseSourceMapping(container, "[data-mapping-field]", "mappingField", MAIN_PRIMARY_FIELDS, "Main");
-  container.querySelectorAll("select").forEach((select) => select.addEventListener("change", () => {
-    if (select.value === "") delete state.mappings[role][select.dataset.mappingField];
-    else state.mappings[role][select.dataset.mappingField] = Number(select.value);
+  const toggleExtras = (enabled) => {
+    if (enabled) sourceExtraFields.add(role); else sourceExtraFields.delete(role);
+    state.mappings[role] = allowedSourceMapping(role, state.mappings[role]);
     renderMapping(role);
+    persistSourceMappingPreference(role).catch(showError);
+  };
+  if (role === "smartroom") collapseSourceMapping(container, "[data-mapping-field]", "mappingField", SMARTROOM_DEFAULT_FIELDS, "SmartRoom", sourceExtraFields.has(role), toggleExtras);
+  if (role === "main") collapseSourceMapping(container, "[data-mapping-field]", "mappingField", MAIN_PRIMARY_FIELDS, "Main", sourceExtraFields.has(role), toggleExtras);
+  container.querySelectorAll("[data-mapping-field]").forEach((select) => select.addEventListener("change", () => {
+    const assigned = assignSourceMapping(state.mappings[role], select.dataset.mappingField, select.value);
+    state.mappings[role] = assigned.mapping;
+    renderMapping(role);
+    if (assigned.replaced.length) { const notice = document.createElement("p"); notice.textContent = `Колонка переназначена из: ${assigned.replaced.map((field) => FIELD_LABELS[field] || field).join(", ")}`; container.prepend(notice); }
     persistSourceMappingPreference(role).catch(showError);
   }));
   container.querySelector("[data-open-mapping-review]").addEventListener("click", () => openMappingReview(role));
   container.querySelector("[data-add-source-custom-field]")?.addEventListener("click", async () => {
     try {
+      if (role !== "ddio" && !sourceExtraFields.has(role)) throw new Error("Сначала включите галочку «Учитывать дополнительные поля»");
       const { config, mapping } = createCustomSourceFieldMapping(
         state.inventoryColumnConfig,
         state.mappings[role],
@@ -2683,7 +2700,7 @@ function openMappingReview(role) {
   const dialog = $("#mappingReviewDialog");
   const report = detectMappingReport(table.headers, table.rows, role);
   let draft = isSingle ? { ...state.singleFile.mapping } : allowedSourceMapping(role, state.mappings[role]);
-  const fields = isSingle ? SINGLE_FILE_FIELDS : ROLE_FIELDS[role];
+  const fields = isSingle ? SINGLE_FILE_FIELDS : !sourceExtraFields.has(role) && role !== "ddio" ? role === "main" ? MAIN_PRIMARY_FIELDS : SMARTROOM_DEFAULT_FIELDS : ROLE_FIELDS[role];
   const supportsCustomFields = !isSingle && ["main", "smartroom", "ddio"].includes(role);
   const roleLabel = isSingle ? "Анализ одного файла" : { main: "Основной файл", smartroom: "SmartRoom", ddio: "DDIO" }[role];
   const sourceFile = isSingle ? state.singleFile.file : state.sourceFiles[role];
@@ -2748,7 +2765,7 @@ function openMappingReview(role) {
   };
   $("#mappingReviewRecommendations").onclick = () => {
     const customMappings = Object.fromEntries(Object.entries(draft).filter(([field]) => /^custom_[0-9a-f-]{36}$/i.test(field)));
-    const recommendations = mappingRecommendationsWithoutReservedColumns(report, Object.values(customMappings));
+    const recommendations = isSingle ? mappingRecommendationsWithoutReservedColumns(report, Object.values(customMappings)) : effectiveMergeMapping(role, mappingRecommendationsWithoutReservedColumns(report, Object.values(customMappings)));
     draft = { ...recommendations, ...customMappings };
     render();
   };
@@ -4225,6 +4242,7 @@ function setSourceTable(role, file, table, { restored = false, restoredFrom = "�
   state.sourceFiles[role] = file;
   state.sourceTables[role] = table;
   const detected = detectMappingReport(table.headers, table.rows, role).mapping;
+  sourceExtraFields.delete(role);
   state.mappings[role] = allowedSourceMapping(role, restoreSourceMapping(table.headers, state.sourceMappingPreferences[role], detected));
   const rowSummary = table.preview
     ? `предпросмотр ${table.rows.length.toLocaleString("ru-RU")} строк; полный файл обработается потоком`
@@ -8554,6 +8572,7 @@ function batchMappingEditor(entry) {
 
 function refreshBatchValidation() {
   document.querySelectorAll('#batchView input[type="file"], #previewBatchButton, #batchPairingMode, #batchPairTolerance, #batchFailurePolicy, #batchPreview input, #batchPreview select, #batchPreview button').forEach((control) => { control.disabled = batchLaunchPending; });
+  document.querySelectorAll('#batchPreview .mapping-extra-fields select').forEach((control) => { control.disabled = batchLaunchPending || !control.closest('details').querySelector('[data-include-extra-fields]')?.checked; });
   state.batch.pairs.forEach((pair, index) => {
     const element = $(`[data-batch-problems="${index}"]`);
     if (!element) return;
@@ -8585,8 +8604,15 @@ function renderBatchPreview() {
     renderBatchPreview();
   });
   for (const panel of host.querySelectorAll(".batch-mapping")) {
-    if (panel.querySelector('[data-batch-entry-role="smartroom"]')) collapseSourceMapping(panel, "[data-batch-mapping-field]", "batchMappingField");
-    if (panel.querySelector('[data-batch-entry-role="main"]')) collapseSourceMapping(panel, "[data-batch-mapping-field]", "batchMappingField", MAIN_PRIMARY_FIELDS, "Main");
+    const control = panel.querySelector('[data-batch-entry-role]');
+    const role = control?.dataset.batchEntryRole;
+    const entry = state.batch.entries[role]?.find((item) => item.id === control.dataset.batchEntryId);
+    if (entry && ["main", "smartroom"].includes(role)) collapseSourceMapping(panel, "[data-batch-mapping-field]", "batchMappingField", role === "main" ? MAIN_PRIMARY_FIELDS : SMARTROOM_DEFAULT_FIELDS, role === "main" ? "Main" : "SmartRoom", entry.includeExtras === true, (enabled) => {
+      entry.includeExtras = enabled;
+      entry.mapping = effectiveMergeMapping(role, entry.mapping, enabled);
+      for (const pair of state.batch.pairs) if ([pair.main, pair.smartroom].includes(entry)) pair.reviewed = false;
+      renderBatchPreview();
+    });
   }
   host.querySelectorAll("[data-batch-pair-source]").forEach((select) => select.addEventListener("change", () => {
     reassignBatchSource(state.batch.pairs, state.batch.entries, Number(select.dataset.batchPairIndex), select.dataset.batchPairSource, select.value);
@@ -8595,11 +8621,12 @@ function renderBatchPreview() {
   host.querySelectorAll("[data-batch-mapping-field]").forEach((select) => select.addEventListener("change", () => {
     const entry = state.batch.entries[select.dataset.batchEntryRole].find((item) => item.id === select.dataset.batchEntryId);
     if (!entry) return;
-    if (select.value === "") delete entry.mapping[select.dataset.batchMappingField];
-    else entry.mapping[select.dataset.batchMappingField] = Number(select.value);
+    const assigned = assignSourceMapping(entry.mapping, select.dataset.batchMappingField, select.value);
+    entry.mapping = assigned.mapping;
+    if (assigned.replaced.length) $("#batchStartStatus").textContent = `Колонка переназначена из: ${assigned.replaced.map((field) => FIELD_LABELS[field] || field).join(", ")}`;
     const pair = state.batch.pairs.find((item) => [item.main, item.smartroom, item.ddio].some((source) => source?.id === entry.id));
     if (pair) pair.reviewed = false;
-    refreshBatchValidation();
+    renderBatchPreview();
   }));
   host.querySelectorAll("[data-batch-pair-reviewed]").forEach((input) => input.addEventListener("change", () => {
     state.batch.pairs[Number(input.dataset.batchPairReviewed)].reviewed = input.checked;
@@ -8709,6 +8736,11 @@ function setBatchFiles(role, files, { append = false, page = null } = {}) {
 
 async function startSelectedBatch() {
   if (!state.batch.pairs.length) await pairBatchFiles();
+  for (const pair of state.batch.pairs) for (const role of ["main", "smartroom"]) {
+    const entry = pair[role];
+    if (entry && entry.includeExtras !== true) { entry.includeExtras = false; entry.mapping = effectiveMergeMapping(role, entry.mapping); }
+  }
+  renderBatchPreview();
   const plan = batchStartPlan(state.batch.pairs, { smartroom: state.batch.smartroom.length, ddio: state.batch.ddio.length });
   if (plan.problems.length) throw new Error(plan.problems.slice(0, 20).join("\n") + (plan.problems.length > 20 ? `\nЕщё ошибок: ${plan.problems.length - 20}. Подробности доступны в сформированных парах.` : ""));
   const missing = Object.entries(plan.missingSources).filter(([, count]) => count > 0)
@@ -8755,7 +8787,7 @@ async function runBatch(pairs = state.batch.pairs, strategy = $("input[name='str
         } else {
           tables[role] = await readTable(entry.file);
         }
-        mappings[role] = { ...entry.mapping };
+        mappings[role] = effectiveMergeMapping(role, entry.mapping, entry.includeExtras === true);
       }
       stage = "объединение Main, SmartRoom и DDIO";
       const start = index / pairs.length * 100;

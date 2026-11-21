@@ -1,4 +1,4 @@
-import { detectMapping, fileObservationDate, readTablePreview } from "../data/importer.js";
+import { detectMapping, effectiveMergeMapping, FIELD_LABELS, fileObservationDate, readTablePreview } from "../data/importer.js";
 import { batchSourceFileRelativePath } from "./batch-directory-handles.js";
 
 export const BATCH_ROLES = Object.freeze(["main", "smartroom", "ddio"]);
@@ -154,7 +154,8 @@ export async function prepareBatchEntries(files = [], role, onProgress = () => {
           sheet: preview.sheet || "",
           workbookCreatedAt: preview.workbookCreatedAt || "",
           workbookModifiedAt: preview.workbookModifiedAt || "",
-          mapping: detectMapping(preview.headers, preview.rows, role),
+          mapping: effectiveMergeMapping(role, detectMapping(preview.headers, preview.rows, role)),
+          includeExtras: false,
           error: "",
         };
       } catch (error) {
@@ -347,6 +348,7 @@ export function unmatchedBatchEntries(pairs = [], entries = {}) {
 }
 
 export function batchMappingProblems(role, mapping = {}, entry = null) {
+  if (typeof entry?.includeExtras === "boolean") mapping = effectiveMergeMapping(role, mapping, entry.includeExtras);
   const problems = [];
   if (entry?.error) return [`${entry.file.name}: ${entry.error}`];
   if (role === "main" && entry?.rowCount === 0) problems.push("Main: основной файл не содержит строк устройств");
@@ -362,7 +364,16 @@ export function batchMappingProblems(role, mapping = {}, entry = null) {
     if (!reservation && !lease) problems.push("DDIO: выберите пару MAC/IP резервации или аренды");
   }
   const selected = Object.values(mapping).filter(Number.isInteger);
-  if (new Set(selected).size !== selected.length) problems.push(`${role}: одна колонка выбрана для нескольких полей`);
+  if (new Set(selected).size !== selected.length) {
+    const columns = new Map();
+    for (const [field, index] of Object.entries(mapping)) if (Number.isInteger(index)) {
+      if (!columns.has(index)) columns.set(index, []);
+      columns.get(index).push(FIELD_LABELS[field] || field);
+    }
+    const details = [...columns].filter(([, fields]) => fields.length > 1).slice(0, 5)
+      .map(([index, fields]) => `${entry?.headers?.[index] || `№${index + 1}`}: ${fields.join(", ")}`).join("; ");
+    problems.push(`${role}: одна колонка выбрана для нескольких полей (${details})`);
+  }
   return problems;
 }
 

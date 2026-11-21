@@ -12,3 +12,6 @@ __pycache__/
 Thumbs.db
 
 .codex-release-venv/
+
+database/*
+!database/README.md

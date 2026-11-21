@@ -523,6 +523,17 @@ if (process.argv.includes("--batch-direct-start-regression-only")) {
   await check("document.querySelector('#batchStartStatus').textContent.includes('Запуск отменён') && !document.querySelector('#runBatchButton').disabled", "Cancel automatic review");
   if (await evaluate("document.querySelectorAll('#batchPreview tr.batch-details-row').length") !== 2) throw new Error("Automatic pairing did not create both cycles");
   if (await evaluate("!!document.querySelector('[data-batch-entry-role=smartroom][data-batch-mapping-field=room]').closest('.mapping-extra-fields')")) throw new Error("Room is hidden in optional fields");
+  const optionalState = () => evaluate("(()=>{const field=document.querySelector('[data-batch-entry-role=smartroom][data-batch-mapping-field=hostname]');return{value:field.value,disabled:field.disabled,checked:field.closest('details').querySelector('[data-include-extra-fields]').checked}})()");
+  let extras = await optionalState();
+  if (extras.checked || extras.value || !extras.disabled) throw new Error("Optional source fields must start empty and disabled");
+  await evaluate("document.querySelector('[data-batch-entry-role=smartroom][data-batch-mapping-field=hostname]').closest('details').querySelector('[data-include-extra-fields]').click()");
+  extras = await optionalState();
+  if (!extras.checked || extras.value || extras.disabled) throw new Error("Enabling extras must not auto-select a column");
+  await evaluate("(()=>{const field=document.querySelector('[data-batch-entry-role=smartroom][data-batch-mapping-field=hostname]');field.value='6';field.dispatchEvent(new Event('change',{bubbles:true}));})()");
+  if (await evaluate("document.querySelector('[data-batch-entry-role=smartroom][data-batch-mapping-field=manufacturer]').value") !== "") throw new Error("Manual column reassignment retained a duplicate assignment");
+  await evaluate("(()=>{document.querySelector('[data-batch-entry-role=smartroom][data-batch-mapping-field=hostname]').closest('details').querySelector('[data-include-extra-fields]').click();const field=document.querySelector('[data-batch-entry-role=smartroom][data-batch-mapping-field=manufacturer]');field.value='6';field.dispatchEvent(new Event('change',{bubbles:true}));})()");
+  extras = await optionalState();
+  if (extras.checked || extras.value || !extras.disabled) throw new Error("Disabling extras must discard their source mapping");
   await evaluate("window.confirm=(message)=>{window.__directBatchPrompts.push(message);return true};document.querySelector('#runBatchButton').click();document.querySelector('#runBatchButton').click()");
   await check("document.querySelector('#batchStartStatus').textContent.includes('успешно 2, ошибок 0') && !document.querySelector('#runBatchButton').disabled", "Two cycles committed after direct start");
   const completed = await evaluate("({status:document.querySelector('#databaseStatus').textContent,prompts:window.__directBatchPrompts.length})");
@@ -547,10 +558,10 @@ if (process.argv.includes("--batch-direct-start-regression-only")) {
   await check("document.querySelector('#detailsDialog').open && document.querySelector('#detailsDialog tbody tr')", "Batch device detail");
   const detail = await evaluate("document.querySelector('#detailsDialog').textContent");
   for (const value of [address,"Переговорная","Кабинет","Model 2","192.168.1.51"]) if (!detail.includes(value)) throw new Error("Batch enrichment lost "+value);
-  await evaluate("document.querySelector('#detailsDialog').close();document.querySelector('[data-view=\"batch\"]').click();const room=document.querySelector('[data-batch-entry-role=smartroom][data-batch-mapping-field=room]');room.value='0';room.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#runBatchButton').click()");
+  await evaluate("document.querySelector('#detailsDialog').close();document.querySelector('[data-view=\"batch\"]').click();for(const field of ['mac','deviceId','serial','id','mac2']){const el=document.querySelector('[data-batch-entry-role=smartroom][data-batch-mapping-field='+field+']');el.value='';el.dispatchEvent(new Event('change',{bubbles:true}))}document.querySelector('#runBatchButton').click()");
   await wait(100);
   const blocked = await evaluate("({error:!document.querySelector('#errorBanner').hidden,status:document.querySelector('#batchStartStatus').textContent,snapshots:document.querySelector('#databaseStatus').textContent,prompts:window.__directBatchPrompts.length,enabled:!document.querySelector('#runBatchButton').disabled})");
-  if (!blocked.error || !blocked.status.includes("одна колонка") || !blocked.snapshots.includes("2 снимок объединения") || blocked.prompts!==2 || !blocked.enabled) throw new Error("Invalid batch mapping was not blocked with visible feedback: "+JSON.stringify(blocked));
+  if (!blocked.error || !blocked.status.includes("выберите") || !blocked.snapshots.includes("2 снимок объединения") || blocked.prompts!==2 || !blocked.enabled) throw new Error("Invalid batch mapping was not blocked with visible feedback: "+JSON.stringify(blocked));
   console.log(JSON.stringify({directBatchStart:true,completed,layout,exactMainCount:2,blockedInvalidMapping:blocked,ok:true}));
   await command("Browser.close");
   socket.close();
@@ -5732,6 +5743,7 @@ const ddioMappingReview = await evaluate(`(()=>{const allowed=['reservationMac',
 if (ddioMappingReview.actual.join("|") !== ddioMappingReview.allowed.join("|") || ddioMappingReview.mainIp !== "5" || Object.values(ddioMappingReview.ddio).join("|") !== "1|0|3|2") throw new Error(`DDIO UI exposed unexpected fields or did not retain the four reviewed mappings: ${JSON.stringify(ddioMappingReview)}`);
 await evaluate(`(()=>{const select=document.querySelector('[data-mapping-role="smartroom"][data-mapping-field="room"]');select.value="11";select.dispatchEvent(new Event('change',{bubbles:true}));return select.value;})()`);
 console.log("browser smoke: SmartRoom room mapping reviewed");
+await evaluate(`(()=>{document.querySelector('#smartroomMapping [data-include-extra-fields]').click();for(const[field,index]of Object.entries({mac2:1,businessUnit:7,city:8,site:9,floor:10})){const select=document.querySelector('[data-mapping-role=smartroom][data-mapping-field='+field+']');select.value=String(index);select.dispatchEvent(new Event('change',{bubbles:true}))}})()`);
 await evaluate(`document.querySelector('#runEnrichmentButton').click()`);
 console.log("browser smoke: import inputs dispatched and enrichment requested");
 const enrichmentConfirmation = await evaluate(`window.__smokeConfirmMessages?.[0]||""`);
@@ -6606,6 +6618,7 @@ const reassignDdIoResult = await evaluate(`(()=>{const selects=[...document.quer
 if (!reassignDdIoResult.moved[0] || reassignDdIoResult.moved[1] !== "" || reassignDdIoResult.restored.some((id) => !id)) throw new Error(`Переназначение DDIO создало дубли или не восстановило пару: ${JSON.stringify(reassignDdIoResult)}`);
 
 await evaluate(`(()=>{document.querySelector('[data-review-valid-batch]').click();const disabled=document.querySelector('[data-batch-pair-enabled="1"]');disabled.checked=false;disabled.dispatchEvent(new Event('change',{bubbles:true}));const state={enabled:document.querySelectorAll('[data-batch-pair-enabled]:checked').length,runDisabled:document.querySelector('#runBatchButton').disabled};disabled.checked=true;disabled.dispatchEvent(new Event('change',{bubbles:true}));if(state.enabled!==1||state.runDisabled)throw new Error('Отключение цикла неверно блокирует проверенную очередь');return true})()`);
+await evaluate(`(()=>{const room=[...document.querySelectorAll('[data-batch-entry-role=smartroom][data-batch-mapping-field=room]')].find(el=>el.value==='7');if(!room)throw new Error('Room fixture missing');const id=room.dataset.batchEntryId;room.closest('.batch-mapping').querySelector('[data-include-extra-fields]').click();for(const[field,index]of Object.entries({businessUnit:3,city:4,site:5,floor:6})){const el=[...document.querySelectorAll('[data-batch-mapping-field='+field+']')].find(el=>el.dataset.batchEntryId===id);el.value=String(index);el.dispatchEvent(new Event('change',{bubbles:true}))}document.querySelector('[data-review-valid-batch]').click()})()`);
 console.log("browser smoke: nearest/same-date modes, configurable tolerance, unassigned file visibility, source reassignment, disabled cycle and review gate verified");
 
 await evaluate(`(()=>{
