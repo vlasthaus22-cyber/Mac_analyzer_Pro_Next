@@ -762,7 +762,7 @@ function pyqtRoomDistributionChartItems(dataset = {}) {
       { label: "Устройств", value: summary.devices || 0 },
       { label: "Производителей", value: summary.uniqueVendors || 0 },
       { label: "Моделей", value: summary.uniqueModels || 0 },
-      { label: "Помещений", value: summary.uniqueRooms || 0 },
+      { label: "Помещений", value: payload?.roomOccupancy?.uniqueRooms ?? summary.uniqueRooms ?? 0 },
       { label: "Smartroom ID", value: summary.uniqueSmartrooms || 0 },
       { label: "Коммутаторов", value: summary.uniqueSwitches || 0 },
     ]);

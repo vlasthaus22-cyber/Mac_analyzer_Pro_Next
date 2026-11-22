@@ -1,4 +1,4 @@
-name: Publish prepared v2.3.15 release
+name: Publish prepared v2.3.15 analytics release
 
 on:
   push:

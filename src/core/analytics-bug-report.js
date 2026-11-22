@@ -1,5 +1,6 @@
 import { createUniqueAnalyticsDeviceFilter } from "./analytics.js";
 import { createDashboardDeviceMatcher } from "./dashboard-filter.js";
+import { pyqtVendorTopChartItems, pyqtRoomDistributionChartItems } from "./analytics-detail.js";
 import { hasKnownRoom, isFloorOnlyAddress, text as identityText, normalizeMac } from "./normalize.js";
 
 const KPI_KEYS = ["devices", "modified", "absent", "unchanged", "manufacturers", "rooms", "withoutRoom"];
@@ -56,7 +57,7 @@ export async function buildAnalyticsBugReport({ analytics, visitCurrentChunks, a
   const dataset = analytics?.dataset;
   lines.push(`dataset.devices=${count(dataset?.summary?.devices) ?? "недоступно"}`, `dataset.emptyRoom=${count(dataset?.roomOccupancy?.unassignedDevices) ?? "недоступно"}`,
     `status.devices=${count(analytics?.statusDataset?.summary?.devices) ?? "недоступно"}`);
-  for (const key of ["vendorTop", "roomTop", "changedFields", "absentVendors"]) lines.push(`chart.${key}=${count(chartCounts[key]) ?? "недоступно"}`);
+  for (const key of ["vendorTop", "roomTop", "roomOverview", "changedFields", "absentVendors"]) lines.push(`chart.${key}=${count(chartCounts[key]) ?? "недоступно"}`);
   lines.push("Топ производителей/помещений может содержать только первые категории; изменения по полям — число событий, не устройств.", "", "Сверка:");
   const checks = [];
   if (scanFailed) lines.push("BUG FINAL_SCAN: чтение Final завершилось ошибкой; счётчики scan могут быть неполными");
@@ -72,6 +73,12 @@ export async function buildAnalyticsBugReport({ analytics, visitCurrentChunks, a
   check("EMPTY_ROOM_DATASET", dataset?.roomOccupancy?.unassignedDevices, scan.emptyRoom);
   check("EMPTY_ROOM_UI", uiCounts.withoutRoom, scan.emptyRoom);
   check("DEVICES_UI", uiCounts.devices, !filtered && count(metadata?.mainUniqueMacs) !== null ? metadata.mainUniqueMacs : scan.selectedDevices);
+  const sum = (items = []) => items.reduce((total, item) => total + (count(item.value) ?? 0), 0);
+  check("ROOM_OVERVIEW", chartCounts.roomOverview, dataset?.roomOccupancy?.uniqueRooms);
+  check("VENDOR_CHART", chartCounts.vendorTop, dataset ? sum(pyqtVendorTopChartItems(dataset)) : null);
+  check("ROOM_CHART", chartCounts.roomTop, dataset ? sum(pyqtRoomDistributionChartItems(dataset)) : null);
+  check("FIELD_CHART", chartCounts.changedFields, analytics?.dashboardExportSummary ? sum(analytics.dashboardExportSummary.fieldChanges) : null);
+  check("ABSENT_CHART", chartCounts.absentVendors, analytics?.dashboardExportSummary ? sum(analytics.dashboardExportSummary.absentVendors) : null);
   for (const key of ["modified", "absent", "unchanged"]) {
     check(`LIST_${key.toUpperCase()}`, listCounts[key], analytics?.kpis?.[key]);
     check(`UI_${key.toUpperCase()}`, uiCounts[key], listCounts[key]);

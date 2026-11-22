@@ -519,6 +519,8 @@ async function showAnalyticsBugReport() {
       }
     }
     const chartCounts = {};
+    const roomOverview = [...$("#datasetOverview").querySelectorAll(".bar-item")].find((row) => row.querySelector(".bar-label span")?.textContent === "Помещений")?.querySelector("strong")?.textContent.replace(/\s/g, "");
+    if (/^\d+$/.test(roomOverview || "")) chartCounts.roomOverview = Number(roomOverview);
     for (const [key, id] of [["vendorTop", "pyqtVendorTopChart"], ["roomTop", "pyqtRoomDistributionChart"], ["changedFields", "dashboardStatusFieldsChart"], ["absentVendors", "dashboardStatusAbsentChart"]]) {
       const values = globalThis.Chart?.getChart?.($("#" + id))?.data?.datasets?.[0]?.data;
       if (Array.isArray(values) && values.every((value) => Number.isSafeInteger(value) && value >= 0)) chartCounts[key] = values.reduce((sum, value) => sum + value, 0);

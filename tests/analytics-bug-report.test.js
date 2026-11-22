@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildAnalyticsBugReport } from "../src/core/analytics-bug-report.js";
 import { Database } from "../src/data/database.js";
-import { build as buildDataset } from "../src/core/analytics-detail.js";
+import { build as buildDataset, renderOverview } from "../src/core/analytics-detail.js";
 import { detectMappingReport, effectiveMergeMapping } from "../src/data/importer.js";
 import { normalizeDevice } from "../src/core/normalize.js";
 import { enrich } from "../src/core/enrichment.js";
@@ -83,4 +83,18 @@ test("local report remains downloadable when Final or comparison cannot be read"
   assert.match(result.text, /BUG FINAL_SCAN/);
   assert.match(result.text, /BUG COMPARISON_SCAN/);
   assert.doesNotMatch(result.text, /secret imported text/);
+});
+
+test("room overview agrees with named-room roster while SmartRoom IDs remain a separate metric", async () => {
+  const dataset = buildDataset([{ mac: "00:11:22:33:44:55", room: "", smartroomId: "ROOM-ID" }]);
+  assert.equal(dataset.roomOccupancy.uniqueRooms, 0);
+  assert.equal(dataset.roomOccupancy.unassignedDevices, 1);
+  assert.match(renderOverview(dataset), /Помещений<\/span><strong>0<\/strong>/);
+  assert.match(renderOverview(dataset), /Smartroom ID<\/span><strong>1<\/strong>/);
+  const report = await buildAnalyticsBugReport({
+    analytics: { dataset }, chartCounts: { roomOverview: 1 },
+    visitCurrentChunks: async (visit) => { visit([{ mac: "00:11:22:33:44:55", room: "", smartroomId: "ROOM-ID" }]); return { deviceCount: 1 }; },
+  });
+  assert.equal(report.mismatchCount, 1);
+  assert.match(report.text, /BUG ROOM_OVERVIEW: 1 \/ 0/);
 });
