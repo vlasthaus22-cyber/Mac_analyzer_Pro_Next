@@ -32,7 +32,11 @@ export function buildAnalyticsDashboardExportModel(analytics, settings) {
   const previousTotal = totals.at(-2)?.value || 0;
   const currentTotal = totals.at(-1)?.value || 0;
   const changePercent = previousTotal ? ((currentTotal - previousTotal) / previousTotal) * 100 : currentTotal ? 100 : 0;
-  const vendors = series((analytics.statusDataset || analytics.dataset)?.charts?.vendors);
+  const status = filters.status || "all";
+  const vendors = series(status === "all" ? analytics.dataset?.charts?.vendors : exportSummary.statusVendors).slice(0, 10);
+  const statusLabel = { all: "Все устройства", changed: "Изменённые", missing: "Отсутствующие", unchanged: "Без изменений" }[status];
+  const statusTotal = status === "all" ? analytics.dataset?.summary?.devices ?? analytics.kpis.devices : analytics.kpis[{ changed: "modified", missing: "absent", unchanged: "unchanged" }[status]];
+  const shown = vendors.reduce((sum, item) => sum + item.value, 0);
   const fieldChanges = series(exportSummary.fieldChanges);
   const absentVendors = series(exportSummary.absentVendors);
   const charts = [
@@ -44,7 +48,7 @@ export function buildAnalyticsDashboardExportModel(analytics, settings) {
       datasets: [{ label: "Устройств", tone: "primary", values: totals.map((item) => item.value) }],
       summary: `Было ${previousTotal.toLocaleString("ru-RU")}, стало ${currentTotal.toLocaleString("ru-RU")} (${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(1)}%)`,
     },
-    { key: "chart:vendors", type: "bar", title: "Топ производителей выбранного статуса", categoryHeading: "Производитель", items: vendors },
+    { key: "chart:vendors", type: "bar", title: "Топ производителей выбранного статуса", categoryHeading: "Производитель", summary: `${statusLabel} · на графике ${shown.toLocaleString("ru-RU")} из ${Number(statusTotal).toLocaleString("ru-RU")} устройств`, items: vendors },
     {
       key: "chart:fields",
       type: "bar",

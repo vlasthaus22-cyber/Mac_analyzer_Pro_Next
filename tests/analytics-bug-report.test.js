@@ -19,7 +19,7 @@ test("local bug report reads all Final chunks and excludes imported text and err
   let chunks = 0;
   const dataset = buildDataset(devices);
   const result = await buildAnalyticsBugReport({
-    analytics: { dataset, statusDataset: buildDataset([]), dashboardFilters: { status: "missing" } },
+    analytics: { dataset, kpis: { absent: 0 }, dashboardFilters: { status: "missing" } },
     uiCounts: { devices: 1207, withoutRoom: 600 },
     visitCurrentChunks: (visit) => database.forEachSnapshotChunk("secret-snapshot", (rows) => { chunks++; return visit(rows); }),
     applicationLog: [{ event: "ui_error", errorName: "TypeError", message: "secret-password" }, { event: "secret-event", errorName: "secret-token" }],
@@ -30,6 +30,21 @@ test("local bug report reads all Final chunks and excludes imported text and err
   assert.match(result.text, /OK EMPTY_ROOM_UI: 600 \/ 600/);
   assert.match(result.text, /status.devices=0/);
   assert.doesNotMatch(result.text, /secret-|192\.0\.2\.19|02:00:/);
+});
+
+test("a historical comparison audits its own dataset and the active Final room card separately", async () => {
+  const oldRows = [{ id: "old-a" }, { id: "old-b" }];
+  const dataset = buildDataset(oldRows);
+  const report = await buildAnalyticsBugReport({
+    analytics: { dataset, dashboardFilters: { status: "missing" }, kpis: { absent: 2 }, dashboardExportSummary: { statusVendors: [{ label: "Sample", value: 2 }] } },
+    uiCounts: { withoutRoom: 1 }, chartCounts: { statusVendors: 2 },
+    visitCurrentChunks: async (visit) => { visit(oldRows); return { deviceCount: 2 }; },
+    visitLatestChunks: async (visit) => visit([{ id: "new-a", room: "Known" }, { id: "new-b" }]),
+  });
+  assert.equal(report.mismatchCount, 0);
+  assert.match(report.text, /OK EMPTY_ROOM_DATASET: 2 \/ 2/);
+  assert.match(report.text, /OK EMPTY_ROOM_UI: 1 \/ 1/);
+  assert.match(report.text, /OK STATUS_VENDOR_CHART: 2 \/ 2/);
 });
 
 test("local bug report flags status roster replacing Final and a floor fragment", async () => {

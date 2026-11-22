@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.3.16 — 2026-11-22
+
+- Карточка «Без помещения» и список устройств используют последний успешный Final при любой выбранной паре сравнения.
+- Топ-10 производителей учитывает устройства выбранного статуса. Подпись показывает, сколько устройств попало на график.
+- Отчёт TXT отдельно сверяет последний Final, выбранный снимок и график производителей.
+- После создания архива отображается отметка с датой и временем. Она сохраняется после перезапуска. Отмена и ошибка записи сохраняют предыдущую успешную отметку.
+
 ## v2.3.15 — 2026-11-22
 
 - Full current-Final cards, occupancy, topology and exports no longer use the selected comparison-status roster. Status vendor charts retain their own aggregate; field-change and absence charts retain the complete comparison.

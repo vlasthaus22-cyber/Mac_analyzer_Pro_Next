@@ -10,20 +10,21 @@ const count = (value) => Number.isSafeInteger(value) && value >= 0 ? value : nul
 
 // Explicit numeric allowlists are intentional: never serialize metadata, filters,
 // exceptions or imported records into a report intended to leave a closed network.
-export async function buildAnalyticsBugReport({ analytics, visitCurrentChunks, applicationLog = [], uiCounts = {}, chartCounts = {}, listCounts = {}, comparisonReadFailures = 0 }) {
+export async function buildAnalyticsBugReport({ analytics, visitCurrentChunks, visitLatestChunks, applicationLog = [], uiCounts = {}, chartCounts = {}, listCounts = {}, comparisonReadFailures = 0 }) {
   const filters = analytics?.dashboardFilters || {};
   const filtered = Boolean(filters.query || filters.manufacturer || filters.room);
   const matches = createDashboardDeviceMatcher(filters);
   const unique = createUniqueAnalyticsDeviceFilter();
+  const uniqueSelected = filtered ? createUniqueAnalyticsDeviceFilter() : null;
   const mainMacs = new Set();
   const scan = { rows: 0, uniqueDevices: 0, selectedDevices: 0, emptyRoom: 0, idWithoutRoom: 0, emptyAddress: 0, floorOnlyAddress: 0, fullerAddressAvailable: 0 };
   let scanFailed = false;
   const metadata = await visitCurrentChunks((chunk) => {
     scan.rows += chunk.length;
     for (const device of chunk) {
-      if (!unique(device)) continue;
-      scan.uniqueDevices++;
-      if (!matches(device)) continue;
+      const first = unique(device);
+      if (first) scan.uniqueDevices++;
+      if (!matches(device) || !(uniqueSelected ? uniqueSelected(device) : first)) continue;
       scan.selectedDevices++;
       for (const value of device.mainMacs || (device.sources?.includes("Main") ? [device.mac] : [])) {
         const mac = normalizeMac(value);
@@ -41,6 +42,17 @@ export async function buildAnalyticsBugReport({ analytics, visitCurrentChunks, a
       }
     }
   }).catch(() => { scanFailed = true; return null; });
+  let latestEmptyRoom = scanFailed ? null : scan.emptyRoom;
+  let latestScanFailed = false;
+  if (visitLatestChunks) {
+    latestEmptyRoom = 0;
+    const uniqueLatest = createUniqueAnalyticsDeviceFilter();
+    try {
+      await visitLatestChunks((chunk) => {
+        for (const row of chunk) if (matches(row) && uniqueLatest(row) && !hasKnownRoom(row)) latestEmptyRoom++;
+      });
+    } catch { latestScanFailed = true; latestEmptyRoom = null; }
+  }
   const appVersion = /^\d+\.\d+\.\d+$/.test(globalThis.__MAC_ANALYZER_APP_VERSION__ || "") ? globalThis.__MAC_ANALYZER_APP_VERSION__ : "сборка из исходников";
   const lines = ["MAC Analyzer Pro Next — отчёт проверки аналитики", `Версия: ${appVersion}`, "Формат: analytics-audit-1", `Создан: ${new Date().toISOString()}`,
     "Содержит только счётчики и типы ошибок. Строки устройств, идентификаторы, адреса, имена файлов, тексты поиска и ошибок не включаются.",
@@ -55,11 +67,15 @@ export async function buildAnalyticsBugReport({ analytics, visitCurrentChunks, a
   for (const key of ["addedCount", "absentCount", "modifiedDeviceCount", "unchangedCount", "ambiguousCount", "identityConflictCount"]) lines.push(`comparison.${key}=${count(analytics?.comparison?.[key]) ?? "недоступно"}`);
   for (const key of ["modified", "absent", "unchanged"]) lines.push(`list.${key}=${count(listCounts[key]) ?? "недоступно"}`);
   const dataset = analytics?.dataset;
+  const status = filters.status || "all";
+  const statusCount = status === "all" ? dataset?.summary?.devices : analytics?.kpis?.[{ changed: "modified", missing: "absent", unchanged: "unchanged" }[status]];
+  lines.push(`latest.emptyRoom=${latestEmptyRoom ?? "недоступно"}`);
   lines.push(`dataset.devices=${count(dataset?.summary?.devices) ?? "недоступно"}`, `dataset.emptyRoom=${count(dataset?.roomOccupancy?.unassignedDevices) ?? "недоступно"}`,
-    `status.devices=${count(analytics?.statusDataset?.summary?.devices) ?? "недоступно"}`);
-  for (const key of ["vendorTop", "roomTop", "roomOverview", "changedFields", "absentVendors"]) lines.push(`chart.${key}=${count(chartCounts[key]) ?? "недоступно"}`);
+    `status.devices=${count(statusCount) ?? "недоступно"}`);
+  for (const key of ["statusVendors", "vendorTop", "roomTop", "roomOverview", "changedFields", "absentVendors"]) lines.push(`chart.${key}=${count(chartCounts[key]) ?? "недоступно"}`);
   lines.push("Топ производителей/помещений может содержать только первые категории; изменения по полям — число событий, не устройств.", "", "Сверка:");
   const checks = [];
+  if (latestScanFailed) lines.push("BUG LATEST_SCAN: не удалось прочитать последний Final");
   if (scanFailed) lines.push("BUG FINAL_SCAN: чтение Final завершилось ошибкой; счётчики scan могут быть неполными");
   if (count(comparisonReadFailures) > 0) lines.push(`BUG COMPARISON_SCAN: не удалось прочитать списки сравнения (${comparisonReadFailures})`);
   const check = (code, actual, expected) => {
@@ -71,11 +87,13 @@ export async function buildAnalyticsBugReport({ analytics, visitCurrentChunks, a
   check("FINAL_ROWS", scan.rows, metadata?.deviceCount);
   check("DATASET_CURRENT_FINAL", dataset?.summary?.devices, scan.selectedDevices);
   check("EMPTY_ROOM_DATASET", dataset?.roomOccupancy?.unassignedDevices, scan.emptyRoom);
-  check("EMPTY_ROOM_UI", uiCounts.withoutRoom, scan.emptyRoom);
+  check("EMPTY_ROOM_UI", uiCounts.withoutRoom, latestEmptyRoom);
   check("DEVICES_UI", uiCounts.devices, !filtered && count(metadata?.mainUniqueMacs) !== null ? metadata.mainUniqueMacs : scan.selectedDevices);
   const sum = (items = []) => items.reduce((total, item) => total + (count(item.value) ?? 0), 0);
   check("ROOM_OVERVIEW", chartCounts.roomOverview, dataset?.roomOccupancy?.uniqueRooms);
   check("VENDOR_CHART", chartCounts.vendorTop, dataset ? sum(pyqtVendorTopChartItems(dataset)) : null);
+  const statusVendors = status === "all" ? dataset?.charts?.vendors : analytics?.dashboardExportSummary?.statusVendors;
+  check("STATUS_VENDOR_CHART", chartCounts.statusVendors, statusVendors ? sum(statusVendors.slice(0, 10)) : null);
   check("ROOM_CHART", chartCounts.roomTop, dataset ? sum(pyqtRoomDistributionChartItems(dataset)) : null);
   check("FIELD_CHART", chartCounts.changedFields, analytics?.dashboardExportSummary ? sum(analytics.dashboardExportSummary.fieldChanges) : null);
   check("ABSENT_CHART", chartCounts.absentVendors, analytics?.dashboardExportSummary ? sum(analytics.dashboardExportSummary.absentVendors) : null);
@@ -88,5 +106,5 @@ export async function buildAnalyticsBugReport({ analytics, visitCurrentChunks, a
   lines.push("", "Журнал технических ошибок (последние 100):");
   for (const entry of applicationLog.slice(-100)) lines.push(`event=${entry.event === "ui_error" ? "ui_error" : "other"}; type=${ERROR_NAMES.has(entry.errorName) ? entry.errorName : "Other"}`);
   lines.push("", "Исходные файлы не перечитываются этой проверкой. Счётчики импорта берутся из сохранённой диагностики; полная сверка с источником требует повторного объединения в закрытом сегменте.");
-  return { text: lines.join("\n"), mismatchCount: checks.filter(({ ok }) => !ok).length + Number(scan.fullerAddressAvailable > 0) + Number(scanFailed) + Number(comparisonReadFailures > 0) };
+  return { text: lines.join("\n"), mismatchCount: checks.filter(({ ok }) => !ok).length + Number(scan.fullerAddressAvailable > 0) + Number(scanFailed) + Number(latestScanFailed) + Number(comparisonReadFailures > 0) };
 }

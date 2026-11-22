@@ -235,7 +235,7 @@ test("analytics dataset falls back to snapshot chunks when no loaded payload is 
 
   assert.equal(source, "chunks");
   assert.deepEqual(visited, ["selected-final"]);
-  assert.deepEqual(offsets, [0, 500]);
+  assert.deepEqual(offsets, [0, 1]);
   assert.equal(accepted.length, 2);
 });
 

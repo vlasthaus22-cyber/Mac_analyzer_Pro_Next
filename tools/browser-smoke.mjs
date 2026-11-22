@@ -208,8 +208,7 @@ async function reloadDatabaseAndWait(expectedDatabase) {
   throw new Error(`Browser did not restore ready database ${expectedDatabase} after reload`);
 }
 
-async function importDeviceArchiveAndVerify(expectedDatabase, expectedActiveSnapshotId) {
-  await wait(1500);
+async function openArchiveDataView() {
   const engineerActive = await evaluate(`document.querySelector('#engineeringModeButton')?.textContent.includes('Инженер')`);
   if (!engineerActive) {
     await evaluate(`document.querySelector('#engineeringModeButton')?.click()`);
@@ -230,6 +229,11 @@ async function importDeviceArchiveAndVerify(expectedDatabase, expectedActiveSnap
     if (dataImportReady) break;
   }
   if (!dataImportReady) throw new Error("Data view did not mount the archive import input after profile reload");
+}
+
+async function importDeviceArchiveAndVerify(expectedDatabase, expectedActiveSnapshotId) {
+  await wait(1500);
+  await openArchiveDataView();
   await evaluate(`(()=>{const archive={format:'mac-analyzer-devices-json',version:2,exportedAt:'2026-10-15T12:00:00.000Z',devices:[{internalDeviceId:'DEVICE-TRANSFER-SMOKE',mac:'00:11:22:33:44:62',vendor:'Device Transfer Vendor',model:'Transfer Model'}]};const input=document.querySelector('#importDatabaseInput');if(!input)throw new Error('Data import input is not mounted');const transfer=new DataTransfer();transfer.items.add(new File([JSON.stringify(archive)],'device-transfer.macarchive.json',{type:'application/json'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));return input.files[0]?.name})()`);
   let state = null;
   let lastUiError = "";
@@ -621,7 +625,9 @@ if (process.argv.includes("--address-roster-regression-only")) {
   const smartRows = Array.from({length:104}, (_,i) => [macAt(i), address, i ? "Переговорная 2" : "", i ? "SR-"+i : ""].join(";"));
   for (let run=1;run<=2;run+=1) {
     await assignInput("#mainFileInput", "address-main-"+run+".csv", "MAC;Device ID;NasIP;Smartroom ID;NasPortID\n"+mainRows.join("\n"));
-    await assignInput("#smartroomFileInput", "address-smartroom-"+run+".csv", "MAC;Адрес локации;Название комнаты;Smartroom ID\n"+smartRows.join("\n"));
+    const runRooms = smartRows.slice();
+    if (run === 1) runRooms[1] = [macAt(1), address, "", "SR-1"].join(";");
+    await assignInput("#smartroomFileInput", "address-smartroom-"+run+".csv", "MAC;Адрес локации;Название комнаты;Smartroom ID\n"+runRooms.join("\n"));
     await check("[...document.querySelectorAll('[data-mapping-role=smartroom][data-mapping-field]')].filter(el=>!el.closest('details:not([open])')).length===10", "Primary SmartRoom fields include room");
     await evaluate("document.querySelector('[data-mapping-role=smartroom][data-mapping-field=locationPath]').closest('details').querySelector('summary').click()");
     await check("document.querySelector('[data-mapping-role=smartroom][data-mapping-field=locationPath]').getClientRects().length>0", "Optional SmartRoom fields expand");
@@ -656,7 +662,7 @@ if (process.argv.includes("--address-roster-regression-only")) {
   const pageTwo=await evaluate("[...document.querySelectorAll('#detailsDialog tbody tr:not([data-virtual-spacer]) [data-device-field=\"mac\"]')].map(e=>e.textContent.trim())");
   if(pageTwo.length!==4 || pageTwo.some(mac=>mainDetail.macs.includes(mac))) throw new Error("Main roster page repeated or dropped MACs: "+JSON.stringify(pageTwo));
   await evaluate("document.querySelector('#detailsDialog').close();document.querySelector('#analyticsKpis [data-kpi=\"withoutRoom\"]').click()");
-  await check("document.querySelector('#detailsDialog').open && document.querySelector('#detailsDialog [data-dialog-title]').textContent==='Устройства без помещения'", "Without-room details");
+  await check("document.querySelector('#detailsDialog').open && document.querySelector('#detailsDialog [data-dialog-title]').textContent.startsWith('Устройства без помещения')", "Without-room details");
   await check("document.querySelector('#detailsDialog tbody tr')", "Without-room rows");
   const missing=await evaluate("({text:document.querySelector('#detailsDialog').textContent,rows:document.querySelectorAll('#detailsDialog tbody tr:not([data-virtual-spacer])').length})");
   if(missing.rows!==1 || !missing.text.includes("Unknown1")) throw new Error("Without-room list disagrees with KPI: "+JSON.stringify(missing));
@@ -672,6 +678,23 @@ if (process.argv.includes("--address-roster-regression-only")) {
   if(!archived.includes("2 снимок объединения")) throw new Error("Archive inclusion duplicated snapshots: "+archived);
   const reloaded=await reloadDatabaseAndWait(new URL(target.url).searchParams.get("db"));
   await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#analyticsKpis [data-kpi=\"devices\"] strong')?.textContent.trim()==='104'", "Automatic database reload");
+  await evaluate("document.querySelector('#currentSnapshotSelect').selectedIndex=1;document.querySelector('#applyComparisonButton').click()");
+  await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#roomOccupancyStatus').textContent.includes('без помещения 2')", "Historical Final has two devices without rooms");
+  await check("document.querySelector('#analyticsKpis [data-kpi=withoutRoom] strong').textContent.trim()==='1'", "Room card still uses last successful Final");
+  await evaluate("document.querySelector('#analyticsKpis [data-kpi=withoutRoom]').click()");
+  await check("document.querySelector('#detailsDialog .detail-count strong')?.textContent==='1'", "Historical comparison opens latest room roster");
+  await evaluate("document.querySelector('#detailsDialog').close()");
+  await openArchiveDataView();
+  await check("document.querySelector('#lastArchiveReceipt').textContent.includes('Address regression')", "Local archive receipt survived restart");
+  await evaluate(`window.__archiveParts=[];Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:async()=>({createWritable:async()=>new WritableStream({write(part){window.__archiveParts.push(part)},close(){window.__archiveBlob=new Blob(window.__archiveParts)}})})});document.querySelector('#exportDatabaseButton').click()`);
+  const receipt = await check("document.querySelector('#lastArchiveReceipt').textContent.includes('Переносимый архив Next записан на диск') && document.querySelector('#lastArchiveReceipt').textContent", "Portable archive receipt after file close");
+  const format = await evaluate("(async()=>JSON.parse(await window.__archiveBlob.text()).format)()");
+  if (format !== "MAC_ANALYZER_NEXT_ARCHIVE") throw new Error("Archive receipt without a complete portable archive");
+  await evaluate("Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:async()=>{throw new DOMException('cancel','AbortError')}});document.querySelector('#exportDatabaseButton').click()");
+  await check("document.querySelector('#portableArchiveStatus').textContent.includes('отменено')", "Cancelled archive");
+  await evaluate("Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:async()=>({createWritable:async()=>new WritableStream({write(){throw new Error('write failed')}})})});document.querySelector('#exportDatabaseButton').click()");
+  await check("document.querySelector('#portableArchiveStatus').textContent.includes('Не удалось')", "Failed archive write");
+  if (await evaluate("document.querySelector('#lastArchiveReceipt').textContent") !== receipt) throw new Error("Failed or cancelled export replaced receipt");
   console.log(JSON.stringify({addressRosterRegression:true,mainCount:104,pageTwo,missing,ambiguous,archived,reloaded,ok:true}));
   await command("Browser.close");
   socket.close();

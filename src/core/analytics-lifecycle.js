@@ -138,10 +138,11 @@ export async function feedAnalyticsDatasetRows({ snapshotId = "", devices, visit
     return "payload";
   }
   if (!snapshotId || typeof visitChunks !== "function") return "empty";
-  await visitChunks(snapshotId, async (chunk, chunkIndex = 0, ...metadata) => {
+  let startOffset = 0;
+  await visitChunks(snapshotId, async (chunk, _chunkIndex, ...metadata) => {
     if (!isCurrent()) return false;
-    const startOffset = Number.isInteger(chunkIndex) ? chunkIndex * 500 : 0;
     await accept(chunk, startOffset, ...metadata);
+    startOffset += chunk.length;
     return isCurrent();
   });
   return isCurrent() ? "chunks" : "stale";

@@ -1,4 +1,4 @@
-name: Publish prepared v2.3.15 analytics release
+name: Publish prepared v2.3.16 analytics release
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: publish-v2.3.15
+  group: publish-v2.3.16
   cancel-in-progress: false
 
 jobs:
@@ -42,9 +42,9 @@ jobs:
       - name: Verify existing draft and version
         shell: pwsh
         run: |
-          if ((Get-Content package.json | ConvertFrom-Json).version -ne '2.3.15') { throw 'Unexpected application version' }
-          $release = gh api repos/$env:GH_REPO/releases/454252083 | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or !$release.draft -or $release.tag_name -ne 'v2.3.15') { throw 'Expected unpublished v2.3.15 draft' }
+          if ((Get-Content package.json | ConvertFrom-Json).version -ne '2.3.16') { throw 'Unexpected application version' }
+          $release = gh api repos/$env:GH_REPO/releases/454410763 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or !$release.draft -or $release.tag_name -ne 'v2.3.16') { throw 'Expected unpublished v2.3.16 draft' }
       - name: Install build dependencies
         shell: pwsh
         run: |
@@ -59,12 +59,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/check-release-readiness.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify latest Final, vendor chart and archive receipt in Edge
+        shell: pwsh
+        run: |
+          $id = [guid]::NewGuid().ToString('N')
+          $profile = Join-Path $env:RUNNER_TEMP "edge-archive-$id"
+          $url = ([uri](Resolve-Path 'dist/MAC-Analyzer-Pro-Next.html').Path).AbsoluteUri + "?db=mac-analyzer-pro-next-test-$id"
+          Start-Process 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' -WindowStyle Hidden -ArgumentList @('--headless=new', '--disable-gpu', '--no-first-run', '--remote-allow-origins=*', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=9357', "--user-data-dir=$profile", $url)
+          node tools/browser-smoke.mjs 9357 $url --address-roster-regression-only
+          exit $LASTEXITCODE
       - name: Upload complete program and checksums
         shell: pwsh
         run: |
-          gh release upload v2.3.15 dist/MAC-Analyzer-Pro-Next-full.zip dist/MAC-Analyzer-Pro-Next-full.zip.sha256 dist/MAC-Analyzer-Pro-Next.html dist/MAC-Analyzer-Pro-Next.html.sha256 dist/MAC-Analyzer-Pro-Next-Host.exe dist/MAC-Analyzer-Pro-Next-Host.exe.sha256 --clobber
+          gh release upload v2.3.16 dist/MAC-Analyzer-Pro-Next-full.zip dist/MAC-Analyzer-Pro-Next-full.zip.sha256 dist/MAC-Analyzer-Pro-Next.html dist/MAC-Analyzer-Pro-Next.html.sha256 dist/MAC-Analyzer-Pro-Next-Host.exe dist/MAC-Analyzer-Pro-Next-Host.exe.sha256 --clobber
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $release = gh api repos/$env:GH_REPO/releases/454252083 | ConvertFrom-Json
+          $release = gh api repos/$env:GH_REPO/releases/454410763 | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $release.assets.Count -ne 6) { throw 'Expected six release assets' }
           foreach ($asset in $release.assets) {
             $local = Join-Path dist $asset.name
@@ -76,5 +85,5 @@ jobs:
       - name: Publish stable release
         shell: pwsh
         run: |
-          gh api --method PATCH repos/$env:GH_REPO/releases/454252083 -f tag_name=v2.3.15 -f "target_commitish=$env:GITHUB_SHA" -F draft=false -F prerelease=false -f make_latest=true --jq .html_url
+          gh api --method PATCH repos/$env:GH_REPO/releases/454410763 -f tag_name=v2.3.16 -f "target_commitish=$env:GITHUB_SHA" -F draft=false -F prerelease=false -f make_latest=true --jq .html_url
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

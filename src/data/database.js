@@ -21,7 +21,7 @@ import { BATCH_DIRECTORY_ROLES, batchDirectoryHandleKey, createBatchDirectoryHan
 import { mergeInventoryObservations } from "../core/inventory-merge.js";
 import { compareSnapshotHistoryMetadata, SnapshotHistorySignatureAccumulator, snapshotCreatedAtSortKey } from "../core/snapshot-history-signature.js";
 import { roomHistoryFallbackKey } from "../core/room-history.js";
-import { createUniqueAnalyticsDeviceFilter } from "../core/analytics.js";
+import { createUniqueAnalyticsDeviceFilter, topCountRows } from "../core/analytics.js";
 
 const TEST_DB_NAME_PATTERN = /^mac-analyzer-pro-next-test-[a-z0-9-]{8,80}$/i;
 const PROFILE_DB_NAME_PATTERN = /^mac-analyzer-pro-next-profile-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -4291,11 +4291,17 @@ export class Database {
     const devices = [];
     let total = 0;
     let position = 0;
+    const vendors = new Map();
+    const models = new Map();
     const uniqueDevice = createUniqueAnalyticsDeviceFilter();
     await this.forEachSnapshotChunk(id, (chunk) => {
       for (const device of chunk) {
         const currentPosition = position++;
         if ((positionMask && positionMask[currentPosition] !== positionValue) || !matchesFilters(device) || !uniqueDevice(device) || hasKnownRoom(device)) continue;
+        const vendor = text(device.manufacturer) || text(device.vendor) || "Unknown";
+        const model = text(device.model) || "Unknown";
+        vendors.set(vendor, (vendors.get(vendor) || 0) + 1);
+        models.set(model, (models.get(model) || 0) + 1);
         total += 1;
         if (total > offset && devices.length < pageSize) devices.push(device);
       }
@@ -4306,6 +4312,8 @@ export class Database {
     return {
       devices,
       total,
+      vendors: topCountRows(vendors, 50),
+      models: topCountRows(models, 50),
       page: boundedPage,
       pageCount,
       hasPrevious: boundedPage > 1,

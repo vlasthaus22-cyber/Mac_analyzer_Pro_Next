@@ -494,22 +494,33 @@ function showError(error) {
   database.recordApplicationLog("ui_error", errorName).catch(() => {});
 }
 
+let displayedDashboard = null;
+
 async function showAnalyticsBugReport() {
   const button = $("#analyticsBugReportButton");
   button.disabled = true;
-  const analytics = state.analytics;
-  const snapshotId = analytics?.current?.id || state.snapshotMetadata.at(-1)?.id;
+  const analytics = displayedDashboard;
+  const latestId = analytics?.unassignedSnapshot?.id || state.activeSnapshot?.id;
+  const snapshotId = analytics?.current?.id || latestId || state.snapshotMetadata.at(-1)?.id;
   const uiCounts = {};
-  if (analytics?.detailsReady) {
+  if (analytics) {
     for (const key of ["devices", "modified", "absent", "unchanged", "manufacturers", "rooms", "withoutRoom"]) {
       const value = $("#analyticsKpis")?.querySelector(`[data-kpi="${key}"] strong`)?.textContent?.replace(/\s/g, "");
       if (/^\d+$/.test(value || "")) uiCounts[key] = Number(value);
     }
   }
   try {
+    const chartCounts = {};
+    const roomOverview = [...$("#datasetOverview").querySelectorAll(".bar-item")].find((row) => row.querySelector(".bar-label span")?.textContent === "Помещений")?.querySelector("strong")?.textContent.replace(/\s/g, "");
+    if (/^\d+$/.test(roomOverview || "")) chartCounts.roomOverview = Number(roomOverview);
+    for (const [key, id] of [["statusVendors", "dashboardStatusVendorsChart"], ["vendorTop", "pyqtVendorTopChart"], ["roomTop", "pyqtRoomDistributionChart"], ["changedFields", "dashboardStatusFieldsChart"], ["absentVendors", "dashboardStatusAbsentChart"]]) {
+      const values = globalThis.Chart?.getChart?.($("#" + id))?.data?.datasets?.[0]?.data;
+      if (Array.isArray(values) && values.every((value) => Number.isSafeInteger(value) && value >= 0)) chartCounts[key] = values.reduce((sum, value) => sum + value, 0);
+      else if (document.querySelector(`[data-chart-state="${id}"]`)?.textContent === "Нет данных для построения графика.") chartCounts[key] = 0;
+    }
     const listCounts = {};
     let comparisonReadFailures = 0;
-    if (analytics?.detailsReady) {
+    if (analytics && analytics === state.analytics) {
       for (const [key, kind] of [["modified", "modifiedDevices"], ["absent", "absent"], ["unchanged", "unchanged"]]) {
         try {
           const page = await loadDashboardComparisonPage(analytics, kind, 0, 1);
@@ -518,15 +529,9 @@ async function showAnalyticsBugReport() {
         } catch { comparisonReadFailures++; }
       }
     }
-    const chartCounts = {};
-    const roomOverview = [...$("#datasetOverview").querySelectorAll(".bar-item")].find((row) => row.querySelector(".bar-label span")?.textContent === "Помещений")?.querySelector("strong")?.textContent.replace(/\s/g, "");
-    if (/^\d+$/.test(roomOverview || "")) chartCounts.roomOverview = Number(roomOverview);
-    for (const [key, id] of [["vendorTop", "pyqtVendorTopChart"], ["roomTop", "pyqtRoomDistributionChart"], ["changedFields", "dashboardStatusFieldsChart"], ["absentVendors", "dashboardStatusAbsentChart"]]) {
-      const values = globalThis.Chart?.getChart?.($("#" + id))?.data?.datasets?.[0]?.data;
-      if (Array.isArray(values) && values.every((value) => Number.isSafeInteger(value) && value >= 0)) chartCounts[key] = values.reduce((sum, value) => sum + value, 0);
-    }
     const report = await buildAnalyticsBugReport({
-      analytics: analytics?.detailsReady ? analytics : { dashboardFilters: analytics?.dashboardFilters },
+      analytics,
+      visitLatestChunks: latestId && latestId !== snapshotId ? (visit) => database.forEachSnapshotChunk(latestId, visit) : null,
       visitCurrentChunks: (visit) => snapshotId ? database.forEachSnapshotChunk(snapshotId, visit) : Promise.resolve(null),
       applicationLog: await database.applicationLog().catch(() => []), uiCounts, chartCounts, listCounts, comparisonReadFailures,
     });
@@ -1469,7 +1474,7 @@ function portableDatabaseArchiveStream() {
       cancelled = true;
       if (reader) await reader.cancel(reason);
     },
-  });
+  }, { highWaterMark: 0 });
 }
 
 function portableDatabaseArchiveOptions() {
@@ -1839,7 +1844,12 @@ async function renderLocalArchiveList(reset = false) {
       throw error;
     }
     const stream = await database.exportLocalArchiveStream(button.dataset.exportLocalArchive, portableDatabaseArchiveOptions());
-    await downloadReadableStream(filename, stream, "application/json", "Локальный архив MAC Analyzer", fileHandle);
+    const result = await downloadReadableStream(filename, stream, "application/json", "Локальный архив MAC Analyzer", fileHandle);
+    if (result !== "cancelled") {
+      const message = result === "saved" ? "Локальный архив записан на диск" : "Локальный архив передан в загрузки";
+      recordArchiveReceipt(message);
+      $("#localArchiveStatus").textContent = message;
+    }
   })().catch(showError)));
   host.querySelectorAll("[data-delete-local-archive]").forEach((button) => button.addEventListener("click", () => (async () => {
     const archive = archives.find((item) => item.id === button.dataset.deleteLocalArchive);
@@ -5049,7 +5059,7 @@ function dashboardDeviceCount(analytics) {
   const filters = analytics.dashboardFilters || {};
   return !filters.query && !filters.manufacturer && !filters.room
     && Number.isSafeInteger(analytics.current?.mainUniqueMacs)
-    ? analytics.current.mainUniqueMacs : Number(analytics.dataset?.summary?.devices ?? analytics.dashboardFilteredDeviceCount ?? analytics.kpis.devices);
+    ? analytics.current.mainUniqueMacs : Number(analytics.dataset?.summary?.devices ?? analytics.kpis.devices);
 }
 
 function renderDashboardFilterOptions(devices = [], suppliedOptions = null) {
@@ -5109,7 +5119,7 @@ async function loadTopologyAggregateNodes(queryId, switchRows, pageSize = 50) {
   }));
 }
 
-async function calculateAnalyticsDetails(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null, datasetOnly = false) {
+async function calculateAnalyticsDetails(analytics, revision, metadata, historySignature, force) {
   const loading = $("#analyticsLoadingStatus");
   const stage = (message) => { if (loading && state.analyticsRequests.isCurrent(revision)) loading.textContent = message; };
   if (!state.analyticsRequests.isCurrent(revision)) return null;
@@ -5151,28 +5161,21 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
     await database.saveSnapshotHistoryCache(historySignature, history, historyFilters);
   }
   if (!state.analyticsRequests.isCurrent(revision)) return null;
-  stage("Подготовка сводок и агрегатов выбранного статуса…");
-  const dashboardStatus = analytics.dashboardFilters?.status || "all";
+  stage("Подготовка сводки выбранного снимка…");
   const matchesDashboard = createDashboardDeviceMatcher(analytics.dashboardFilters || {});
-  const datasetSnapshotId = dashboardStatus === "missing" ? analytics.previous?.id || "" : analytics.current?.id || "";
-  const datasetCacheSnapshotId = `${datasetSnapshotId}:dashboard:${dashboardStatus}`;
-  const datasetCacheKey = `selected-final-dataset-v12:${JSON.stringify([analytics.comparisonPairSignature || analytics.dashboardFilters || {}, dashboardStatus, state.ipEnrichmentSettings.historicalAddress])}`;
-  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 12);
+  const datasetSnapshotId = analytics.current?.id || "";
+  const datasetCacheSnapshotId = datasetSnapshotId;
+  const datasetCacheKey = `selected-final-dataset-v13:${JSON.stringify([datasetCacheSnapshotId, historyFilters, state.ipEnrichmentSettings.historicalAddress])}`;
+  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 13);
   if (!state.analyticsRequests.isCurrent(revision)) return null;
   let dataset = cachedDataset?.snapshotId === datasetCacheSnapshotId ? cachedDataset.dataset : null;
   if (!dataset) {
     const clusterFields = ["vendor", "room", "switchIp"];
-    const clusterQueryId = datasetSnapshotId ? `analytics-final-v2:${datasetCacheSnapshotId}:${JSON.stringify(analytics.dashboardFilters || {})}` : "";
+    const clusterQueryId = datasetSnapshotId ? `analytics-final-v2:${datasetCacheSnapshotId}:${JSON.stringify(historyFilters)}` : "";
     if (clusterQueryId) await database.clearAnalyticsAggregateQuery(clusterQueryId);
     const datasetCollector = createDatasetAnalyticsCollector({ includeTopologyDevices: false, includeTopologySummary: !clusterQueryId, includeClusters: !clusterQueryId, includeRankings: !clusterQueryId, countFinalRows: true, clusterFields });
     const uniqueDevice = createUniqueAnalyticsDeviceFilter();
     let rowsProcessed = 0;
-    const acceptStatusChunk = (chunk = [], startOffset = 0) => {
-      if (dashboardStatus === "missing") return chunk.filter((_device, index) => missingPositionMask?.[startOffset + index] === 1);
-      if (dashboardStatus !== "changed" && dashboardStatus !== "unchanged") return chunk;
-      const expectedStatus = CURRENT_STATUS_MASK[dashboardStatus];
-      return chunk.filter((_device, index) => currentStatusMask?.[startOffset + index] === expectedStatus);
-    };
     await feedAnalyticsDatasetRows({
       snapshotId: datasetSnapshotId,
       devices: datasetSnapshotId ? undefined : analytics.devices,
@@ -5183,8 +5186,8 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
         },
       }),
       isCurrent: () => state.analyticsRequests.isCurrent(revision),
-      accept: async (chunk, startOffset = 0) => {
-        const sourceRows = acceptStatusChunk(chunk, startOffset).filter(matchesDashboard);
+      accept: async (chunk) => {
+        const sourceRows = chunk.filter(matchesDashboard);
         const selectedChunk = sourceRows.filter(uniqueDevice);
         const pendingRowsProcessed = rowsProcessed + sourceRows.length;
         rowsProcessed = pendingRowsProcessed;
@@ -5192,7 +5195,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
         await projectConfirmedAddresses(selectedChunk);
         datasetCollector.accept(selectedChunk);
         if (clusterQueryId) {
-          stage(`Сохранение агрегатов выбранного статуса: ${pendingRowsProcessed.toLocaleString("ru-RU")} из ${Number(analytics.dashboardFilteredDeviceCount ?? analytics.current?.deviceCount ?? 0).toLocaleString("ru-RU")} устройств…`);
+          stage(`Сохранение агрегатов выбранного снимка: ${pendingRowsProcessed.toLocaleString("ru-RU")} из ${Number(analytics.kpis.devices ?? analytics.current?.deviceCount ?? 0).toLocaleString("ru-RU")} устройств…`);
           await database.mergeAnalyticsAggregateBatches(clusterQueryId, {
             cluster: collectClusterBuckets(selectedChunk, clusterFields),
             ...collectAnalyticsBuckets(selectedChunk),
@@ -5200,7 +5203,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
           });
         }
         rowsProcessed = pendingRowsProcessed;
-        stage(`Сводки выбранного статуса: ${rowsProcessed.toLocaleString("ru-RU")} из ${Number(analytics.dashboardFilteredDeviceCount ?? analytics.current?.deviceCount ?? 0).toLocaleString("ru-RU")} устройств сохранены…`);
+        stage(`Сводки выбранного снимка: ${rowsProcessed.toLocaleString("ru-RU")} из ${Number(analytics.kpis.devices ?? analytics.current?.deviceCount ?? 0).toLocaleString("ru-RU")} устройств сохранены…`);
       },
     });
     if (!state.analyticsRequests.isCurrent(revision)) {
@@ -5254,7 +5257,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       };
       stage("Сохранение рассчитанной сводки Dashboard…");
     }
-    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 12, {
+    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 13, {
       onProgress: ({ phase }) => {
         const labels = {
           started: "Сохранение сводки: открыта транзакция…",
@@ -5275,17 +5278,8 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
     dataset.clusters.pageHasMore = page.hasMore;
     dataset.clusters.nextCursor = page.nextCursor;
   }
-  const expectedDevices = Number(analytics.dashboardFilteredDeviceCount ?? analytics.current?.deviceCount ?? analytics.devices?.length ?? 0);
+  const expectedDevices = Number(analytics.kpis.devices ?? analytics.current?.deviceCount ?? analytics.devices?.length ?? 0);
   if (dataset.sourceRowCount !== expectedDevices) throw new Error("Аналитика снимка объединения остановлена: число прочитанных устройств не совпало с метаданными снимка");
-  if (datasetOnly) return dataset;
-  // Status describes a comparison category; it must never replace the current
-  // Final roster used by the full-snapshot cards, occupancy and topology.
-  const currentDataset = dashboardStatus === "all" ? dataset : await calculateAnalyticsDetails({
-    ...analytics,
-    dashboardFilters: { ...analytics.dashboardFilters, status: "all" },
-    dashboardFilteredDeviceCount: analytics.kpis.devices,
-  }, revision, metadata, historySignature, false, null, null, true);
-  if (!currentDataset || !state.analyticsRequests.isCurrent(revision)) return null;
   delete analytics.comparison.statusClassifier;
   return {
     weekly: history.weekly,
@@ -5293,16 +5287,15 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
     totals: history.totals,
     churn: history.churn,
     history: history.history,
-    dataset: currentDataset,
-    statusDataset: dataset,
+    dataset,
   };
 }
 
-function scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null) {
+function scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force) {
   $("#analyticsLoadingStatus").hidden = false;
   return runAnalyticsInStages({
     calculatePair: async () => analytics,
-    calculateDetails: (pair) => calculateAnalyticsDetails(pair, revision, metadata, historySignature, force, missingPositionMask, currentStatusMask),
+    calculateDetails: (pair) => calculateAnalyticsDetails(pair, revision, metadata, historySignature, force),
     isCurrent: () => state.analyticsRequests.isCurrent(revision) && state.analytics === analytics,
     paintSummary: paintAnalyticsSummary,
     paintDetails: (pair, details) => {
@@ -5503,6 +5496,7 @@ async function renderAnalytics(force = false) {
     const previousRoomChangeIndex = state.analytics?.roomChangeIndex;
     state.analytics = null;
     clearDashboardRoomChangeIndex(previousRoomChangeIndex);
+    displayedDashboard = null;
     $("#analyticsKpis").innerHTML = '<p class="empty">Сначала выполните обогащение.</p>';
     $("#analyticsHistoryKpis").innerHTML = "";
     $("#datasetOverview").innerHTML = "";
@@ -5516,7 +5510,6 @@ async function renderAnalytics(force = false) {
       paintAnalyticsDetails(state.analytics);
       return;
     }
-    if (state.analyticsDashboardSettings.filters.status !== "all") return renderAnalytics(true);
     const cachedMetadata = state.snapshotMetadata;
     return scheduleAnalyticsDetails(state.analytics, revision, cachedMetadata, snapshotHistorySignature(cachedMetadata, { snapshotsAscending: true }), false);
   }
@@ -5570,6 +5563,7 @@ async function renderAnalytics(force = false) {
       : Promise.resolve(current),
     {
       deviceMatches,
+      dashboardStatus: dashboardFilters.status,
       includeAbsentPositionMask: dashboardFilters.status === "missing",
       includeCurrentStatusMask: dashboardFilters.status === "changed" || dashboardFilters.status === "unchanged",
       resolveIdentityChunk: previousIndex.snapshotId
@@ -5595,6 +5589,21 @@ async function renderAnalytics(force = false) {
     await clearDashboardRoomChangeIndex(builtAnalytics.roomChangeIndex);
     return;
   }
+  const roomSnapshot = state.activeSnapshot || metadata.at(-1);
+  let unassignedPage;
+  try {
+    unassignedPage = await database.loadSnapshotUnassignedRoomPage(roomSnapshot.id, { filters: dashboardFilters });
+  } catch (error) {
+    await clearDashboardRoomChangeIndex(builtAnalytics.roomChangeIndex);
+    throw error;
+  }
+  if (!state.analyticsRequests.isCurrent(revision)) {
+    await clearDashboardRoomChangeIndex(builtAnalytics.roomChangeIndex);
+    return;
+  }
+  builtAnalytics.unassignedSnapshot = { id: roomSnapshot.id, name: roomSnapshot.name };
+  builtAnalytics.unassignedPage = unassignedPage;
+  builtAnalytics.kpis.withoutRoom = unassignedPage.total;
   const previousRoomChangeIndex = state.analytics?.roomChangeIndex;
   renderDashboardFilterOptions([], builtAnalytics.dashboardFilterOptions);
   // The pair summary keeps no current device projection; later details reread bounded Final chunks.
@@ -5603,10 +5612,6 @@ async function renderAnalytics(force = false) {
   delete builtAnalytics.comparison.absentPositionMask;
   delete builtAnalytics.comparison.currentStatusMask;
   const analytics = releaseDashboardCurrentDevices(builtAnalytics);
-  analytics.dashboardFilteredDeviceCount = dashboardFilters.status === "changed" ? analytics.comparison.modifiedDeviceCount
-    : dashboardFilters.status === "missing" ? analytics.comparison.absentCount
-      : dashboardFilters.status === "unchanged" ? analytics.comparison.unchangedCount
-        : analytics.kpis.devices;
   analytics.dashboardFilters = dashboardFilters;
   analytics.unassignedPositionMask = missingPositionMask || currentStatusMask;
   analytics.comparisonPairSignature = JSON.stringify([historySignature, previousMetadata?.id || "", currentMetadata?.id || "", dashboardFilters]);
@@ -5631,7 +5636,7 @@ async function renderAnalytics(force = false) {
   if (previousRoomChangeIndex?.queryId !== analytics.roomChangeIndex?.queryId) {
     await clearDashboardRoomChangeIndex(previousRoomChangeIndex);
   }
-  scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force, missingPositionMask, currentStatusMask);
+  scheduleAnalyticsDetails(analytics, revision, metadata, historySignature, force);
 }
 
 function showAnalyticsFallback(error, candidate = state.analytics) {
@@ -6318,23 +6323,22 @@ async function loadRoomCoveragePage(analytics, roomKey, page) {
 }
 
 async function showUnassignedAnalyticsPage(analytics, page = 1, open = false) {
-  const snapshotId = analytics.current?.id;
-  if (!snapshotId) throw new Error("Не выбран текущий снимок объединения для списка устройств без помещения");
+  const snapshotId = analytics.unassignedSnapshot.id;
   const requestId = ++state.analyticsUnassignedDeviceRequest;
   const dialog = $("#detailsDialog");
   if (open) showDialog(dialog, "Устройства без помещения", '<p class="muted" role="status">Загрузка страницы устройств…</p>');
-  const result = await database.loadSnapshotUnassignedRoomPage(snapshotId, {
+  const result = page === 1 ? analytics.unassignedPage : await database.loadSnapshotUnassignedRoomPage(snapshotId, {
     page, limit: 50, filters: analytics.dashboardFilters,
   });
   if (requestId !== state.analyticsUnassignedDeviceRequest || state.analytics !== analytics) return;
   await projectConfirmedAddresses(result.devices);
   if (requestId !== state.analyticsUnassignedDeviceRequest || state.analytics !== analytics) return;
-  dialog.querySelector("[data-dialog-title]").textContent = "Устройства без помещения";
+  dialog.querySelector("[data-dialog-title]").textContent = "Устройства без помещения · " + analytics.unassignedSnapshot.name;
   dialog.querySelector("[data-dialog-content]").innerHTML = unassignedDevicesContent({
     devices: result.devices,
     count: result.total,
-    vendors: analytics.dataset?.unassignedVendors || [],
-    models: analytics.dataset?.unassignedModels || [],
+    vendors: result.vendors,
+    models: result.models,
     page: result.page,
     pageCount: result.pageCount,
   });
@@ -6638,9 +6642,10 @@ async function showAnalyticsModificationPage(analytics, offset = 0, codecOnly = 
 }
 
 function paintAnalyticsSummary(analytics) {
+  displayedDashboard = analytics;
   paintHistoryBackfill(analytics);
   paintSelectedMainMacs(analytics);
-  $("#datasetOverview").textContent = "Подробная сводка выбранного статуса рассчитывается…";
+  $("#datasetOverview").textContent = "Подробная сводка выбранного снимка рассчитывается…";
   for (const selector of ["#vendorRanking", "#modelRanking", "#churnRanking", "#roomOccupancyRanking", "#clusterSummary", "#changeTable"]) {
     const host = $(selector);
     if (host) host.replaceChildren();
@@ -6651,8 +6656,9 @@ function paintAnalyticsSummary(analytics) {
   for (const selector of ["#dashboardStatusTotalsChart", "#dashboardStatusVendorsChart", "#dashboardStatusFieldsChart", "#dashboardStatusAbsentChart"]) {
     setChartState($(selector), "График рассчитывается…");
   }
-  $("#roomOccupancyStatus").textContent = "Сводка выбранного статуса рассчитывается…";
-  $("#analyticsReportPreview").textContent = "Сводка выбранного статуса рассчитывается…";
+  $("#dashboardStatusVendorScope").textContent = "";
+  $("#roomOccupancyStatus").textContent = "Сводка выбранного снимка рассчитывается…";
+  $("#analyticsReportPreview").textContent = "Сводка выбранного снимка рассчитывается…";
   $("#exportAnalyticsReportButton").disabled = true;
   drawFinalTotalsTrend($("#totalChart"), analytics.totals || []);
   renderKpis($("#analyticsKpis"), analytics.kpis, {
@@ -6686,6 +6692,7 @@ function drawDashboardStatusCharts(analytics) {
     "chart:absent-vendors": "#dashboardStatusAbsentChart",
   };
   for (const chart of model.charts) {
+    if (chart.key === "chart:vendors") $("#dashboardStatusVendorScope").textContent = chart.summary;
     const canvas = $(canvasByKey[chart.key]);
     if (chart.key === "chart:totals") drawFinalTotalsTrend(canvas, analytics.totals);
     else drawBars(canvas, chart.items, { horizontal: true, datasetLabel: chart.key === "chart:fields" ? "Изменений" : "Устройств" });
@@ -6703,10 +6710,11 @@ function paintSelectedMainMacs(analytics) {
   const filters = analytics.dashboardFilters || {};
   const filtered = Boolean(filters.query || filters.manufacturer || filters.room);
   const source = analytics.current?.sourceFiles?.main?.name || analytics.current?.name || "не выбран";
-  $("#analyticsHistoryKpis").insertAdjacentHTML("beforeend", `<p class="analytics-scope-note">Основной файл / снимок: <strong>${escapeHtml(source)}</strong>. ${filtered ? 'Включены фильтры поиска, производителя или помещения. Для всего основного файла нажмите «Сбросить фильтры».' : "Показан весь выбранный снимок. История и другие снимки не прибавляются к числу устройств."} Статус сравнения ограничивает только график производителей выбранного статуса и соответствующий список. Состав снимка и «Без помещения» относятся к текущему Final. Без помещения — пустое поле «Помещение», в том числе при заполненном ID SmartRoom.</p>`);
+  $("#analyticsHistoryKpis").insertAdjacentHTML("beforeend", `<p class="analytics-scope-note">Основной файл / снимок: <strong>${escapeHtml(source)}</strong>. ${filtered ? 'Включены фильтры поиска, производителя или помещения. Для всего основного файла нажмите «Сбросить фильтры».' : "Показан весь выбранный снимок. История и другие снимки не прибавляются к числу устройств."} Статус сравнения ограничивает только график производителей выбранного статуса и соответствующий список. «Без помещения» показывает устройства с пустым полем «Помещение» в последнем успешном Final «${escapeHtml(analytics.unassignedSnapshot.name)}».</p>`);
 }
 
 function paintAnalyticsDetails(analytics) {
+  displayedDashboard = analytics;
   paintHistoryBackfill(analytics);
   paintSelectedMainMacs(analytics);
   renderKpis($("#analyticsKpis"), analytics.kpis, {
@@ -6728,7 +6736,7 @@ function paintAnalyticsDetails(analytics) {
     devices: dashboardDeviceCount(analytics).toLocaleString("ru-RU"),
     manufacturers: Number(analytics.dataset?.summary?.uniqueVendors ?? analytics.kpis.manufacturers).toLocaleString("ru-RU"),
     rooms: Number(analytics.dataset?.roomOccupancy?.uniqueRooms ?? analytics.dataset?.summary?.uniqueRooms ?? analytics.kpis.rooms).toLocaleString("ru-RU"),
-    withoutRoom: Number(analytics.dataset?.roomOccupancy?.unassignedDevices ?? analytics.kpis.withoutRoom).toLocaleString("ru-RU"),
+    withoutRoom: analytics.kpis.withoutRoom.toLocaleString("ru-RU"),
   });
   drawWeekly($("#weeklyChart"), analytics.weekly);
   drawFinalChangeTrend($("#presenceChart"), analytics.snapshotChanges);
@@ -9027,16 +9035,27 @@ async function exportInventoryXlsx() {
 async function exportDatabase() {
   progress(5, "Чтение локальной базы", "Экспорт базы");
   const filename = `mac-analyzer-next-${new Date().toISOString().slice(0, 10)}.madb.json`;
-  const archiveStream = portableDatabaseArchiveStream();
+  const button = $("#exportDatabaseButton");
+  const status = $("#portableArchiveStatus");
+  button.disabled = true;
+  status.textContent = "Создание переносимого архива…";
   let result;
   try {
-    result = await downloadReadableStream(filename, archiveStream, "application/json", "База MAC Analyzer Next в JSON", null, { streamToDiskOnly: true });
+    result = await downloadReadableStream(filename, portableDatabaseArchiveStream(), "application/json", "База MAC Analyzer Next в JSON", null, { streamToDiskOnly: true });
   } catch (error) {
+    status.textContent = "Не удалось записать архив.";
     finishProgress("Экспорт базы не выполнен");
     throw error;
-  }
+  } finally { button.disabled = false; }
   finishProgress(result === "cancelled" ? "Экспорт базы отменён" : "База JSON записана потоково на диск");
-  if (result === "cancelled") return;
+  status.textContent = result === "cancelled" ? "Создание архива отменено." : "";
+  if (result === "saved") recordArchiveReceipt("Переносимый архив Next записан на диск");
+}
+
+function recordArchiveReceipt(message) {
+  const receipt = `${message} · ${new Date().toLocaleString("ru-RU")}`;
+  $("#lastArchiveReceipt").textContent = receipt;
+  try { globalThis.localStorage.setItem("last-archive:" + database.name, receipt); } catch { /* The current session still shows the receipt. */ }
 }
 
 async function uploadActiveFinalToOptionalHost() {
@@ -9218,7 +9237,11 @@ async function exportReferenceArchive() {
   const filename = `mac-analyzer-${new Date().toISOString().slice(0, 10)}.macarchive.json`;
   const result = await downloadReadableStream(filename, archiveStream, "application/json", "Архив MAC Analyzer Pro");
   if (result === "cancelled") finishProgress("Экспорт архива отменён");
-  else finishProgress(result === "saved" ? "Совместимый .macarchive.json записан потоково" : "Совместимый .macarchive.json сформирован");
+  else {
+    const message = result === "saved" ? "Совместимый архив MAC Analyzer Pro записан на диск" : "Совместимый архив MAC Analyzer Pro передан в загрузки";
+    recordArchiveReceipt(message);
+    finishProgress(message);
+  }
 }
 
 async function importDatabase(file) {
@@ -11288,6 +11311,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     try { await exportInventoryXlsx(); recordOperationDuration("export_xlsx", performance.now() - startedAt); }
     finally { button.disabled = false; }
   })().catch(showError));
+  try { $("#lastArchiveReceipt").textContent = globalThis.localStorage.getItem("last-archive:" + database.name) || ""; } catch { /* Storage may be disabled. */ }
   $("#exportDatabaseButton").addEventListener("click", () => exportDatabase().catch(showError));
   $("#optionalHostSnapshotUploadButton").addEventListener("click", () => uploadActiveFinalToOptionalHost().catch((error) => {
     $("#optionalHostSnapshotUploadStatus").textContent = error.message || String(error);
@@ -11456,10 +11480,14 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
       await bundledOuiInitialization;
       await saveWorkspaceStateNow();
       const archive = await database.createLocalArchive($("#localArchiveName").value, portableDatabaseArchiveOptions());
+      recordArchiveReceipt(`Локальный архив «${archive.name}» создан в браузере`);
       $("#localArchiveName").value = "";
       $("#localArchiveStatus").textContent = `Сохранён архив «${archive.name}»: ${archive.snapshotCount} снимок объединения, ${archive.recordCount.toLocaleString("ru-RU")} записей.`;
-      await renderLocalArchiveList();
+    } catch (error) {
+      $("#localArchiveStatus").textContent = "Не удалось завершить сохранение локального архива.";
+      throw error;
     } finally { button.disabled = false; }
+    await renderLocalArchiveList();
   })().catch(showError));
   $("#ouiFileInput").addEventListener("change", (event) => prepareOuiImport(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
   $("#importOptionalHostOuiButton").addEventListener("click", () => importOptionalHostOuiReference().catch(showError));

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { buildAnalyticsPairFromChunks } from "../src/core/analytics.js";
 import { compareFinalAbsencePage, compareFinalAdditionPage, compareFinalDevicePage, compareFinalModifiedDevicePage, compareFinalUnchangedPage } from "../src/core/comparison.js";
 
 const previous = [
@@ -12,6 +13,16 @@ const current = [
   { ...previous[1], room: "Room 2" },
   { deviceId: "four", mac: "00:11:22:33:44:54", manufacturer: "Vendor" },
 ];
+
+test("status vendor rankings count each comparison device once using the appropriate Final", async () => {
+  const before = previous.map((device, index) => ({ ...device, manufacturer: ["Same", "Old name", "Absent"][index] }));
+  const after = [{ ...before[0] }, { ...before[1], manufacturer: "Current", model: "New", room: "Moved" }, { ...current[2], manufacturer: "Added" }];
+  for (const [status, label] of [["changed", "Current"], ["unchanged", "Same"], ["missing", "Absent"]]) {
+    const result = await buildAnalyticsPairFromChunks({ id: "old", devices: before }, { id: "new", deviceCount: after.length },
+      async (visit) => { await visit(after.slice(0, 1)); await visit(after.slice(1)); }, { dashboardStatus: status });
+    assert.deepEqual(result.dashboardExportSummary.statusVendors, [{ label, value: 1 }]);
+  }
+});
 
 test("all-status roster streams bounded pages and applies dashboard filters before counting", async () => {
   const rows = Array.from({ length: 275 }, (_, index) => ({ deviceId: `device-${index}`, manufacturer: index % 2 ? "Vendor A" : "Vendor B" }));

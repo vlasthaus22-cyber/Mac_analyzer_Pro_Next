@@ -30,7 +30,7 @@ function sortCountRows(counts, limit = null) {
   return limit === null ? rows : rows.slice(0, limit);
 }
 
-function topCountRows(counts, limit) {
+export function topCountRows(counts, limit) {
   const maximum = Math.max(0, Math.floor(Number(limit) || 0));
   if (!maximum) return [];
   const rows = [];
@@ -468,6 +468,7 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   deviceMatches = () => true,
   includeAbsentPositionMask = false,
   includeCurrentStatusMask = false,
+  dashboardStatus = "all",
   resolveIdentityChunk = null,
   visitPreviousChunks = null,
   previousDeviceCount = null,
@@ -793,12 +794,15 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
       }
     }
   };
+  const statusVendors = new Map();
+  const countStatusVendor = (device) => addCount(statusVendors, deviceManufacturer(device) || "Unknown");
   const analyticsPass = createSummary({
     onAdded: (device) => {
       if (pagedRoomChanges) pendingRoomChangeEvents.push({ type: "added", device });
       else addChangeMember(device, stableIdentity(device), true, true);
     },
     onModified: (row) => {
+      if (dashboardStatus === "changed") countStatusVendor(row.after);
       if (pagedRoomChanges) {
         pendingRoomChangeEvents.push({ type: "modified", row });
         return;
@@ -812,6 +816,7 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
       } else addChangeMember(row.after, identity, true, true);
     },
     onUnchanged: (row) => {
+      if (dashboardStatus === "unchanged") countStatusVendor(row.after);
       if (pagedRoomChanges) pendingRoomChangeEvents.push({ type: "unchanged", row });
       else addChangeMember(row.after, row.identity || stableIdentity(row.after) || stableIdentity(row.before), false, true);
     },
@@ -1120,6 +1125,7 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
   const previousMetadata = { ...previous };
   delete previousMetadata.devices;
   const dashboardExportSummary = {
+    ...(dashboardStatus === "all" ? {} : { statusVendors: topCountRows(dashboardStatus === "missing" ? new Map(Object.entries(compared.absentVendors)) : statusVendors, 10) }),
     fieldChanges: sortCounts(new Map(Object.entries(compared.fieldChanges))),
     absentVendors: sortCounts(new Map(Object.entries(compared.absentVendors))),
   };

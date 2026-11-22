@@ -13,6 +13,7 @@ test("Dashboard PNG model includes six KPIs and status-scoped charts from the fi
     dataset: { summary: { uniqueVendors: 5, uniqueRooms: 7 }, roomOccupancy: { uniqueRooms: 6 }, charts: { vendors: [{ label: "Vendor A", value: 9 }, { label: "Vendor B", value: 3 }] } },
     totals: [{ label: "08.10", value: 496 }, { label: "15.10", value: 500 }],
     dashboardExportSummary: {
+      statusVendors: [{ label: "Vendor A", value: 9 }, { label: "Vendor B", value: 3 }],
       fieldChanges: [{ label: "IP", value: 8 }, { label: "Модель", value: 4 }],
       absentVendors: [{ label: "Vendor C", value: 2 }],
     },
@@ -36,6 +37,17 @@ test("Dashboard PNG model includes six KPIs and status-scoped charts from the fi
   assert.deepEqual(model.charts[2].items, [{ label: "IP", value: 8 }, { label: "Модель", value: 4 }]);
   assert.deepEqual(model.charts[3].items, [{ label: "Vendor C", value: 2 }]);
   assert.doesNotMatch(analyticsDashboardHtml(analytics), /00:11:22:33:44:55/, "screen-only churn rows are not added to the source Dashboard export");
+});
+
+test("the vendor graph names its status and reports the share shown by the ten leading categories", () => {
+  const vendors = Array.from({ length: 12 }, (_, index) => ({ label: "Vendor " + index, value: 12 - index }));
+  const analytics = {
+    detailsReady: true, dashboardFilters: { status: "all" }, kpis: { devices: 78 },
+    dataset: { summary: { devices: 78 }, charts: { vendors } },
+  };
+  const chart = buildAnalyticsDashboardExportModel(analytics).charts.find(({ key }) => key === "chart:vendors");
+  assert.deepEqual(chart.items, vendors.slice(0, 10));
+  assert.match(chart.summary, /Все устройства · на графике 75 из 78 устройств/);
 });
 
 test("Dashboard PNG model refuses a partial dashboard before extended calculations finish", () => {
@@ -65,7 +77,7 @@ test("Dashboard XLSX streams status-scoped vendor, field and absence sheets", as
   }
   assert.deepEqual(sheetRows[0][0], ["Устройства", 2]);
   assert.deepEqual(sheetRows[1], [["Final A", 5], ["Final B", 2]]);
-  assert.deepEqual(sheetRows[2], [["Old Vendor", 2]]);
+  assert.deepEqual(sheetRows[2], []);
   assert.deepEqual(sheetRows[3], [["IP", 3]]);
   assert.deepEqual(sheetRows[4], [["Old Vendor", 2]]);
 });
@@ -90,7 +102,7 @@ test("Dashboard exports keep the fleet timeline global and scope detail charts t
       totals,
       churn,
       dataset: { charts: { vendors: [{ label: `${status} vendor`, value: 1 }] } },
-      dashboardExportSummary: { fieldChanges, absentVendors },
+      dashboardExportSummary: { fieldChanges, absentVendors, statusVendors: [{ label: `${status} vendor`, value: 1 }] },
     });
     assert.deepEqual(model.charts.find((chart) => chart.key === "chart:totals").datasets[0].values, [100, 120], `${status} keeps the full fleet trend`);
     assert.deepEqual(model.charts.find((chart) => chart.key === "chart:vendors").items, [{ label: `${status} vendor`, value: 1 }], `${status} receives its status-specific vendor ranking`);

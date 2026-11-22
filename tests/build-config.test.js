@@ -2126,22 +2126,17 @@ test("leaving analytics invalidates pending work and returning recalculates from
 
 test("extended selected-Final analytics reuses its loaded payload and falls back to IndexedDB chunks", () => {
   const app = readFileSync("src/app.js", "utf8");
-  assert.match(app, /if \(state\.analyticsDashboardSettings\.filters\.status !== "all"\) return renderAnalytics\(true\);/);
   assert.match(app, /createDatasetAnalyticsCollector\(\{ includeTopologyDevices: false, includeTopologySummary: !clusterQueryId, includeClusters: !clusterQueryId, includeRankings: !clusterQueryId, countFinalRows: true, clusterFields \}\)/);
-  assert.match(app, /if \(dashboardStatus === "missing"\) return chunk\.filter\(\(_device, index\) => missingPositionMask\?\.\[startOffset \+ index\] === 1\)/);
   assert.match(app, /devices: datasetSnapshotId \? undefined : analytics\.devices/);
-  assert.match(app, /const expectedStatus = CURRENT_STATUS_MASK\[dashboardStatus\];[\s\S]*?chunk\.filter\(\(_device, index\) => currentStatusMask\?\.\[startOffset \+ index\] === expectedStatus\)/);
   assert.match(app, /database\.mergeAnalyticsAggregateBatches\(clusterQueryId, \{[\s\S]*?\.\.\.collectAnalyticsBuckets\(selectedChunk\)/);
   assert.match(app, /const builtAnalytics = await buildAnalyticsPairFromChunks\(previous, current,[\s\S]*?database\.forEachSnapshotChunk\(currentMetadata\.id, visit, \{[\s\S]*?onProgress: \(\{ phase, index, chunkCount \}\)[\s\S]*?includeAbsentPositionMask: dashboardFilters\.status === "missing",[\s\S]*?includeCurrentStatusMask: dashboardFilters\.status === "changed" \|\| dashboardFilters\.status === "unchanged"/);
   assert.match(app, /buildAnalyticsPairFromChunks\(previous, current,[\s\S]*?releasePreviousDevices: true/);
   assert.doesNotMatch(app, /loadCompactFinalForComparison\(currentMetadata/);
   assert.match(app, /renderDashboardFilterOptions\(\[\], builtAnalytics\.dashboardFilterOptions\)/);
-  assert.match(app, /scheduleAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask, currentStatusMask\)/);
-  assert.match(app, /function calculateAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null, datasetOnly = false\)/);
   assert.match(app, /await feedAnalyticsDatasetRows\(\{[\s\S]*?devices: datasetSnapshotId \? undefined : analytics\.devices[\s\S]*?visitChunks: \(snapshotId, visit\) => database\.forEachSnapshotChunk\(snapshotId, visit, \{/);
-    assert.match(app, /selected-final-dataset-v12:/);
-  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 12\)/);
-  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 12, \{[\s\S]*?onProgress/);
+    assert.match(app, /selected-final-dataset-v13:/);
+  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 13\)/);
+  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 13, \{[\s\S]*?onProgress/);
   assert.match(app, /\.\.\.collectTopologyBuckets\(selectedChunk\)/);
   assert.match(app, /analyticsAggregateRankedPage\(clusterQueryId, "topology-switch", \{ limit: 20 \}\)/);
   assert.match(app, /dataset\.sourceRowCount !== expectedDevices/);
@@ -2231,10 +2226,10 @@ test("large Dashboard updates show detail progress and clear the previous datase
   const app = readFileSync("src/app.js", "utf8");
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   const smoke = readFileSync("tools/browser-smoke.mjs", "utf8");
-  assert.match(app, /function paintAnalyticsSummary\(analytics\) \{[\s\S]*Подробная сводка выбранного статуса рассчитывается/);
+  assert.match(app, /function paintAnalyticsSummary\(analytics\) \{[\s\S]*Подробная сводка выбранного снимка рассчитывается/);
   assert.match(app, /function calculateAnalyticsDetails\([\s\S]*Подготовка истории выбранных снимков объединения/);
-  assert.match(app, /Сводки выбранного статуса: \$\{rowsProcessed\.toLocaleString/);
-  assert.match(app, /Сохранение агрегатов выбранного статуса: \$\{pendingRowsProcessed\.toLocaleString/);
+  assert.match(app, /Сводки выбранного снимка: \$\{rowsProcessed\.toLocaleString/);
+  assert.match(app, /Сохранение агрегатов выбранного снимка: \$\{pendingRowsProcessed\.toLocaleString/);
   assert.match(app, /Чтение чанка \$\{index \+ 1\}\/\$\{chunkCount\} снимка объединения/);
   assert.match(app, /state\.analyticsRoomAnomalyAnalytics = analytics/);
   assert.match(app, /roomAnomalyButton && roomAnomalyAnalytics/);
@@ -2246,7 +2241,7 @@ test("large Dashboard updates show detail progress and clear the previous datase
   assert.match(app, /const stage = \(message\) => \{ if \(loading && state\.analyticsRequests\.isCurrent\(revision\)\) loading\.textContent = message; \};/);
   assert.match(app, /paintAnalyticsDetails\(pair\);[\s\S]*?renderTemporalStatistics\(false\)\.catch/);
   assert.match(app, /feedAnalyticsDatasetRows\(\{[\s\S]*?isCurrent: \(\) => state\.analyticsRequests\.isCurrent\(revision\)/);
-  assert.match(app, /acceptStatusChunk\(chunk, startOffset\)\.filter\(matchesDashboard\)/);
+  assert.match(app, /chunk\.filter\(matchesDashboard\)/);
   assert.match(app, /Завершение рейтингов, комнат и топологии/);
   assert.match(app, /if \(!state\.analyticsRequests\.isCurrent\(revision\)\) \{\s*return null;\s*\}/);
   assert.match(app, /deviceMatches: historyFilters\.query \|\| historyFilters\.manufacturer \|\| historyFilters\.room[\s\S]*?снимок объединения \$\{index \+ 1\} из \$\{snapshots\.length\}, блок \$\{chunkNumber\} из \$\{chunkCount\}/);
