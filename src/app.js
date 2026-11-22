@@ -74,6 +74,7 @@ import { openInventoryColumnManagerDialog } from "./ui/inventory-column-manager-
 import { guardEngineeringClick, isEngineeringOnlyInputTarget, isRestrictedEngineeringViewTarget } from "./ui/engineering-access.js";
 import { cleanupPageHide } from "./core/page-lifecycle.js";
 import { runBrowserDiagnostics } from "./core/diagnostics.js";
+import { buildAnalyticsBugReport } from "./core/analytics-bug-report.js";
 import { importLegacySQLiteFile, readLegacyTaskQueueFileFromSQLite, resolveLegacySQLiteFileSelection } from "./data/sqlite-database-importer.js";
 import { sqliteImportStageProgress } from "./ui/progress.js";
 import { isThemeChoice, legacyThemeChoice, resolveThemeChoice } from "./core/theme.js";
@@ -491,6 +492,49 @@ function showError(error) {
   const errorName = error instanceof Error && /^[a-z][a-z0-9]{0,63}$/i.test(error.name) ? error.name : "Error";
   console.error("[MAC Analyzer]", errorName);
   database.recordApplicationLog("ui_error", errorName).catch(() => {});
+}
+
+async function showAnalyticsBugReport() {
+  const button = $("#analyticsBugReportButton");
+  button.disabled = true;
+  const analytics = state.analytics;
+  const snapshotId = analytics?.current?.id || state.snapshotMetadata.at(-1)?.id;
+  const uiCounts = {};
+  if (analytics?.detailsReady) {
+    for (const key of ["devices", "modified", "absent", "unchanged", "manufacturers", "rooms", "withoutRoom"]) {
+      const value = $("#analyticsKpis")?.querySelector(`[data-kpi="${key}"] strong`)?.textContent?.replace(/\s/g, "");
+      if (/^\d+$/.test(value || "")) uiCounts[key] = Number(value);
+    }
+  }
+  try {
+    const listCounts = {};
+    let comparisonReadFailures = 0;
+    if (analytics?.detailsReady) {
+      for (const [key, kind] of [["modified", "modifiedDevices"], ["absent", "absent"], ["unchanged", "unchanged"]]) {
+        try {
+          const page = await loadDashboardComparisonPage(analytics, kind, 0, 1);
+          if (page) listCounts[key] = page.total;
+          else comparisonReadFailures++;
+        } catch { comparisonReadFailures++; }
+      }
+    }
+    const chartCounts = {};
+    for (const [key, id] of [["vendorTop", "pyqtVendorTopChart"], ["roomTop", "pyqtRoomDistributionChart"], ["changedFields", "dashboardStatusFieldsChart"], ["absentVendors", "dashboardStatusAbsentChart"]]) {
+      const values = globalThis.Chart?.getChart?.($("#" + id))?.data?.datasets?.[0]?.data;
+      if (Array.isArray(values) && values.every((value) => Number.isSafeInteger(value) && value >= 0)) chartCounts[key] = values.reduce((sum, value) => sum + value, 0);
+    }
+    const report = await buildAnalyticsBugReport({
+      analytics: analytics?.detailsReady ? analytics : { dashboardFilters: analytics?.dashboardFilters },
+      visitCurrentChunks: (visit) => snapshotId ? database.forEachSnapshotChunk(snapshotId, visit) : Promise.resolve(null),
+      applicationLog: await database.applicationLog().catch(() => []), uiCounts, chartCounts, listCounts, comparisonReadFailures,
+    });
+    if (report.mismatchCount) await database.recordApplicationLog("analytics_audit_mismatch", "").catch(() => {});
+    showDialog($("#detailsDialog"), "Отчёт о багах аналитики", '<p>Отчёт сформирован локально. Просмотрите его перед передачей. Тексты ошибок и данные устройств исключены.</p><button type="button" class="button primary" data-download-bug-report>Скачать TXT</button><pre data-bug-report-preview></pre>');
+    $("#detailsDialog [data-bug-report-preview]").textContent = report.text;
+    $("#detailsDialog [data-download-bug-report]").addEventListener("click", () => download("analytics-bug-report.txt", report.text, "text/plain;charset=utf-8"));
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function compareInventoryObservationFromDatabase(devices, timestamp) {
@@ -5001,7 +5045,7 @@ async function showDashboardMainDevices(analytics, page = 1, open = true) {
 
 function dashboardDeviceCount(analytics) {
   const filters = analytics.dashboardFilters || {};
-  return (!filters.status || filters.status === "all") && !filters.query && !filters.manufacturer && !filters.room
+  return !filters.query && !filters.manufacturer && !filters.room
     && Number.isSafeInteger(analytics.current?.mainUniqueMacs)
     ? analytics.current.mainUniqueMacs : Number(analytics.dataset?.summary?.devices ?? analytics.dashboardFilteredDeviceCount ?? analytics.kpis.devices);
 }
@@ -5063,7 +5107,7 @@ async function loadTopologyAggregateNodes(queryId, switchRows, pageSize = 50) {
   }));
 }
 
-async function calculateAnalyticsDetails(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null) {
+async function calculateAnalyticsDetails(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null, datasetOnly = false) {
   const loading = $("#analyticsLoadingStatus");
   const stage = (message) => { if (loading && state.analyticsRequests.isCurrent(revision)) loading.textContent = message; };
   if (!state.analyticsRequests.isCurrent(revision)) return null;
@@ -5110,8 +5154,8 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
   const matchesDashboard = createDashboardDeviceMatcher(analytics.dashboardFilters || {});
   const datasetSnapshotId = dashboardStatus === "missing" ? analytics.previous?.id || "" : analytics.current?.id || "";
   const datasetCacheSnapshotId = `${datasetSnapshotId}:dashboard:${dashboardStatus}`;
-  const datasetCacheKey = `selected-final-dataset-v11:${JSON.stringify([analytics.comparisonPairSignature || analytics.dashboardFilters || {}, state.ipEnrichmentSettings.historicalAddress])}`;
-  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 11);
+  const datasetCacheKey = `selected-final-dataset-v12:${JSON.stringify([analytics.comparisonPairSignature || analytics.dashboardFilters || {}, dashboardStatus, state.ipEnrichmentSettings.historicalAddress])}`;
+  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 12);
   if (!state.analyticsRequests.isCurrent(revision)) return null;
   let dataset = cachedDataset?.snapshotId === datasetCacheSnapshotId ? cachedDataset.dataset : null;
   if (!dataset) {
@@ -5208,7 +5252,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       };
       stage("Сохранение рассчитанной сводки Dashboard…");
     }
-    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 11, {
+    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 12, {
       onProgress: ({ phase }) => {
         const labels = {
           started: "Сохранение сводки: открыта транзакция…",
@@ -5231,6 +5275,15 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
   }
   const expectedDevices = Number(analytics.dashboardFilteredDeviceCount ?? analytics.current?.deviceCount ?? analytics.devices?.length ?? 0);
   if (dataset.sourceRowCount !== expectedDevices) throw new Error("Аналитика снимка объединения остановлена: число прочитанных устройств не совпало с метаданными снимка");
+  if (datasetOnly) return dataset;
+  // Status describes a comparison category; it must never replace the current
+  // Final roster used by the full-snapshot cards, occupancy and topology.
+  const currentDataset = dashboardStatus === "all" ? dataset : await calculateAnalyticsDetails({
+    ...analytics,
+    dashboardFilters: { ...analytics.dashboardFilters, status: "all" },
+    dashboardFilteredDeviceCount: analytics.kpis.devices,
+  }, revision, metadata, historySignature, false, null, null, true);
+  if (!currentDataset || !state.analyticsRequests.isCurrent(revision)) return null;
   delete analytics.comparison.statusClassifier;
   return {
     weekly: history.weekly,
@@ -5238,7 +5291,8 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
     totals: history.totals,
     churn: history.churn,
     history: history.history,
-    dataset,
+    dataset: currentDataset,
+    statusDataset: dataset,
   };
 }
 
@@ -6262,15 +6316,13 @@ async function loadRoomCoveragePage(analytics, roomKey, page) {
 }
 
 async function showUnassignedAnalyticsPage(analytics, page = 1, open = false) {
-  const status = analytics.dashboardFilters?.status;
-  const snapshotId = (status === "missing" ? analytics.previous : analytics.current)?.id;
+  const snapshotId = analytics.current?.id;
   if (!snapshotId) throw new Error("Не выбран текущий снимок объединения для списка устройств без помещения");
   const requestId = ++state.analyticsUnassignedDeviceRequest;
   const dialog = $("#detailsDialog");
   if (open) showDialog(dialog, "Устройства без помещения", '<p class="muted" role="status">Загрузка страницы устройств…</p>');
   const result = await database.loadSnapshotUnassignedRoomPage(snapshotId, {
-    page, limit: 50, filters: analytics.dashboardFilters, positionMask: analytics.unassignedPositionMask,
-    positionValue: CURRENT_STATUS_MASK[status] || 1,
+    page, limit: 50, filters: analytics.dashboardFilters,
   });
   if (requestId !== state.analyticsUnassignedDeviceRequest || state.analytics !== analytics) return;
   await projectConfirmedAddresses(result.devices);
@@ -6647,9 +6699,9 @@ function paintSelectedMainMacs(analytics) {
     ...(!Number.isInteger(mainCount) && Number.isInteger(legacyCount) ? [["Уникальных MAC в старом снимок объединения · число из Main не сохранено", legacyCount]] : []),
   ].map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number.isInteger(value) ? value.toLocaleString("ru-RU") : "—"}</strong></article>`).join("");
   const filters = analytics.dashboardFilters || {};
-  const filtered = Boolean(filters.query || filters.manufacturer || filters.room || (filters.status && filters.status !== "all"));
+  const filtered = Boolean(filters.query || filters.manufacturer || filters.room);
   const source = analytics.current?.sourceFiles?.main?.name || analytics.current?.name || "не выбран";
-  $("#analyticsHistoryKpis").insertAdjacentHTML("beforeend", `<p class="analytics-scope-note">Основной файл / снимок: <strong>${escapeHtml(source)}</strong>. ${filtered ? 'Включены фильтры: карточки и графики показывают выбранную часть устройств. Для всего основного файла нажмите «Сбросить фильтры».' : "Показан весь выбранный снимок. История и другие снимки не прибавляются к числу устройств."} Без помещения — нет ни ID помещения SmartRoom, ни названия комнаты. Адрес здания сам по себе не является назначением помещения.</p>`);
+  $("#analyticsHistoryKpis").insertAdjacentHTML("beforeend", `<p class="analytics-scope-note">Основной файл / снимок: <strong>${escapeHtml(source)}</strong>. ${filtered ? 'Включены фильтры поиска, производителя или помещения. Для всего основного файла нажмите «Сбросить фильтры».' : "Показан весь выбранный снимок. История и другие снимки не прибавляются к числу устройств."} Статус сравнения ограничивает только график производителей выбранного статуса и соответствующий список. Состав снимка и «Без помещения» относятся к текущему Final. Без помещения — пустое поле «Помещение», в том числе при заполненном ID SmartRoom.</p>`);
 }
 
 function paintAnalyticsDetails(analytics) {
@@ -10890,6 +10942,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
       .then(() => renderAnalytics(true)).catch((error) => showAnalyticsFallback(error, state.analytics));
   });
   $("#exportClustersButton").addEventListener("click", () => exportAnalyticsClustersCsv().catch((error) => { if (error?.name !== "AbortError") showError(error); }));
+  $("#analyticsBugReportButton").addEventListener("click", () => showAnalyticsBugReport().catch(showError));
   $("#runPyqtClusteringButton").addEventListener("click", () => runPyqtClustering(state.analytics).catch(showError));
   $("#exportTopologyButton").addEventListener("click", () => exportTopologyHtml().catch((error) => { if (error?.name !== "AbortError") showError(error); }));
   $("#exportAnalyticsSvgButton").addEventListener("click", () => {

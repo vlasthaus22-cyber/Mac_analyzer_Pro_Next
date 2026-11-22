@@ -21,20 +21,20 @@ test("Dashboard PNG model includes six KPIs and status-scoped charts from the fi
   assert.equal(model.width, 2000);
   assert.equal(model.height, 1200);
   assert.deepEqual(model.kpis.map(({ key }) => key), ["devices", "modified", "absent", "unchanged", "manufacturers", "rooms"]);
-  assert.equal(model.kpis[0].value, "600 / 12", "device KPI displays fleet history alongside the selected-status count");
+  assert.equal(model.kpis[0].value, 500, "device KPI uses current Final without adding historical devices");
   assert.equal(model.kpis.find(({ key }) => key === "manufacturers").value, 5);
   assert.equal(model.kpis.find(({ key }) => key === "rooms").value, 6);
   const exportedRows = [];
   for await (const row of analyticsDashboardXlsxSheets(analytics)[0].rows) exportedRows.push(row);
-  assert.deepEqual(exportedRows, [["Устройства", "600 / 12"], ["Изменённые", 12], ["Отсутствуют", 3], ["Без изменений", 485], ["Производители", 5], ["Помещения", 6]]);
-  assert.match(analyticsDashboardHtml(analytics), /Устройства:<\/strong> 600 \/ 12/);
+  assert.deepEqual(exportedRows, [["Устройства", 500], ["Изменённые", 12], ["Отсутствуют", 3], ["Без изменений", 485], ["Производители", 5], ["Помещения", 6]]);
+  assert.match(analyticsDashboardHtml(analytics), /Устройства:<\/strong> 500/);
   assert.equal(model.charts.length, 4, "the source Dashboard export contains four charts; MAC churn remains an on-screen widget");
   assert.equal(model.charts[0].title, "Динамика общего числа устройств");
   assert.deepEqual(model.charts[0].datasets[0].values, [496, 500]);
   assert.equal(model.charts[0].summary, "Было 496, стало 500 (+0.8%)");
   assert.deepEqual(model.charts[1].items, [{ label: "Vendor A", value: 9 }, { label: "Vendor B", value: 3 }]);
   assert.deepEqual(model.charts[2].items, [{ label: "IP", value: 8 }, { label: "Модель", value: 4 }]);
-  assert.deepEqual(model.charts[3].items, []);
+  assert.deepEqual(model.charts[3].items, [{ label: "Vendor C", value: 2 }]);
   assert.doesNotMatch(analyticsDashboardHtml(analytics), /00:11:22:33:44:55/, "screen-only churn rows are not added to the source Dashboard export");
 });
 
@@ -63,10 +63,10 @@ test("Dashboard XLSX streams status-scoped vendor, field and absence sheets", as
     for await (const row of sheet.rows) rows.push(row);
     sheetRows.push(rows);
   }
-  assert.deepEqual(sheetRows[0][0], ["Устройства", 0]);
+  assert.deepEqual(sheetRows[0][0], ["Устройства", 2]);
   assert.deepEqual(sheetRows[1], [["Final A", 5], ["Final B", 2]]);
   assert.deepEqual(sheetRows[2], [["Old Vendor", 2]]);
-  assert.deepEqual(sheetRows[3], []);
+  assert.deepEqual(sheetRows[3], [["IP", 3]]);
   assert.deepEqual(sheetRows[4], [["Old Vendor", 2]]);
 });
 
@@ -77,9 +77,9 @@ test("Dashboard exports keep the fleet timeline global and scope detail charts t
   const churn = [{ mac: "AA:BB:CC:DD:EE:FF", transitions: 4 }];
   const expected = {
     all: { fields: fieldChanges, absent: absentVendors },
-    changed: { fields: fieldChanges, absent: [] },
-    missing: { fields: [], absent: absentVendors },
-    unchanged: { fields: [], absent: [] },
+    changed: { fields: fieldChanges, absent: absentVendors },
+    missing: { fields: fieldChanges, absent: absentVendors },
+    unchanged: { fields: fieldChanges, absent: absentVendors },
   };
   for (const [status, details] of Object.entries(expected)) {
     const model = buildAnalyticsDashboardExportModel({

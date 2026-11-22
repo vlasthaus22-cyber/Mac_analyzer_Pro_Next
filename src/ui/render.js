@@ -751,7 +751,7 @@ export const DEVICE_COLUMNS = Object.freeze([
   ["source", "Источник"],
 ]);
 
-export function deviceTable(devices, { anomaly = false, columnConfig = null, rowNumberOffset = 0, wrapAddresses = false } = {}) {
+export function deviceTable(devices, { anomaly = false, columnConfig = null, rowNumberOffset = 0, wrapAddresses = !columnConfig } = {}) {
   const columns = columnConfig
     ? visibleInventoryColumns(columnConfig).map(({ key, label, width }) => ({ key, label, width, value: (device, index) => inventoryCellText(device, key, Math.max(0, Number(rowNumberOffset) || 0) + index + 1) }))
     : DEVICE_COLUMNS.map(([key, label]) => ({ key, label, value: (device) => device[key] || "—" }));

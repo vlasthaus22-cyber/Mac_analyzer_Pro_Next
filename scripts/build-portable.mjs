@@ -7,6 +7,7 @@ import { getOutputDirectory } from "./output-directory.js";
 import { readPortableText } from "./portable-text.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const appVersion = JSON.parse(await readPortableText(join(root, "package.json"))).version;
 const sqliteDist = join(root, "node_modules/@subframe7536/sqlite-wasm/dist");
 const sqlitePackage = "vendor/sqlite";
 const jsPdfDist = join(root, "node_modules/jspdf/dist");
@@ -60,7 +61,7 @@ const jsPdfLicenseComment = `/*\n${jsPdfLicense.trim().replaceAll("*/", "* /")}\
 const pdfFontLicenseComment = `/* Noto Sans Regular font; ${pdfFontLicense.trim().replaceAll("*/", "* /")} */`;
 const sqliteLicenseComment = `/*\n${sqliteLicense.trim().replaceAll("*/", "* /")}\n*/`;
 const sqliteWasmUrl = `data:application/wasm;base64,${sqliteWasm.toString("base64")}`;
-const script = `globalThis.__MAC_ANALYZER_IEEE_REGISTRY__=${JSON.stringify(ieeeRegistry)};\nglobalThis.__MAC_ANALYZER_HISTORY_WORKER_SOURCE__=${JSON.stringify(workerScript)};\nglobalThis.__MAC_ANALYZER_SQLITE_WASM_URL__=${JSON.stringify(sqliteWasmUrl)};\nglobalThis.__MAC_ANALYZER_PDF_FONT_BASE64__=${JSON.stringify(pdfFont.toString("base64"))};\n${licenseComment}\n${chartSource}\n${xlsxLicenseComment}\n${xlsxSource}\n${jsPdfLicenseComment}\n${pdfFontLicenseComment}\n${jsPdfSource}\n${sqliteLicenseComment}\n${sqliteBundle}\n${bundle}`;
+const script = `globalThis.__MAC_ANALYZER_APP_VERSION__=${JSON.stringify(appVersion)};\nglobalThis.__MAC_ANALYZER_IEEE_REGISTRY__=${JSON.stringify(ieeeRegistry)};\nglobalThis.__MAC_ANALYZER_HISTORY_WORKER_SOURCE__=${JSON.stringify(workerScript)};\nglobalThis.__MAC_ANALYZER_SQLITE_WASM_URL__=${JSON.stringify(sqliteWasmUrl)};\nglobalThis.__MAC_ANALYZER_PDF_FONT_BASE64__=${JSON.stringify(pdfFont.toString("base64"))};\n${licenseComment}\n${chartSource}\n${xlsxLicenseComment}\n${xlsxSource}\n${jsPdfLicenseComment}\n${pdfFontLicenseComment}\n${jsPdfSource}\n${sqliteLicenseComment}\n${sqliteBundle}\n${bundle}`;
 const html = htmlSource
   .replace('<link rel="stylesheet" href="styles.css">', () => `<style>\n${css}\n</style>`)
   .replace('<script src="vendor/xlsx.full.min.js"></script>', "")

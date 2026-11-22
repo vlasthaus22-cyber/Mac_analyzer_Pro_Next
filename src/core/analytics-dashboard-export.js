@@ -19,13 +19,11 @@ function series(items = [], valueKey = "value") {
 
 export function buildAnalyticsDashboardExportModel(analytics, settings) {
   if (!analytics?.detailsReady || !analytics.kpis) throw new Error("Дождитесь завершения расчёта Dashboard перед экспортом PNG");
-  const status = analytics.dashboardFilters?.status || "all";
-  const scopedDeviceCount = Number(analytics.dashboardFilteredDeviceCount ?? analytics.kpis.devices) || 0;
-  const fleetLabel = analytics.history
-    ? `${Number(analytics.history.uniqueMacs || 0).toLocaleString("ru-RU")} / ${scopedDeviceCount.toLocaleString("ru-RU")}`
-    : null;
+  const filters = analytics.dashboardFilters || {};
+  const scopedDeviceCount = !filters.query && !filters.manufacturer && !filters.room && Number.isSafeInteger(analytics.current?.mainUniqueMacs)
+    ? analytics.current.mainUniqueMacs : Number(analytics.dataset?.summary?.devices ?? analytics.kpis.devices) || 0;
   const scopedKpis = {
-    devices: fleetLabel ?? scopedDeviceCount,
+    devices: scopedDeviceCount,
     manufacturers: Number(analytics.dataset?.summary?.uniqueVendors ?? analytics.kpis.manufacturers) || 0,
     rooms: Number(analytics.dataset?.roomOccupancy?.uniqueRooms ?? analytics.dataset?.summary?.uniqueRooms ?? analytics.kpis.rooms) || 0,
   };
@@ -34,9 +32,9 @@ export function buildAnalyticsDashboardExportModel(analytics, settings) {
   const previousTotal = totals.at(-2)?.value || 0;
   const currentTotal = totals.at(-1)?.value || 0;
   const changePercent = previousTotal ? ((currentTotal - previousTotal) / previousTotal) * 100 : currentTotal ? 100 : 0;
-  const vendors = series(analytics.dataset?.charts?.vendors);
-  const fieldChanges = status === "all" || status === "changed" ? series(exportSummary.fieldChanges) : [];
-  const absentVendors = status === "all" || status === "missing" ? series(exportSummary.absentVendors) : [];
+  const vendors = series((analytics.statusDataset || analytics.dataset)?.charts?.vendors);
+  const fieldChanges = series(exportSummary.fieldChanges);
+  const absentVendors = series(exportSummary.absentVendors);
   const charts = [
     {
       key: "chart:totals",

@@ -92,19 +92,20 @@ test("Main roster counts each original MAC once and excludes SmartRoom-only devi
   assert.equal(next.total, result.diagnostics.counts.mainUniqueMacs);
 });
 
-test("SmartRoom IDs assign rooms even when a separate room name is absent", async () => {
+test("missing room means an empty Final room even when SmartRoom ID is present", async () => {
   const database = new Database("mac-analyzer-pro-next-test-" + crypto.randomUUID());
   const devices = [
     normalizeDevice({ id: "1", mac, smartroomId: "SR-1", address: fullAddress }),
     normalizeDevice({ id: "2", mac: "00:11:22:33:44:66", room: "Переговорная" }),
     normalizeDevice({ id: "3", mac: "00:11:22:33:44:77", address: fullAddress }),
   ];
-  assert.equal(hasKnownRoom(devices[0]), true);
+  assert.equal(hasKnownRoom(devices[0]), false);
+  assert.equal(hasKnownRoom({ room: "", room_name: "stale alias" }), false);
   await database.saveFinal({ id: "room-test", devices });
   const missing = await database.loadSnapshotUnassignedRoomPage("room-test");
   const dataset = buildDataset(devices);
-  assert.equal(missing.total, 1);
-  assert.equal(missing.devices[0].id, "3");
+  assert.equal(missing.total, 2);
+  assert.deepEqual(missing.devices.map(({ id }) => id), ["1", "3"]);
   assert.equal(dataset.roomOccupancy.unassignedDevices, missing.total);
 });
 
@@ -130,11 +131,11 @@ test("SmartRoom maps all nine requested columns without substituting room IDs fo
   assert.deepEqual(mapping, { mac: 0, model: 5, ip: 1, smartroomId: 8, manufacturer: 6, serial: 3, deviceType: 4, deviceId: 7, address: 2 });
 });
 
-test("12000 Main MACs remain the only final roster while SmartRoom fills room IDs", async () => {
+test("12000 Main MACs remain the only final roster while SmartRoom fills rooms", async () => {
   const macAt = (index) => "02:11:" + index.toString(16).padStart(8, "0").match(/../g).join(":");
   const mainRows = Array.from({ length: 12000 }, (_, index) => [macAt(index)]);
-  const smartroomRows = Array.from({ length: 15000 }, (_, index) => [macAt(index), fullAddress, index < 10000 ? "ROOM-" + index % 100 : ""]);
-  const result = await enrich({ mainRows, smartroomRows, mappings: { main: { mac: 0 }, smartroom: { mac: 0, address: 1, smartroomId: 2 } }, strategy: "NO_EXPANSION" });
+  const smartroomRows = Array.from({ length: 15000 }, (_, index) => [macAt(index), fullAddress, index < 10000 ? "ROOM-" + index % 100 : "UNASSIGNED-" + index, index < 10000 ? "Комната " + index % 100 : ""]);
+  const result = await enrich({ mainRows, smartroomRows, mappings: { main: { mac: 0 }, smartroom: { mac: 0, address: 1, smartroomId: 2, room: 3 } }, strategy: "NO_EXPANSION" });
   assert.equal(result.diagnostics.counts.mainUniqueMacs, 12000);
   assert.equal(result.devices.length, 12000);
   assert.equal(new Set(result.devices.map((device) => device.mac)).size, 12000);

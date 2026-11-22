@@ -633,6 +633,20 @@ if (process.argv.includes("--address-roster-regression-only")) {
   await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#analyticsKpis [data-kpi=\"devices\"] strong')?.textContent.trim()==='104'", "Distinct Main count");
   const roomCount = await evaluate("document.querySelector('#analyticsKpis [data-kpi=\"withoutRoom\"] strong')?.textContent.trim()");
   if(roomCount!=="1") throw new Error("Without-room KPI did not deduplicate conflicting MAC: "+roomCount);
+  await evaluate("(()=>{document.querySelector('#analyticsKpis [data-kpi=devices]').setAttribute('data-smoke-old-kpi','');document.querySelector('#analyticsDashboardStatus').value='missing';document.querySelector('#applyAnalyticsDashboardFiltersButton').click()})()");
+  await check("document.querySelector('#analyticsLoadingStatus').hidden && !document.querySelector('#analyticsKpis [data-smoke-old-kpi]') && document.querySelector('#analyticsDashboardStatus').value==='missing' && document.querySelector('#analyticsKpis [data-kpi=devices] strong')?.textContent.trim()==='104'", "Missing status preserves full current Final");
+  await evaluate("document.querySelector('#analyticsBugReportButton').click()");
+  await check("Boolean(document.querySelector('#detailsDialog [data-bug-report-preview]'))", "Local analytics bug report");
+  const bugReport = await evaluate("document.querySelector('#detailsDialog [data-bug-report-preview]').textContent");
+  const reportScreenshot = await command("Page.captureScreenshot", { format: "png" });
+  writeFileSync(resolve("dist/analytics-bug-report-preview.png"), Buffer.from(reportScreenshot.data, "base64"));
+  if (/^BUG /m.test(bugReport) || !bugReport.includes("dataset.devices=104") || !bugReport.includes("status.devices=0") || !bugReport.includes("OK EMPTY_ROOM_UI: 1 / 1") || bugReport.includes(address) || bugReport.includes(macAt(0))) throw new Error("Local bug report failed reconciliation or privacy check: " + bugReport);
+  await evaluate("(()=>{const original=URL.createObjectURL.bind(URL);URL.createObjectURL=(blob)=>{window.__bugReportBlob=blob;return original(blob)};document.querySelector('#detailsDialog [data-download-bug-report]').click()})()");
+  const downloadedBugReport = await evaluate("window.__bugReportBlob.text()");
+  if (downloadedBugReport !== bugReport) throw new Error("Downloaded bug report differs from local preview");
+  await evaluate("document.querySelector('#detailsDialog').close();document.querySelector('#resetAnalyticsDashboardFiltersButton').click()");
+  await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#analyticsDashboardStatus').value==='all'", "Restore all-status current roster");
+  console.log("browser smoke: full Final 104 preserved with missing status 0; empty rooms 1; TXT preview/download agree and contain no device values");
   await evaluate("document.querySelector('#analyticsKpis [data-kpi=\"devices\"]').click()");
   await check("document.querySelector('#detailsDialog').open && document.querySelector('#detailsDialog [data-dialog-title]').textContent==='Устройства основного файла'", "Main roster dialog");
   const mainDetail=await evaluate("(()=>{const dialog=document.querySelector('#detailsDialog');return{count:dialog.textContent,macs:[...dialog.querySelectorAll('tbody tr:not([data-virtual-spacer]) [data-device-field=\"mac\"]')].map(e=>e.textContent.trim()),address:[...dialog.querySelectorAll('[data-device-field=\"address\"]')].map(e=>e.textContent.trim())}})()");
@@ -6737,10 +6751,10 @@ for (let attempt = 0; attempt < 300; attempt += 1) {
   if (!missingScopedKpis.loading && !missingScopedKpis.error && missingScopedKpis.status === 'missing') break;
 }
 const scopedDeviceCount = missingScopedKpis?.devices.split('/').at(-1)?.replaceAll(/\s/g, '');
-if (missingScopedKpis?.error || missingScopedKpis?.loading || missingScopedKpis?.status !== 'missing' || scopedDeviceCount !== missingScopedKpis.absent.replaceAll(/\s/g, '') || missingScopedKpis.manufacturers.replaceAll(/\s/g, '') !== String(missingScopedKpis.manufacturerRows) || missingScopedKpis.rooms.replaceAll(/\s/g, '') !== String(missingScopedKpis.roomRows)) {
+if (missingScopedKpis?.error || missingScopedKpis?.loading || missingScopedKpis?.status !== 'missing' || scopedDeviceCount !== '2' || missingScopedKpis.manufacturers.replaceAll(/\s/g, '') !== String(missingScopedKpis.manufacturerRows) || missingScopedKpis.rooms.replaceAll(/\s/g, '') !== String(missingScopedKpis.roomRows)) {
   throw new Error(`KPI, производители и помещения не используют один missing-status набор: ${JSON.stringify(missingScopedKpis)}`);
 }
-console.log("browser smoke: missing-status device, manufacturer and room KPIs match the full selected-status roster");
+console.log("browser smoke: missing-status keeps the current Final device, manufacturer and room KPIs");
 
 async function resetDashboardDrilldownFilters() {
   await evaluate(`(()=>{document.querySelector('#analyticsKpis [data-kpi="devices"]')?.setAttribute('data-smoke-old-kpi','');document.querySelector('#resetAnalyticsDashboardFiltersButton').click()})()`);
@@ -7381,13 +7395,13 @@ let restartedState = null;
 for (let attempt = 0; attempt < 150; attempt += 1) {
   await wait(250);
   try {
-    restartedState = await evaluate(`({title:document.title,status:document.querySelector('#databaseStatus')?.textContent||"",error:!document.querySelector('#errorBanner')?.hidden})`);
+    restartedState = await evaluate(`({title:document.title,status:document.querySelector('#databaseStatus')?.textContent||"",ready:document.documentElement.dataset.appReady==='true',error:!document.querySelector('#errorBanner')?.hidden})`);
   } catch {
     continue;
   }
-  if (restartedState.status.includes("6 снимок объединения")) break;
+  if (restartedState.status.includes("6 снимок объединения") && restartedState.ready) break;
 }
-if (!restartedState?.status.includes("6 снимок объединения") || !restartedState.status.includes("в активном снимке объединения") || restartedState.error) throw new Error(`Данные не восстановились после перезапуска страницы: ${JSON.stringify(restartedState)}`);
+if (!restartedState?.ready || !restartedState.status.includes("6 снимок объединения") || !restartedState.status.includes("в активном снимке объединения") || restartedState.error) throw new Error(`Данные не восстановились после перезапуска страницы: ${JSON.stringify(restartedState)}`);
 console.log("browser smoke: IndexedDB state restored after page restart");
 
 await evaluate(`document.querySelector('#engineeringModeButton').click()`);

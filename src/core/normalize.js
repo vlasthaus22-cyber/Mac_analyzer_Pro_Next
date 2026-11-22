@@ -311,7 +311,7 @@ export function locationKey(device = {}) {
 }
 
 export function hasKnownRoom(device = {}) {
-  return Boolean(identityText(device.room || device.room_name) || identityText(device.smartroomId || device.smartroom_id));
+  return Boolean(identityText(Object.hasOwn(device, "room") ? device.room : device.room_name));
 }
 
 function parseLocationPath(value) {
@@ -361,11 +361,19 @@ export function isAddressFragment(value, fullAddress) {
   return Boolean(fragment && parts.length >= 3 && parts.includes(fragment));
 }
 
+export function isFloorOnlyAddress(value) {
+  return /^(?:[\dа-яa-z -]+\s+этаж|этаж\s+[\dа-яa-z -]+|(?:floor|level)\s+[\dа-яa-z -]+)$/iu.test(text(value));
+}
+
 export function normalizeDevice(input = {}, source = "") {
   const inferredLocation = locationInference(input);
   const inputRoomIsPath = Boolean(inferredLocation && inferredLocation.sourceField === "room");
   const locationPath = firstKnown(input.locationPath, input.location, inputRoomIsPath ? input.room : "");
-  const inputAddress = firstKnown(input.address, input.physicalAddress);
+  const sourceAddress = isAddressFragment(input.address, input.physicalAddress)
+    ? text(input.physicalAddress) : firstKnown(input.address, input.physicalAddress);
+  const inputAddress = isFloorOnlyAddress(sourceAddress) && (identityText(input.city) || identityText(input.site))
+    ? [...new Set([input.businessUnit, input.city, input.site, sourceAddress].map(identityText).filter(Boolean))].join(", ")
+    : sourceAddress;
   const smartRoomPathAddress = source === "SmartRoom" && inferredLocation ? locationPath : "";
   const macCandidates = [input.mac, input.macAddress, input.mac_address, input.macFormatted, input.mac_formatted, input.CallingStationID]
     .map(normalizeMacField);

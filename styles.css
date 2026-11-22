@@ -142,6 +142,7 @@ label[hidden] { display: none !important; }
 .sort-indicator { margin-inline-start: 6px; font-size: .75em; opacity: .65; }
 .data-table tr:hover td { background: var(--surface-soft); }
 .readable-address-table td[data-device-field="address"], .readable-address-table td[data-device-field="room"] { white-space: normal; overflow-wrap: anywhere; min-width: 180px; max-width: 320px; }
+[data-bug-report-preview] { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 55vh; overflow: auto; }
 .data-table .danger-row td { background: var(--danger-soft); }
 .inventory-data-table { table-layout: fixed; }
 .inventory-data-table th { padding-right: 18px; }

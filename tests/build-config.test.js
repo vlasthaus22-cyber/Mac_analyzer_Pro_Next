@@ -2137,11 +2137,11 @@ test("extended selected-Final analytics reuses its loaded payload and falls back
   assert.doesNotMatch(app, /loadCompactFinalForComparison\(currentMetadata/);
   assert.match(app, /renderDashboardFilterOptions\(\[\], builtAnalytics\.dashboardFilterOptions\)/);
   assert.match(app, /scheduleAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask, currentStatusMask\)/);
-  assert.match(app, /function calculateAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null\)/);
+  assert.match(app, /function calculateAnalyticsDetails\(analytics, revision, metadata, historySignature, force, missingPositionMask = null, currentStatusMask = null, datasetOnly = false\)/);
   assert.match(app, /await feedAnalyticsDatasetRows\(\{[\s\S]*?devices: datasetSnapshotId \? undefined : analytics\.devices[\s\S]*?visitChunks: \(snapshotId, visit\) => database\.forEachSnapshotChunk\(snapshotId, visit, \{/);
-    assert.match(app, /selected-final-dataset-v11:/);
-  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 11\)/);
-  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 11, \{[\s\S]*?onProgress/);
+    assert.match(app, /selected-final-dataset-v12:/);
+  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 12\)/);
+  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 12, \{[\s\S]*?onProgress/);
   assert.match(app, /\.\.\.collectTopologyBuckets\(selectedChunk\)/);
   assert.match(app, /analyticsAggregateRankedPage\(clusterQueryId, "topology-switch", \{ limit: 20 \}\)/);
   assert.match(app, /dataset\.sourceRowCount !== expectedDevices/);
@@ -3115,7 +3115,7 @@ test("unassigned analytics details load bounded pages instead of retaining a ful
   const renderer = readFileSync("src/ui/render.js", "utf8");
   assert.doesNotMatch(analytics, /unassignedDevices\s*=\s*devices\.filter/);
   assert.doesNotMatch(app, /analytics\.unassignedDevices/);
-  assert.match(app, /database\.loadSnapshotUnassignedRoomPage\(snapshotId, \{\s*page, limit: 50, filters: analytics\.dashboardFilters, positionMask: analytics\.unassignedPositionMask,\s*positionValue: CURRENT_STATUS_MASK\[status\] \|\| 1,\s*\}\)/);
+  assert.match(app, /database\.loadSnapshotUnassignedRoomPage\(snapshotId, \{\s*page, limit: 50, filters: analytics\.dashboardFilters,\s*\}\)/);
   assert.match(app, /\[data-unassigned-device-page\]/);
   assert.match(database, /async loadSnapshotUnassignedRoomPage/);
   assert.match(database, /const matchesFilters = createDashboardDeviceMatcher\(filters\)/);

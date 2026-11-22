@@ -2463,15 +2463,15 @@ test("analytics unassigned-room roster is read by exact bounded pages from Final
   ];
   await database.saveFinal({ id: "unassigned-final", devices });
   const second = await database.loadSnapshotUnassignedRoomPage("unassigned-final", { page: 2, limit: 50 });
-    assert.equal(second.total, 103);
+  assert.equal(second.total, 104);
   assert.equal(second.pageCount, 3);
   assert.equal(second.devices.length, 50);
   assert.equal(second.devices[0].id, "no-room-50");
   const last = await database.loadSnapshotUnassignedRoomPage("unassigned-final", { page: 99, limit: 50 });
   assert.equal(last.page, 3);
-    assert.equal(last.devices.length, 3);
+  assert.equal(last.devices.length, 4);
   assert.equal(last.hasNext, false);
-    assert.deepEqual(last.devices.map(({ id }) => id), ["no-room-100", "no-room-101", "no-room-102"]);
+  assert.deepEqual(last.devices.map(({ id }) => id), ["no-room-100", "no-room-101", "no-room-102", "smartroom-assigned"]);
   const filtered = await database.loadSnapshotUnassignedRoomPage("unassigned-final", {
     page: 1,
     limit: 10,

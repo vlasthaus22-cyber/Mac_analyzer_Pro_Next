@@ -29,7 +29,7 @@ export const FIELD_LABELS = Object.freeze({
   ip: "IP устройства",
   switchIp: "IP коммутатора",
   switchPort: "Порт коммутатора",
-  smartroomId: "Smartroom ID",
+  smartroomId: "SmartRoom ID помещения",
   locationPath: "Полный путь помещения",
   businessUnit: "ТБ",
   city: "Город",

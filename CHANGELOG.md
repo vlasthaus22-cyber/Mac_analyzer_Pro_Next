@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.3.15 — 2026-11-22
+
+- Full current-Final cards, occupancy, topology and exports no longer use the selected comparison-status roster. Status vendor charts retain their own aggregate; field-change and absence charts retain the complete comparison.
+- Missing-room counts and paged details use the empty Final Room field, including records with a known SmartRoom location ID. Invalidated derived caches for the revised rule.
+- Added a local, previewable TXT bug report with chunked Final reconciliation, exact comparison-list totals, numeric source-stage counters and bounded error types. Imported records, identifiers, source names, filter values and error messages are excluded.
+- Prefer a full physical address over its floor fragment; wrap addresses in standard device detail tables. Verified the photographed SmartRoom column layout and separate location/device IDs.
+
 ## v2.3.14 — 2026-11-21
 
 - Additional Main/SmartRoom source fields require an explicit checkbox, start unmapped, and are excluded from import when disabled. Legacy batch plans are filtered before validation.
