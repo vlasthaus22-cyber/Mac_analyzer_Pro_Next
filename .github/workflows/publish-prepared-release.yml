@@ -59,7 +59,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/check-release-readiness.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify latest Final, vendor chart and archive receipt in Edge
+      - name: Verify latest Final and completed archive writes in Edge
         shell: pwsh
         run: |
           $id = [guid]::NewGuid().ToString('N')

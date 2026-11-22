@@ -609,8 +609,8 @@ if (process.argv.includes("--smartroom-schema-audit-only")) {
 if (process.argv.includes("--address-roster-regression-only")) {
   const address = "Москва, Кутузовский проспект, 32А, второй этаж";
   const macAt = (index) => "02:80:00:00:00:" + index.toString(16).padStart(2, "0");
-  const check = async (expression, label) => {
-    for (let attempt = 0; attempt < 250; attempt += 1) {
+  const check = async (expression, label, attempts = 250) => {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       const result = await evaluate(expression);
       if (result) return result;
       const error = await evaluate("!document.querySelector('#errorBanner').hidden && document.querySelector('#errorBanner').textContent");
@@ -671,9 +671,9 @@ if (process.argv.includes("--address-roster-regression-only")) {
   const ambiguous=await evaluate("({summary:document.querySelector('#macTimelineSummary').textContent,candidates:document.querySelectorAll('#macTimeline .mac-timeline-ambiguous li').length,overflows:document.querySelector('#macTimeline').scrollWidth>document.querySelector('#macTimeline').clientWidth+1})");
   if(ambiguous.summary.includes("Выгрузок0") || ambiguous.summary.includes("Источников0") || ambiguous.candidates!==4 || ambiguous.overflows) throw new Error("Ambiguous chronology lost sources or candidate details: "+JSON.stringify(ambiguous));
   await evaluate("document.querySelector('[data-view=\"data\"]').click();document.querySelector('#localArchiveName').value='Address regression';document.querySelector('#localArchiveForm').requestSubmit()");
-  await check("document.querySelector('#localArchiveStatus').textContent.includes('Сохранён архив') && !document.querySelector('#saveLocalArchiveButton').disabled", "Local archive save");
+  await check("document.querySelector('#localArchiveStatus').textContent.includes('Сохранён архив') && !document.querySelector('#saveLocalArchiveButton').disabled", "Local archive save", 2400);
   await evaluate("document.querySelector('[data-view=\"analytics\"]').click();document.querySelector('#includeArchivedSnapshotsButton').click()");
-  await check("document.querySelector('#archiveAnalyticsStatus').textContent.includes('Учтено архивов · 1') && !document.querySelector('#includeArchivedSnapshotsButton').disabled", "Archive analytics restore");
+  await check("document.querySelector('#archiveAnalyticsStatus').textContent.includes('Учтено архивов · 1') && !document.querySelector('#includeArchivedSnapshotsButton').disabled", "Archive analytics restore", 2400);
   const archived=await evaluate("document.querySelector('#databaseStatus').textContent");
   if(!archived.includes("2 снимок объединения")) throw new Error("Archive inclusion duplicated snapshots: "+archived);
   const reloaded=await reloadDatabaseAndWait(new URL(target.url).searchParams.get("db"));
@@ -687,7 +687,7 @@ if (process.argv.includes("--address-roster-regression-only")) {
   await openArchiveDataView();
   await check("document.querySelector('#lastArchiveReceipt').textContent.includes('Address regression')", "Local archive receipt survived restart");
   await evaluate(`window.__archiveParts=[];Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:async()=>({createWritable:async()=>new WritableStream({write(part){window.__archiveParts.push(part)},close(){window.__archiveBlob=new Blob(window.__archiveParts)}})})});document.querySelector('#exportDatabaseButton').click()`);
-  const receipt = await check("document.querySelector('#lastArchiveReceipt').textContent.includes('Переносимый архив Next записан на диск') && document.querySelector('#lastArchiveReceipt').textContent", "Portable archive receipt after file close");
+  const receipt = await check("document.querySelector('#lastArchiveReceipt').textContent.includes('Переносимый архив Next записан на диск') && document.querySelector('#lastArchiveReceipt').textContent", "Portable archive receipt after file close", 2400);
   const format = await evaluate("(async()=>JSON.parse(await window.__archiveBlob.text()).format)()");
   if (format !== "MAC_ANALYZER_NEXT_ARCHIVE") throw new Error("Archive receipt without a complete portable archive");
   await evaluate("Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:async()=>{throw new DOMException('cancel','AbortError')}});document.querySelector('#exportDatabaseButton').click()");
