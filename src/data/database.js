@@ -1,8 +1,8 @@
-import { firstMac, hasKnownRoom, keyText, locationKey, macHex, MAX_DEVICE_ALTERNATIVES, normalizeDate, normalizeIp, normalizeMac, physicalLocationKey, text } from "../core/normalize.js";
+import { firstMac, hasKnownRoom, isFloorOnlyAddress, keyText, locationKey, macHex, MAX_DEVICE_ALTERNATIVES, normalizeDate, normalizeIp, normalizeMac, physicalLocationKey, text } from "../core/normalize.js";
 import { createDashboardDeviceMatcher, normalizeDashboardFilters } from "../core/dashboard-filter.js";
 import { normalizeMacPrefix } from "../core/model-knowledge.js";
 import { historyConfidenceFromOccurrences } from "../core/history-confidence.js";
-import { matchesDeviceSearch } from "../core/search.js";
+import { exactMacSearchQuery, matchesDeviceSearch } from "../core/search.js";
 import { applyIpMapping, createIpMappingAccumulator, normalizeIpEnrichmentSettings, normalizeIpMappings } from "../core/ip-mapping.js";
 import { isCriticalHistoryChange, normalizeChangeType } from "../core/change-categories.js";
 import { MAX_PORTABLE_ARCHIVE_BYTES } from "./data-directory.js";
@@ -5204,7 +5204,7 @@ export class Database {
         const switchIp = String(device.switchIp || "").trim();
         const address = text(device.address) || text(device.physicalAddress);
         const addressSource = text(device.fieldSources?.address || device.fieldSources?.physicalAddress);
-        if (isFinalSnapshot(metadata) && switchIp && address && !["Historical switch IP mapping", "Previous Final"].includes(addressSource)) {
+        if (isFinalSnapshot(metadata) && switchIp && address && !isFloorOnlyAddress(address) && !["Historical switch IP mapping", "Previous Final"].includes(addressSource) && !addressSource.includes("/24")) {
           const key = `${switchIp}\u0000${address}`;
           if (!addressEvidence.has(key)) addressEvidence.set(key, { switchIp, address, deviceCount: 0, sampleMacs: [] });
           const evidence = addressEvidence.get(key);
@@ -5501,7 +5501,9 @@ export class Database {
     }
   }
 
-  async searchInventory({ query = "", field = "mac", direction = 1, page = 1, pageSize = 50, signal } = {}) {
+  async searchInventory({ query = "", field = "mac", direction = 1, page = 1, pageSize = 50, signal, includeMacCandidates = false } = {}) {
+    const exactMac = exactMacSearchQuery(query);
+    let latestMacMatch = null;
     const db = await this.open();
     const tx = db.transaction("inventory", "readonly");
     const done = transactionDone(tx);
@@ -5521,9 +5523,16 @@ export class Database {
       const cursor = request.result;
       if (!cursor) return;
       const device = cursor.value;
-      if (matchesDeviceSearch(device, query)) {
+      let matchesMac = false;
+      if (exactMac) visitDeviceMacAddresses(device, (mac) => { if (mac === exactMac) matchesMac = true; });
+      if (exactMac ? matchesMac : matchesDeviceSearch(device, query)) {
         total += 1;
-        if (total > start && total <= end) selected.push(device);
+        if (exactMac && !includeMacCandidates) {
+          const newest = String(device.lastSeen || "").localeCompare(String(latestMacMatch?.lastSeen || ""));
+          const primary = Number(normalizeMac(device.mac) === exactMac) - Number(normalizeMac(latestMacMatch?.mac) === exactMac);
+          const order = newest || primary || String(device.id).localeCompare(String(latestMacMatch?.id || ""));
+          if (!latestMacMatch || order > 0) latestMacMatch = device;
+        } else if (total > start && total <= end) selected.push(device);
       }
       cursor.continue();
     };
@@ -5539,10 +5548,11 @@ export class Database {
     } finally {
       signal?.removeEventListener("abort", abort);
     }
+    if (latestMacMatch) return { items: [latestMacMatch], total: 1, page: 1, pages: 1, macCandidates: total };
     const pages = Math.max(1, Math.ceil(total / size));
     const resolvedPage = Math.min(currentPage, pages);
-    if (currentPage > pages) return this.searchInventory({ query, field: sortField, direction, page: resolvedPage, pageSize: size, signal });
-    return { items: selected, total, page: resolvedPage, pages };
+    if (currentPage > pages) return this.searchInventory({ query, field: sortField, direction, page: resolvedPage, pageSize: size, signal, includeMacCandidates });
+    return { items: selected, total, page: resolvedPage, pages, macCandidates: exactMac && includeMacCandidates ? total : undefined };
   }
 
   async inventoryMacs(limit = 20_000) {

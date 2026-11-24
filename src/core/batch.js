@@ -99,10 +99,7 @@ export async function runBatchQueue(pairs = [], executePair, options = {}) {
   return { completed, errors, observerErrors, stopped, failedPairIndex, cancelled };
 }
 
-const STRONG_FIELDS = Object.freeze({
-  main: ["id", "deviceId", "serial", "mac", "mac2"],
-  smartroom: ["id", "deviceId", "serial", "mac", "mac2"],
-});
+const MAIN_IDENTITY_FIELDS = Object.freeze(["id", "deviceId", "serial", "mac", "mac2"]);
 
 function supported(file) {
   return file && /\.(csv|tsv|txt|json|xlsx|xlsm|xls)$/i.test(file.name || "");
@@ -352,11 +349,11 @@ export function batchMappingProblems(role, mapping = {}, entry = null) {
   const problems = [];
   if (entry?.error) return [`${entry.file.name}: ${entry.error}`];
   if (role === "main" && entry?.rowCount === 0) problems.push("Main: основной файл не содержит строк устройств");
-  if (role === "main" && !STRONG_FIELDS.main.some((field) => Number.isInteger(mapping[field]))) {
+  if (role === "main" && !MAIN_IDENTITY_FIELDS.some((field) => Number.isInteger(mapping[field]))) {
     problems.push("Main: выберите внутренний ID, Device ID, Serial, MAC или дополнительный MAC");
   }
-  if (role === "smartroom" && !STRONG_FIELDS.smartroom.some((field) => Number.isInteger(mapping[field]))) {
-    problems.push("SmartRoom: выберите внутренний ID, Device ID, Serial, основной или дополнительный MAC");
+  if (role === "smartroom" && !Number.isInteger(mapping.mac)) {
+    problems.push("SmartRoom: выберите колонку основного MAC для сопоставления с Main");
   }
   if (role === "ddio") {
     const reservation = Number.isInteger(mapping.reservationMac) && Number.isInteger(mapping.reservationIp);
@@ -380,7 +377,10 @@ export function batchMappingProblems(role, mapping = {}, entry = null) {
 export function batchPairProblems(pair) {
   if (!pair?.main) return ["Не выбран Main-файл"];
   const problems = batchMappingProblems("main", pair.main.mapping, pair.main);
-  if (pair.smartroom) problems.push(...batchMappingProblems("smartroom", pair.smartroom.mapping, pair.smartroom));
+  if (pair.smartroom) {
+    if (!Number.isInteger(pair.main.mapping?.mac)) problems.push("Main: выберите колонку основного MAC для сопоставления со SmartRoom");
+    problems.push(...batchMappingProblems("smartroom", pair.smartroom.mapping, pair.smartroom));
+  }
   if (pair.ddio) problems.push(...batchMappingProblems("ddio", pair.ddio.mapping, pair.ddio));
   return problems;
 }

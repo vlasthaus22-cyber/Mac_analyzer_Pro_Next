@@ -764,6 +764,7 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
     await roomChangeAccumulator.writeRoomSwitchVotes(page);
   };
   const pendingRoomChangeEvents = [];
+  let roomEventSequence = 0;
   const processRoomChangeEvents = async () => {
     if (!pagedRoomChanges || !pendingRoomChangeEvents.length) return;
     const events = pendingRoomChangeEvents.splice(0, pendingRoomChangeEvents.length);
@@ -774,13 +775,23 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
       else devices.push(event.device);
     }
     const locationToIds = await roomLocationEvidenceForDevices("room-location-comparison", devices);
+    const detailRows = [];
+    const record = (key, event) => {
+      if (!key || !roomChangeAccumulator.writeRoomChangeDetails) return;
+      const value = JSON.stringify(key) + ":" + String(roomEventSequence++).padStart(12, "0");
+      detailRows.push({ value, data: event });
+    };
     for (const event of events) {
       if (event.type === "added") {
         addChangeMember(event.device, stableIdentity(event.device), true, true, locationToIds);
+        record(reconciledRoomDescriptor(event.device, locationToIds).key, event);
       } else if (event.type === "modified") {
         const { row } = event;
         const beforeRoom = reconciledRoomDescriptor(row.before, locationToIds);
         const afterRoom = reconciledRoomDescriptor(row.after, locationToIds);
+        const detail = { type: "modified", before: row.before, device: row.after, changes: row.changes };
+        record(afterRoom.key, detail);
+        if (beforeRoom.key !== afterRoom.key) record(beforeRoom.key, detail);
         const identity = row.identity || stableIdentity(row.after) || stableIdentity(row.before);
         if (beforeRoom.key !== afterRoom.key) {
           addChangeMember(row.before, identity, true, false, locationToIds);
@@ -791,8 +802,10 @@ async function buildAnalyticsPairFromChunksInternal(previous = { devices: [] }, 
         addChangeMember(row.after, row.identity || stableIdentity(row.after) || stableIdentity(row.before), false, true, locationToIds);
       } else if (event.type === "absent") {
         addChangeMember(event.device, stableIdentity(event.device), true, false, locationToIds);
+        record(reconciledRoomDescriptor(event.device, locationToIds).key, event);
       }
     }
+    if (detailRows.length) await roomChangeAccumulator.writeRoomChangeDetails(detailRows);
   };
   const statusVendors = new Map();
   const countStatusVendor = (device) => addCount(statusVendors, deviceManufacturer(device) || "Unknown");

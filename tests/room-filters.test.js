@@ -163,3 +163,9 @@ test("room filter auto-selects a sole option and preserves an explicit selection
   assert.equal(uniqueRoomFilterSelection(["Офис А", "Офис Б"]), "");
   assert.equal(uniqueRoomFilterSelection(["Офис А", "Офис Б"], "Офис Б"), "Офис Б");
 });
+
+test("legacy Final addresses supply bank, city, complete site and floor choices", () => {
+  const catalog = addRoomCatalogDevices(new Map(), [{ smartroomId: "R105", room: "Переговорная 105", address: "ДВБ, г. Саранск, ул. Тестовая, 34-1, 5 этаж" }]);
+  const [room] = catalog.values();
+  assert.deepEqual([room.businessUnit, room.city, room.site, room.floor, room.room], ["ДВБ", "Саранск", "ул. Тестовая, 34-1", "5 этаж", "Переговорная 105"]);
+});

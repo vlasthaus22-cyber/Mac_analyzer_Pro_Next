@@ -501,12 +501,16 @@ test("batch pair validation requires strong identity and a complete DDIO pair", 
   assert.equal(batchPairProblems(pair).length, 1, "an explicit reservation pair is accepted");
 });
 
-test("batch identity validation accepts persistent IDs and alternate MACs", () => {
+test("batch identity validation accepts persistent IDs in Main alone and requires primary MACs for a SmartRoom pair", () => {
   const pair = {
     main: { ...entry("main", "main", "2026-09-01T00:00:00Z"), mapping: { id: 0 } },
     smartroom: { ...entry("smartroom", "smartroom", "2026-09-01T00:00:00Z"), mapping: { mac2: 0 } },
     ddio: null,
   };
+  assert.deepEqual(batchPairProblems({ main: pair.main }), []);
+  assert.equal(batchPairProblems(pair).length, 2);
+  pair.main.mapping.mac = 1;
+  pair.smartroom.mapping.mac = 1;
   assert.deepEqual(batchPairProblems(pair), []);
 });
 

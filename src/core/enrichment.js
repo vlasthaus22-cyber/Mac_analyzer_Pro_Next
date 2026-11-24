@@ -2,6 +2,7 @@ import {
   firstKnown,
   hasStrongIdentity,
   isAddressFragment,
+  isFloorOnlyAddress,
   keyText,
   MAX_DEVICE_ALTERNATIVES,
   MAX_DEVICE_CONFLICTS,
@@ -518,8 +519,9 @@ export async function hydrateStagedIdentityBatch(candidates, identityIndex, devi
   return loaded;
 }
 
-export async function findStagedIdentityMatch(candidate, identityIndex, deviceStore, pendingDevicesByPosition, signal, prefetchedDevices = null) {
-  const positions = stagedIdentityPositions(candidate, identityIndex);
+export async function findStagedIdentityMatch(candidate, identityIndex, deviceStore, pendingDevicesByPosition, signal, prefetchedDevices = null, exactMac = false) {
+  const projectedCandidate = exactMac ? { mac: candidate.mac, alternateMacs: candidate.alternateMacs } : candidate;
+  const positions = stagedIdentityPositions(projectedCandidate, identityIndex);
   const loaded = new Map();
   for (const position of positions) {
     throwIfAborted(signal);
@@ -543,7 +545,8 @@ export async function findStagedIdentityMatch(candidate, identityIndex, deviceSt
       return loaded.get(Number(property));
     },
   });
-  return findIdentityMatch(candidate, { devices, tokens: identityIndex.tokens });
+  const index = { devices, tokens: identityIndex.tokens };
+  return exactMac ? findExactSmartroomMac(candidate, index) : findIdentityMatch(candidate, index);
 }
 
 function assignUniqueInternalId(candidate, identityConflict, diagnostics, source, rowNumber) {
@@ -649,10 +652,10 @@ function applyPreviousFinal(device, previousIndex, diagnostics, enrichmentFieldS
   recordIdentityConflicts(diagnostics, "Previous Final", "", result);
   device.id = result.match.id || device.id;
   const previous = result.match;
-  const differentLocation = ["smartroomId", "city", "site", "floor", "room"].some((field) => {
+  const differentLocation = ["smartroomId", "city", "site", "floor", "room", "address"].some((field) => {
     const before = keyText(previous[field]);
     const after = keyText(device[field]);
-    return before && after && before !== after;
+    return before && after && before !== after && !(field === "address" && (isFloorOnlyAddress(before) || isFloorOnlyAddress(after)));
   }) || (normalizeIp(previous.switchIp) && normalizeIp(device.switchIp) && normalizeIp(previous.switchIp) !== normalizeIp(device.switchIp));
   mergeDevice(device, previous, "Previous Final", { enrichmentFieldSettings, ...(differentLocation ? { skipFields: LOCATION_MERGE_FIELDS } : {}) });
   if (previousUseCounts) {
@@ -707,7 +710,79 @@ async function createMainDevices(rows, mapping, diagnostics, enrichmentFieldSett
   return { devices, rowCount: rowIndex, identityIndex: retainIdentityIndex ? index : null };
 }
 
-async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, enrichmentFieldSettings, comparisonSettings, identityIndex = null, signal) {
+function findExactSmartroomMac(candidate, index) {
+  const mac = normalizeMac(candidate.mac);
+  const position = mac ? index.tokens.get(`mac:${mac}`) : undefined;
+  if (typeof position === "number") return { status: "matched", match: index.devices[position], position };
+  if (position !== undefined) return { status: "ambiguous" };
+  const positions = new Set();
+  let ambiguous = false;
+  visitDeviceAlternateMacs(candidate, (alternate) => {
+    const hit = index.tokens.get(`mac:${alternate}`);
+    if (typeof hit === "number") positions.add(hit);
+    else if (hit !== undefined) ambiguous = true;
+  });
+  if (ambiguous || positions.size > 1) return { status: "ambiguous" };
+  if (!positions.size) return { status: "none" };
+  const [matchedPosition] = positions;
+  return { status: "matched", match: index.devices[matchedPosition], position: matchedPosition, matchedAlternateMac: true };
+}
+
+function mergeExactSmartroomDevice(target, candidate, diagnostics, row, enrichmentFieldSettings, matchedAlternateMac) {
+  target.fieldSources ||= {};
+  const observed = target.smartroomMergeLocation ||= {};
+  const skipFields = new Set();
+  for (const field of ["deviceId", "serial"]) {
+    if (text(target[field]) && text(candidate[field]) && keyText(target[field]) !== keyText(candidate[field])) {
+      skipFields.add(field);
+      addDiagnosticConflict(diagnostics, { source: "SmartRoom", row, field, reason: "Идентификаторы Main и SmartRoom различаются при точном совпадении MAC" });
+    }
+  }
+  const conflict = [...LOCATION_MERGE_FIELDS].find((field) => text(candidate[field]) && observed[field]
+    && keyText(candidate[field]) !== keyText(observed[field]) && !isAddressFragment(candidate[field], observed[field])
+    && !isAddressFragment(observed[field], candidate[field]));
+  if (conflict && !observed.conflict) {
+    observed.conflict = true;
+    diagnostics.counts.smartroomMacLocationConflicts = (diagnostics.counts.smartroomMacLocationConflicts || 0) + 1;
+    addDiagnosticConflict(diagnostics, { source: "SmartRoom", row, field: conflict, reason: "Несовместимые помещения или адреса в SmartRoom для одного MAC" });
+    for (const [field, original] of Object.entries(observed.original || {})) {
+      if (original.value === undefined) delete target[field];
+      else target[field] = original.value;
+      if (original.source === undefined) delete target.fieldSources[field];
+      else target.fieldSources[field] = original.source;
+    }
+    delete observed.original;
+  }
+  for (const field of LOCATION_MERGE_FIELDS) skipFields.add(field);
+  if (!observed.conflict) {
+    observed.original ||= {};
+    if (text(candidate.address) && !isFloorOnlyAddress(candidate.address) && enrichmentFieldSettings.address
+      && text(target.address) && !isFloorOnlyAddress(target.address) && keyText(target.address) !== keyText(candidate.address)
+      && !isAddressFragment(target.address, candidate.address)) {
+      for (const field of ["businessUnit", "city", "site", "floor", "room", "physicalAddress", "locationPath", "smartroomId"]) {
+        if (!text(target[field]) || observed[field] || text(candidate[field])) continue;
+        const setting = ENRICHMENT_FIELD_BY_DEVICE_FIELD[field];
+        if (setting && !enrichmentFieldSettings[setting]) continue;
+        observed.original[field] ||= { value: target[field], source: target.fieldSources[field] };
+        delete target[field];
+        delete target.fieldSources[field];
+      }
+    }
+    for (const field of LOCATION_MERGE_FIELDS) {
+      const value = text(candidate[field]);
+      const setting = ENRICHMENT_FIELD_BY_DEVICE_FIELD[field];
+      if (!value || (setting && !enrichmentFieldSettings[setting])) continue;
+      if ((field === "address" || field === "physicalAddress") && isFloorOnlyAddress(value) && text(target[field]) && !isFloorOnlyAddress(target[field])) continue;
+      if (observed[field] && !isAddressFragment(observed[field], value)) continue;
+      observed.original[field] ||= { value: target[field], source: target.fieldSources[field] };
+      observed[field] = value;
+      setKnown(target, field, value, "SmartRoom", { overwrite: true });
+    }
+  }
+  mergeDevice(target, { ...candidate, mac: matchedAlternateMac ? candidate.mac : target.mac, alternateMacs: [] }, "SmartRoom", { enrichmentFieldSettings, skipFields });
+}
+
+async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, enrichmentFieldSettings, comparisonSettings, identityIndex = null, signal, exactMac = false) {
   if (Array.isArray(rows) && rows.length === 0) {
     await devices.finalize?.(devices.count);
     return 0;
@@ -735,6 +810,7 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
       const sourceRow = sourceRowArray(row);
       if (!sourceRow.some((value) => text(value))) continue;
       const candidate = mapRow(sourceRow, mapping, "SmartRoom");
+      if (exactMac && isFloorOnlyAddress(candidate.room)) candidate.room = "";
       const hasConflictingIdentityAliases = recordNormalizedIdentityConflicts(diagnostics, "SmartRoom", rowNumber, candidate);
       if (hasConflictingIdentityAliases) {
         retainDiagnosticSample(diagnostics, "invalid", { source: "SmartRoom", row: rowNumber, reason: "Конфликтующие алиасы сильного идентификатора" });
@@ -748,13 +824,13 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
     }
     if (rowIndex % KNOWLEDGE_LOOKUP_BATCH_SIZE === 0) assertBrowserHeapReserve();
     const prefetchedDevices = isStaged
-      ? await hydrateStagedIdentityBatch(prepared, index, devices, pendingDevicesByPosition, stagedCount, (row) => row.candidate)
+      ? await hydrateStagedIdentityBatch(prepared, index, devices, pendingDevicesByPosition, stagedCount, ({ candidate }) => exactMac ? { mac: candidate.mac, alternateMacs: candidate.alternateMacs } : candidate)
       : null;
     for (const { candidate, rowNumber } of prepared) {
       throwIfAborted(signal);
       let resolution = isStaged
-        ? await findStagedIdentityMatch(candidate, index, devices, pendingDevicesByPosition, signal, prefetchedDevices)
-        : findIdentityMatch(candidate, index);
+        ? await findStagedIdentityMatch(candidate, index, devices, pendingDevicesByPosition, signal, prefetchedDevices, exactMac)
+        : exactMac ? findExactSmartroomMac(candidate, index) : findIdentityMatch(candidate, index);
       if (resolution.strongIdentityUnmatched && resolution.candidates?.length) {
         const configured = resolveConfiguredComparison(candidate, resolution.candidates, comparisonSettings, { candidateOverflow: resolution.candidateOverflow === true });
         for (const conflict of configured.conflicts || []) {
@@ -775,7 +851,10 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
       }
       if (resolution.status === "matched") {
         recordIdentityConflicts(diagnostics, "SmartRoom", rowNumber, resolution);
-        mergeDevice(resolution.match, candidate, "SmartRoom", { enrichmentFieldSettings });
+        if (exactMac) {
+          if (!resolution.match.smartroomMergeLocation) diagnostics.counts.smartroomMatchedMacs++;
+          mergeExactSmartroomDevice(resolution.match, candidate, diagnostics, rowNumber, enrichmentFieldSettings, resolution.matchedAlternateMac);
+        } else mergeDevice(resolution.match, candidate, "SmartRoom", { enrichmentFieldSettings });
         addIdentityToIndex(index, resolution.match, resolution.position);
         if (isStaged && resolution.position < stagedCount) changedDevicesByPosition.set(resolution.position, resolution.match);
         retainDiagnosticSample(diagnostics, "decisions", {
@@ -835,6 +914,14 @@ async function enrichSmartroom(devices, rows, mapping, strategy, diagnostics, en
   if (isStaged && index.tokens.size) await devices.writeIdentityEntries(index.tokens, stagedCount);
   index.tokens.clear();
   await devices.finalize?.(devices.count);
+  if (exactMac) {
+    await applyDeviceBatches(devices, (device) => {
+      if (!device.smartroomMergeLocation) return false;
+      delete device.smartroomMergeLocation;
+      if (device.fieldSources?.room === "SmartRoom" && text(device.room)) diagnostics.counts.smartroomMatchedWithRoom++;
+      return true;
+    }, signal);
+  }
   return rowIndex;
 }
 
@@ -1008,6 +1095,7 @@ export async function enrich(options = {}) {
     ddioRows = [],
     mappings = {},
     strategy = STRATEGIES.NO_EXPANSION,
+    smartroomExactMac = false,
     previousFinal = [],
     previousIdentityIndex = null,
     loadPreviousIdentityIndex = null,
@@ -1041,6 +1129,7 @@ export async function enrich(options = {}) {
   const configuredComparisonSettings = normalizeComparisonSettings(comparisonSettings);
   const historySettings = normalizeHistoryEnrichmentSettings(historyEnrichmentSettings);
   const ipSettings = normalizeIpEnrichmentSettings(ipEnrichmentSettings);
+  if (smartroomExactMac) Object.assign(ipSettings, { partialMatch: false, overwrite: false });
   const diagnostics = { invalid: [], conflicts: [], unmatched: [], decisions: [], counts: {} };
   const detectorSettings = normalizeVendorDetectorSettings(vendorDetectorSettings);
   const progress = async (value, stage) => {
@@ -1101,7 +1190,8 @@ export async function enrich(options = {}) {
   }
 
   await progress(40, "Сопоставление SmartRoom");
-  diagnostics.counts.smartroomRaw = await enrichSmartroom(devices, smartroomRows, mappings.smartroom || {}, strategy, diagnostics, fieldSettings, configuredComparisonSettings, main.identityIndex, signal);
+  if (smartroomExactMac) Object.assign(diagnostics.counts, { smartroomMatchedMacs: 0, smartroomMatchedWithRoom: 0, smartroomMacLocationConflicts: 0 });
+  diagnostics.counts.smartroomRaw = await enrichSmartroom(devices, smartroomRows, mappings.smartroom || {}, strategy, diagnostics, fieldSettings, configuredComparisonSettings, main.identityIndex, signal, smartroomExactMac);
   diagnostics.counts.afterSmartroom = deviceCount(devices);
   if (deviceStore && devices !== deviceStore) {
     if (!Array.isArray(devices) || typeof deviceStore.appendPage !== "function"
@@ -1230,7 +1320,7 @@ export async function enrich(options = {}) {
     effectiveHistoricalAddressIndex = typeof loadHistoricalAddressIndex === "function"
       ? await loadDeviceIndexInBatches(
         devices,
-        (device) => !text(device.address) && text(device.switchIp),
+        (device) => (!text(device.address) || isFloorOnlyAddress(device.address)) && text(device.switchIp),
         (device) => text(device.switchIp),
         loadHistoricalAddressIndex,
         {

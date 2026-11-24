@@ -1,4 +1,4 @@
-import { keyText, normalizeIp, normalizeMac, text } from "./normalize.js";
+import { canCompletePhysicalAddress, isFloorOnlyAddress, keyText, normalizeIp, normalizeMac, text } from "./normalize.js";
 import { conflictingStrongFields, visitDeviceMacAddresses } from "./identity.js";
 
 const MIN_SNAPSHOTS = 2;
@@ -105,7 +105,7 @@ export function createHistoricalAddressAccumulator() {
       if (!record) return;
       const switchIp = normalizeIp(record.switchIp);
       const address = text(record.address);
-      if (!switchIp || !address || !record.snapshotId) return;
+      if (!switchIp || !address || isFloorOnlyAddress(address) || !record.snapshotId) return;
       if (!byIp.has(switchIp)) byIp.set(switchIp, new Map());
       const addresses = byIp.get(switchIp);
       if (!addresses.has(address)) addresses.set(address, new Map());
@@ -174,7 +174,8 @@ export function buildHistoricalAddressIndex(records = []) {
 export function applyHistoricalAddress(device, index) {
   const switchIp = normalizeIp(device.switchIp);
   const suggestion = switchIp ? index.get(switchIp) : null;
-  if (!suggestion || suggestion.status !== "confirmed" || text(device.address) || text(device.physicalAddress)) return null;
+  if (suggestion?.status !== "confirmed" || !canCompletePhysicalAddress(device.address, suggestion.address)
+    || (text(device.physicalAddress) && !canCompletePhysicalAddress(device.physicalAddress, suggestion.address))) return null;
   device.address = suggestion.address;
   device.fieldSources ||= {};
   device.fieldSources.address = "Historical switch IP mapping";

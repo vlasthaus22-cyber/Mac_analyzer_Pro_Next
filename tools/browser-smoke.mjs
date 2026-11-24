@@ -526,6 +526,8 @@ if (process.argv.includes("--batch-direct-start-regression-only")) {
   await evaluate("window.__directBatchPrompts=[];window.confirm=(message)=>{window.__directBatchPrompts.push(message);return false};document.querySelector('#runBatchButton').click()");
   await check("document.querySelector('#batchStartStatus').textContent.includes('Запуск отменён') && !document.querySelector('#runBatchButton').disabled", "Cancel automatic review");
   if (await evaluate("document.querySelectorAll('#batchPreview tr.batch-details-row').length") !== 2) throw new Error("Automatic pairing did not create both cycles");
+  const secondPairStayedOpen = await evaluate(`(()=>{const pairs=[...document.querySelectorAll('[data-batch-pair-details]')];pairs[0].open=false;pairs[1].open=true;const field=pairs[1].querySelector('[data-batch-entry-role=smartroom][data-batch-mapping-field=smartroomId]');field.value='';field.dispatchEvent(new Event('change',{bubbles:true}));const restored=document.querySelectorAll('[data-batch-pair-details]');const kept=!restored[0].open&&restored[1].open&&field.isConnected;field.value='3';field.dispatchEvent(new Event('change',{bubbles:true}));return kept})()`);
+  if (!secondPairStayedOpen) throw new Error("Changing mapping reset the open batch pair");
   if (await evaluate("!!document.querySelector('[data-batch-entry-role=smartroom][data-batch-mapping-field=room]').closest('.mapping-extra-fields')")) throw new Error("Room is hidden in optional fields");
   const optionalState = () => evaluate("(()=>{const field=document.querySelector('[data-batch-entry-role=smartroom][data-batch-mapping-field=hostname]');return{value:field.value,disabled:field.disabled,checked:field.closest('details').querySelector('[data-include-extra-fields]').checked}})()");
   let extras = await optionalState();
@@ -626,7 +628,10 @@ if (process.argv.includes("--address-roster-regression-only")) {
   for (let run=1;run<=2;run+=1) {
     await assignInput("#mainFileInput", "address-main-"+run+".csv", "MAC;Device ID;NasIP;Smartroom ID;NasPortID\n"+mainRows.join("\n"));
     const runRooms = smartRows.slice();
-    if (run === 1) runRooms[1] = [macAt(1), address, "", "SR-1"].join(";");
+    if (run === 1) {
+      runRooms[1] = [macAt(1), address, "", "SR-1"].join(";");
+      runRooms[2] = [macAt(2), address, "Старое помещение", "SR-2"].join(";");
+    }
     await assignInput("#smartroomFileInput", "address-smartroom-"+run+".csv", "MAC;Адрес локации;Название комнаты;Smartroom ID\n"+runRooms.join("\n"));
     await check("[...document.querySelectorAll('[data-mapping-role=smartroom][data-mapping-field]')].filter(el=>!el.closest('details:not([open])')).length===10", "Primary SmartRoom fields include room");
     await evaluate("document.querySelector('[data-mapping-role=smartroom][data-mapping-field=locationPath]').closest('details').querySelector('summary').click()");
@@ -637,6 +642,11 @@ if (process.argv.includes("--address-roster-regression-only")) {
   }
   await evaluate("document.querySelector('[data-view=\"analytics\"]').click()");
   await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#analyticsKpis [data-kpi=\"devices\"] strong')?.textContent.trim()==='104'", "Distinct Main count");
+  await evaluate("document.querySelector('#analyticsKpis [data-kpi=changedRooms]').click()");
+  await check("document.querySelector('#detailsDialog [data-room-coverage-page]')", "Room change coverage");
+  await evaluate("document.querySelector('#detailsDialog [data-room-coverage-page]').click()");
+  await check("document.querySelector('#detailsDialog').textContent.includes('Что изменилось') && document.querySelector('#detailsDialog').textContent.includes('Старое помещение')", "Room coverage shows before and after");
+  await evaluate("document.querySelector('#detailsDialog').close()");
   const roomCount = await evaluate("document.querySelector('#analyticsKpis [data-kpi=\"withoutRoom\"] strong')?.textContent.trim()");
   if(roomCount!=="1") throw new Error("Without-room KPI did not deduplicate conflicting MAC: "+roomCount);
   await evaluate("(()=>{document.querySelector('#analyticsKpis [data-kpi=devices]').setAttribute('data-smoke-old-kpi','');document.querySelector('#analyticsDashboardStatus').value='missing';document.querySelector('#applyAnalyticsDashboardFiltersButton').click()})()");
@@ -693,9 +703,65 @@ if (process.argv.includes("--address-roster-regression-only")) {
   await evaluate("Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:async()=>{throw new DOMException('cancel','AbortError')}});document.querySelector('#exportDatabaseButton').click()");
   await check("document.querySelector('#portableArchiveStatus').textContent.includes('отменено')", "Cancelled archive");
   await evaluate("Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:async()=>({createWritable:async()=>new WritableStream({write(){throw new Error('write failed')}})})});document.querySelector('#exportDatabaseButton').click()");
-  await check("document.querySelector('#portableArchiveStatus').textContent.includes('Не удалось')", "Failed archive write");
+  let failedWriteReported = false;
+  for (let attempt = 0; attempt < 250; attempt++) {
+    failedWriteReported = await evaluate("document.querySelector('#portableArchiveStatus').textContent.includes('Не удалось')");
+    if (failedWriteReported) break;
+    await wait(100);
+  }
+  if (!failedWriteReported) throw new Error("Failed archive write was not reported");
   if (await evaluate("document.querySelector('#lastArchiveReceipt').textContent") !== receipt) throw new Error("Failed or cancelled export replaced receipt");
   console.log(JSON.stringify({addressRosterRegression:true,mainCount:104,pageTwo,missing,ambiguous,archived,reloaded,ok:true}));
+  await command("Browser.close");
+  socket.close();
+  process.exit(0);
+}
+
+if (process.argv.includes("--room-cascade-churn-only")) {
+  const mac = "02:00:00:00:90:01";
+  const address = "ДВБ, г. Саранск, ул. Тестовая, 34-1, 5 этаж";
+  const shared = { id: "stable", mac, manufacturer: "Example", model: "Example codec", room: "Переговорная 105", smartroomId: "ROOM-ID-105", address };
+  const separate = { ...shared, id: "another", mac: "02:00:00:00:90:02", room: "Зал 12", smartroomId: "ROOM-ID-12", address: "УБ, Самара, ул. Другая, 12, 2 этаж" };
+  const snapshots = [[shared, separate], [separate], [{ ...shared, model: "Example codec v2" }, separate]].map((devices, index) => ({
+    id: "example-final-" + index, name: "Final " + index, snapshotType: "final",
+    createdAt: "2026-11-0" + (index + 1) + "T12:00:00.000Z", deviceCount: devices.length, chunkCount: 1, devices,
+  }));
+  await openArchiveDataView();
+  await assignInput("#importDatabaseInput", "fixture.madb.json", JSON.stringify({ format: "MAC_ANALYZER_NEXT_ARCHIVE", version: 1, snapshots, inventory: [
+    { ...shared, id: "inventory-old", lastSeen: "2026-11-01", address: separate.address },
+    { ...shared, id: "inventory-new", lastSeen: "2026-11-03" },
+  ], history: [] }));
+  const check = async (expression, label) => {
+    for (let attempt = 0; attempt < 250; attempt++) {
+      if (await evaluate(expression)) return;
+      const error = await evaluate("!document.querySelector('#errorBanner').hidden && document.querySelector('#errorBanner span').textContent");
+      if (error) throw new Error(label + ": " + error);
+      await wait(100);
+    }
+    throw new Error(label + " timed out");
+  };
+  await check("document.querySelector('#databaseStatus').textContent.includes('3 снимок объединения')", "Restore synthetic snapshots");
+  await evaluate("document.querySelector('[data-view=analytics]').click()");
+  await check("document.querySelector('#churnRanking [data-churn-open]')", "Clickable MAC in analytics");
+  await evaluate("document.querySelector('#churnRanking [data-churn-open]').click()");
+  await check("document.querySelector('#detailsDialog [data-churn-transitions]')?.getAttribute('aria-expanded')==='true' && document.querySelector('#detailsDialog').textContent.includes('Возвращение') && document.querySelector('#detailsDialog').textContent.includes('Исчезновение')", "Inline presence transitions");
+  await evaluate("document.querySelector('#detailsDialog [data-open-mac-dialog]').click()");
+  await check("document.querySelector('#macHistoryDialog').open && document.querySelector('#detailsDialog').open && document.querySelector('[data-view=analytics]').classList.contains('active')", "MAC timeline opens above analytics");
+  await evaluate(`(()=>{document.querySelector('#macHistoryDialog').close();document.querySelector('#detailsDialog').close();const mode=document.querySelector('#changeReportModeSelect');mode.value='period';mode.dispatchEvent(new Event('change'))})()`);
+  await check("document.querySelector('[data-use-snapshot-change-report]')", "Empty date range offers selected-snapshot comparison");
+  await evaluate("document.querySelector('[data-use-snapshot-change-report]').click()");
+  await check("document.querySelector('#changeReportModeSelect').value==='snapshots' && document.querySelector('#changeTable [data-change-category=added] strong')?.textContent==='1'", "Selected snapshots show confirmed additions");
+  await evaluate(`(()=>{document.querySelector('[data-view=search]').click();const search=document.querySelector('#globalSearch');search.value=${JSON.stringify(mac)};search.dispatchEvent(new Event('input'))})()`);
+  await check("document.querySelector('#searchCount').textContent.includes('1 устройств') && document.querySelector('#deviceTable').textContent.includes('Саранск')", "Inventory exact MAC uses latest address");
+  await evaluate("document.querySelector('#showInventoryMacCandidates').click()");
+  await check("document.querySelector('#searchCount').textContent.includes('2 устройств')", "Inventory keeps older MAC records accessible");
+  await evaluate("document.querySelector('[data-view=rooms]').click()");
+  await check("[...document.querySelector('#businessUnitFilter').options].some(option=>option.value==='ДВБ')", "Bank options derived from saved full addresses");
+  await evaluate("(()=>{const filter=document.querySelector('#businessUnitFilter');filter.value='ДВБ';filter.dispatchEvent(new Event('change'))})()");
+  await check("document.querySelector('#cityFilter').value==='Саранск' && document.querySelector('#siteFilter').value==='ул. Тестовая, 34-1' && document.querySelector('#floorFilter').value==='5 этаж'", "Cascaded full site and floor");
+  await evaluate("document.querySelector('#roomSearch').value='ROOM-ID-105';document.querySelector('#showRoomButton').click()");
+  await check("document.querySelector('#roomTimelineObservation')?.textContent.includes('Переговорная 105')", "Room opened by SmartRoom ID");
+  console.log(JSON.stringify({ roomCascadeAndChurn: true, ok: true }));
   await command("Browser.close");
   socket.close();
   process.exit(0);
@@ -884,7 +950,7 @@ if (process.argv.includes("--dashboard-summary-parity-only")) {
   let dashboard=null;
   for(let attempt=0;attempt<300;attempt+=1){
     await wait(100);
-     dashboard=await evaluate(`(()=>{const ids=['pyqtVendorTopChart','pyqtRoomDistributionChart','pyqtVendorShareChart','pyqtFieldCoverageChart'];const charts=ids.map(id=>{const canvas=document.querySelector('#'+id);const chart=window.Chart?.getChart?.(canvas);return{id,type:chart?.config?.type||'',labels:[...(chart?.data?.labels||[])],data:[...(chart?.data?.datasets?.[0]?.data||[])],width:canvas?.width||0,height:canvas?.height||0,state:document.querySelector('[data-chart-state="'+id+'"]')?.textContent||''}});return{loading:!document.querySelector('#analyticsLoadingStatus').hidden,heading:document.querySelector('#changeTable h3')?.textContent||'',occupancy:document.querySelector('#roomOccupancyStatus')?.textContent||'',vendors:document.querySelector('#vendorRanking')?.textContent.replace(/\\s+/g,' ').trim()||'',models:document.querySelector('#modelRanking')?.textContent.replace(/\\s+/g,' ').trim()||'',chartTitles:ids.map(id=>document.querySelector('#'+id)?.closest('article')?.querySelector(id==='pyqtFieldCoverageChart'?'h4':'h3')?.textContent.trim()||''),charts,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
+     dashboard=await evaluate(`(()=>{const ids=['pyqtVendorTopChart','pyqtRoomDistributionChart','pyqtVendorShareChart','pyqtFieldCoverageChart'];const charts=ids.map(id=>{const canvas=document.querySelector('#'+id);const chart=window.Chart?.getChart?.(canvas);return{id,type:chart?.config?.type||'',labels:[...(chart?.data?.labels||[])],data:[...(chart?.data?.datasets?.[0]?.data||[])],width:canvas?.width||0,height:canvas?.height||0,state:document.querySelector('[data-chart-state="'+id+'"]')?.textContent||''}});return{loading:!document.querySelector('#analyticsLoadingStatus').hidden,heading:document.querySelector('#dashboardStatusRoster h3')?.textContent||'',occupancy:document.querySelector('#roomOccupancyStatus')?.textContent||'',vendors:document.querySelector('#vendorRanking')?.textContent.replace(/\\s+/g,' ').trim()||'',models:document.querySelector('#modelRanking')?.textContent.replace(/\\s+/g,' ').trim()||'',chartTitles:ids.map(id=>document.querySelector('#'+id)?.closest('article')?.querySelector(id==='pyqtFieldCoverageChart'?'h4':'h3')?.textContent.trim()||''),charts,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''}})()`);
     if(dashboard.error)throw new Error(`Dashboard summary analytics failed: ${dashboard.message}`);
      if(!dashboard.loading&&dashboard.heading==='Все устройства'&&dashboard.charts.every(chart=>chart.type&&chart.labels.length&&chart.data.length))break;
   }
@@ -1618,6 +1684,7 @@ if (process.argv.includes("--vendor-model-history-only")) {
   await evaluate(`document.querySelector('[data-view="data"]').click();document.querySelector('#vendorInferenceEnabled').checked=false;document.querySelector('#saveVendorInferenceSettingsButton').click();document.querySelector('[data-view="enrichment"]').click()`);
   await runFinal({name:"vendor-model-history-second.csv",vendor:"Contoso AV",model:"Codec Four",expectedCount:2,content:"MAC;Device ID;Производитель;Модель\n02:FA:DE:B0:C0:01;VMH-484-DEVICE-1;Northwind Media;Codec Three\n02:BE:EF:00:00:02;VMH-484-DEVICE-2;Contoso AV;Codec Four\n02:FA:DE:B0:C0:99;VMH-484-LEARN-TARGET-99;;"});
   const learningBefore = await evaluate(`(()=>new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction(['settings','snapshots','history'],'readonly');const active=tx.objectStore('settings').get('activeSnapshotId');const history=tx.objectStore('history').count();let snapshot=null;active.onsuccess=()=>{if(active.result?.value)snapshot=tx.objectStore('snapshots').get(active.result.value)};tx.oncomplete=()=>{db.close();resolve({activeId:active.result?.value||'',createdAt:snapshot?.result?.createdAt||'',history:history.result})};tx.onerror=()=>{db.close();reject(tx.error)}}}))()`);
+  await openArchiveDataView();
   await evaluate(`document.querySelector('#vendorModelLearnMinCount').value='2';document.querySelector('#vendorModelLearnSource').value='';document.querySelector('#learnVendorModelButton').click()`);
   let learningStatus = '';
   for (let attempt = 0; attempt < 240; attempt += 1) {
@@ -3438,7 +3505,7 @@ if (process.argv.includes("--dashboard-xlsx-parity-only")) {
   let analyticsState = null;
   for (let attempt = 0; attempt < 300; attempt += 1) {
     await wait(100);
-    analyticsState = await evaluate("({loading:!document.querySelector('#analyticsLoadingStatus').hidden,heading:document.querySelector('#changeTable h3')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})");
+    analyticsState = await evaluate("({loading:!document.querySelector('#analyticsLoadingStatus').hidden,heading:document.querySelector('#dashboardStatusRoster h3')?.textContent||'',error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||''})");
     if (analyticsState.error) throw new Error(`Dashboard XLSX parity analytics failed: ${analyticsState.message}`);
     if (!analyticsState.loading && analyticsState.heading === "Все устройства") { analyticsReady = true; break; }
   }
@@ -4132,11 +4199,11 @@ if (process.argv.includes("--ieee-registry-parity-only")) {
     if (cidMounted) break;
   }
   if (!cidMounted) throw new Error("IEEE CID catalog is not mounted in the data view");
-  await evaluate(`(()=>{const details=document.querySelector('#ieeeCidCatalogDetails');details.open=true;const query=document.querySelector('#ieeeCidQuery');query.value='0A2A33';document.querySelector('#ieeeCidSearchForm').requestSubmit();return true})()`);
+  await evaluate(`(()=>{const details=document.querySelector('#ieeeCidCatalogDetails');details.parentElement.closest('details').open=true;details.open=true;const query=document.querySelector('#ieeeCidQuery');query.value='0A2A33';document.querySelector('#ieeeCidSearchForm').requestSubmit();return true})()`);
   let cidCatalog = null;
   for (let attempt = 0; attempt < 80; attempt += 1) {
     await wait(100);
-    cidCatalog = await evaluate(`({status:document.querySelector('#ieeeCidCatalogStatus')?.textContent||'',table:document.querySelector('#ieeeCidCatalogTable')?.innerText||''})`);
+    cidCatalog = await evaluate(`({status:document.querySelector('#ieeeCidCatalogStatus')?.textContent||'',table:document.querySelector('#ieeeCidCatalogTable')?.textContent||''})`);
     if (cidCatalog.table.includes("0A2A33") && cidCatalog.table.includes("DIGISTOR")) break;
   }
   if (!cidCatalog?.table.includes("0A2A33") || !cidCatalog.table.includes("DIGISTOR")) throw new Error(`IEEE CID catalog search failed: ${JSON.stringify(cidCatalog)}`);
@@ -5730,22 +5797,22 @@ if (process.argv.includes("--roster-only")) {
   let firstPage = null;
   for (let attempt = 0; attempt < 300; attempt += 1) {
     await wait(100);
-    firstPage = await evaluate(`(()=>{const rows=[...document.querySelectorAll('#changeTable tbody tr:not([data-virtual-spacer="true"])')];return{loading:!document.querySelector('#analyticsLoadingStatus').hidden,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',heading:document.querySelector('#changeTable h3')?.textContent||'',rows:rows.length,firstRow:rows[0]?.textContent||'',range:document.querySelector('#changeTable .action-row span')?.textContent.replace(/\s+/g,' ')||'',next:Boolean(document.querySelector('#changeTable [data-status-roster-page="all"][data-page-offset="100"]'))}})()`);
+    firstPage = await evaluate(`(()=>{const rows=[...document.querySelectorAll('#dashboardStatusRoster tbody tr:not([data-virtual-spacer="true"])')];return{loading:!document.querySelector('#analyticsLoadingStatus').hidden,error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',heading:document.querySelector('#dashboardStatusRoster h3')?.textContent||'',rows:rows.length,firstRow:rows[0]?.textContent||'',range:document.querySelector('#dashboardStatusRoster .action-row span')?.textContent.replace(/\s+/g,' ')||'',next:Boolean(document.querySelector('#dashboardStatusRoster [data-status-roster-page="all"][data-page-offset="100"]'))}})()`);
     if (firstPage.error) throw new Error(`Roster-only Dashboard failed: ${firstPage.message}`);
     if (!firstPage.loading && firstPage.heading === "Все устройства") break;
   }
   if (firstPage?.loading || firstPage?.heading !== "Все устройства" || firstPage.rows < 1 || !firstPage.firstRow.includes(rosterMac(1)) || !firstPage.range.replace(/\s/g, "").includes(`1–100из${rosterSize}`) || !firstPage.next) {
     throw new Error(`Dashboard roster first page is incorrect: ${JSON.stringify(firstPage)}`);
   }
-  await evaluate(`(()=>{const scroll=document.querySelector('#changeTable .table-scroll');if(!scroll)throw new Error('Dashboard roster scroll container is missing');scroll.scrollTop=scroll.scrollHeight;return true})()`);
+  await evaluate(`(()=>{const scroll=document.querySelector('#dashboardStatusRoster .table-scroll');if(!scroll)throw new Error('Dashboard roster scroll container is missing');scroll.scrollTop=scroll.scrollHeight;return true})()`);
   await wait(150);
-  const firstPageEnd = await evaluate(`(()=>{const rows=[...document.querySelectorAll('#changeTable tbody tr:not([data-virtual-spacer="true"])')];return{rows:rows.length,lastRow:rows.at(-1)?.textContent||''}})()`);
+  const firstPageEnd = await evaluate(`(()=>{const rows=[...document.querySelectorAll('#dashboardStatusRoster tbody tr:not([data-virtual-spacer="true"])')];return{rows:rows.length,lastRow:rows.at(-1)?.textContent||''}})()`);
   if (!firstPageEnd.rows || !firstPageEnd.lastRow.includes(rosterMac(100))) throw new Error(`Dashboard virtual roster did not reach row 100 on its first page: ${JSON.stringify(firstPageEnd)}`);
-  await evaluate(`document.querySelector('#changeTable [data-status-roster-page="all"][data-page-offset="100"]').click()`);
+  await evaluate(`document.querySelector('#dashboardStatusRoster [data-status-roster-page="all"][data-page-offset="100"]').click()`);
   let secondPage = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await wait(50);
-    secondPage = await evaluate(`(()=>{const rows=[...document.querySelectorAll('#changeTable tbody tr:not([data-virtual-spacer="true"])')];return{error:!document.querySelector('#errorBanner').hidden,rows:rows.length,firstRow:rows[0]?.textContent||'',range:document.querySelector('#changeTable .action-row span')?.textContent.replace(/\s+/g,' ')||''}})()`);
+    secondPage = await evaluate(`(()=>{const rows=[...document.querySelectorAll('#dashboardStatusRoster tbody tr:not([data-virtual-spacer="true"])')];return{error:!document.querySelector('#errorBanner').hidden,rows:rows.length,firstRow:rows[0]?.textContent||'',range:document.querySelector('#dashboardStatusRoster .action-row span')?.textContent.replace(/\s+/g,' ')||''}})()`);
     if (secondPage.range.replace(/\s/g, "").includes(`101–${secondPageEnd}из${rosterSize}`)) break;
   }
   if (secondPage?.error || secondPage?.rows < 1 || !secondPage.firstRow.includes(rosterMac(101)) || !secondPage.range.replace(/\s/g, "").includes(`101–${secondPageEnd}из${rosterSize}`)) {
@@ -5884,7 +5951,7 @@ await evaluate(`document.querySelector('[data-view="analytics"]').click()`);
 // The dated source fixtures precede the default rolling 30-day range.
 await evaluate(`document.querySelector("#temporalRangeSelect").value="365";document.querySelector("#temporalRangeSelect").dispatchEvent(new Event("change",{bubbles:true}))`);
 await wait(1000);
-const analytics = await evaluate(`({text:document.querySelector('#analyticsKpis').textContent,overview:document.querySelector('#datasetOverview').textContent,clusters:document.querySelector('#clusterSummary').textContent,topology:document.querySelector('#topologySummary').textContent,rosterHeading:document.querySelector('#changeTable h3')?.textContent||'',rosterRows:document.querySelectorAll('#changeTable tbody tr').length,rosterText:document.querySelector('#changeTable').textContent.replace(/\s+/g,' '),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',loading:!document.querySelector('#analyticsLoadingStatus').hidden})`);
+const analytics = await evaluate(`({text:document.querySelector('#analyticsKpis').textContent,overview:document.querySelector('#datasetOverview').textContent,clusters:document.querySelector('#clusterSummary').textContent,topology:document.querySelector('#topologySummary').textContent,rosterHeading:document.querySelector('#dashboardStatusRoster h3')?.textContent||'',rosterRows:document.querySelectorAll('#dashboardStatusRoster tbody tr').length,rosterText:document.querySelector('#dashboardStatusRoster').textContent.replace(/\s+/g,' '),error:!document.querySelector('#errorBanner').hidden,message:document.querySelector('#errorBanner span')?.textContent||'',loading:!document.querySelector('#analyticsLoadingStatus').hidden})`);
 const analyticsText = analytics.text.replace(/\s+/g, " ");
 if (analyticsStagesOnly) {
   const initialStage = await evaluate(`(()=>({kpis:document.querySelector('#analyticsKpis').textContent.replace(/\s+/g,' '),loading:!document.querySelector('#analyticsLoadingStatus').hidden,idle:window.__smokeAnalyticsIdleState(),trendCanvas:Boolean(document.querySelector('#totalChart'))}))()`);
@@ -6266,7 +6333,7 @@ if (process.argv.includes("--optional-host-transfer-only")) {
 if (process.argv.includes("--dashboard-cache-reload-only")) {
   let cachedReport = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    cachedReport = await evaluate(`new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('analyticsCache','readonly');const request=tx.objectStore('analyticsCache').openCursor();let found=null;request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;const value=cursor.value.value;if(cursor.value.key.startsWith('selected-final-dataset-v10:')&&value?.dataset?.reportText){found={key:cursor.value.key,reportText:value.dataset.reportText,devices:value.dataset.summary?.devices};return}cursor.continue()};tx.oncomplete=()=>{db.close();resolve(found)};tx.onerror=()=>{db.close();reject(tx.error)}}})`);
+    cachedReport = await evaluate(`new Promise((resolve,reject)=>{const opening=indexedDB.open(new URL(location.href).searchParams.get('db'));opening.onerror=()=>reject(opening.error);opening.onsuccess=()=>{const db=opening.result;const tx=db.transaction('analyticsCache','readonly');const request=tx.objectStore('analyticsCache').openCursor();let found=null;request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;const value=cursor.value.value;if(cursor.value.key.startsWith('selected-final-dataset-v14:')&&value?.dataset?.reportText){found={key:cursor.value.key,reportText:value.dataset.reportText,devices:value.dataset.summary?.devices};return}cursor.continue()};tx.oncomplete=()=>{db.close();resolve(found)};tx.onerror=()=>{db.close();reject(tx.error)}}})`);
     if (cachedReport) break;
     await wait(100);
   }

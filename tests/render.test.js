@@ -1273,6 +1273,6 @@ test("MAC churn details page the full search result and escape device fields", (
   assert.match(searched, /Устройства 4–6 из 6/);
   assert.doesNotMatch(searched, />DEVICE-199<\/button>/);
   assert.match(churnContent(items, { query: "<vendor>" }), /&lt;Vendor&gt;/);
-  assert.match(churnContent([{ mac: "—", macFormatted: "00-11-22-33-44-55", transitionCount: 2 }]), /data-search-mac="00:11:22:33:44:55"/);
+  assert.match(churnContent([{ mac: "—", macFormatted: "00-11-22-33-44-55", transitionCount: 2 }]), /data-churn-transitions="00:11:22:33:44:55"/);
 });
 

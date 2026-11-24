@@ -1,4 +1,5 @@
-import { keyText, locationKey, text } from "./normalize.js";
+import { addressLocationParts, keyText, locationKey, text } from "./normalize.js";
+import { roomHistoryFallbackKey } from "./room-history.js";
 
 export const ROOM_FILTER_FIELDS = Object.freeze(["businessUnit", "city", "site", "floor", "room"]);
 const ROOM_CATALOG_FIELDS = Object.freeze([...ROOM_FILTER_FIELDS, "smartroomId", "address", "physicalAddress", "locationPath"]);
@@ -64,11 +65,12 @@ export function addRoomCatalogDevices(catalog, devices = []) {
   for (const device of devices) {
     const key = locationKey(device);
     if (!key) continue;
+    const parsed = addressLocationParts(device.address || device.physicalAddress);
     const existing = catalog.get(key);
     let unchanged = existing !== undefined;
     if (unchanged) {
       for (const field of ROOM_CATALOG_FIELDS) {
-        if (existing[field] !== text(device?.[field])) {
+        if (existing[field] !== (text(device?.[field]) || text(parsed[field]))) {
           unchanged = false;
           break;
         }
@@ -76,13 +78,25 @@ export function addRoomCatalogDevices(catalog, devices = []) {
     }
     if (unchanged) continue;
     const room = {};
-    for (const field of ROOM_CATALOG_FIELDS) room[field] = text(device?.[field]);
+    for (const field of ROOM_CATALOG_FIELDS) room[field] = text(device?.[field]) || text(parsed[field]);
     room.key = key;
     catalog.set(key, room);
   }
   return catalog;
 }
 
+export function reconcileRoomCatalog(rooms) {
+  const knownIds = new Map();
+  for (const room of rooms) {
+    if (!room.smartroomId) continue;
+    const fallback = roomHistoryFallbackKey(room);
+    if (!fallback) continue;
+    if (!knownIds.has(fallback)) knownIds.set(fallback, new Set());
+    knownIds.get(fallback).add(room.key);
+  }
+  return rooms.filter((room) => room.smartroomId || knownIds.get(roomHistoryFallbackKey(room))?.size !== 1);
+}
+
 export function uniqueRoomFilterSelection(options = [], selected = "") {
-  return text(selected) || (options.length === 1 ? options[0] : "");
+  return options.find((option) => keyText(option) === keyText(selected)) || (options.length === 1 ? options[0] : "");
 }

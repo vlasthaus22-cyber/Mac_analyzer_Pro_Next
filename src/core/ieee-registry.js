@@ -112,7 +112,9 @@ export function* ieeeOuiRecordBatches(registry = {}, { batchSize = 500, source =
 export function createOuiIndexOverlay(ieeeIndex = new Map(), customIndex = new Map()) {
   return Object.freeze({
     get(prefix) {
-      return customIndex.has(prefix) ? customIndex.get(prefix) : ieeeIndex.get(prefix);
+      if (customIndex.has(prefix)) return customIndex.get(prefix);
+      const rule = ieeeIndex.get(prefix);
+      return typeof rule === "string" && rule ? { vendor: rule, source: "Встроенный IEEE OUI" } : rule;
     },
   });
 }

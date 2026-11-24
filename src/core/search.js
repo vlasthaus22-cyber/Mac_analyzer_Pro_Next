@@ -9,6 +9,12 @@ const SEARCH_FIELDS = Object.freeze([
   "deviceIp", "device_ip", "physicalAddress", "businessUnit", "city", "site", "floor",
 ]);
 
+export function exactMacSearchQuery(value) {
+  const query = text(value);
+  if (!/^[\da-f:. -]+$/i.test(query) || query.replace(/[^\da-f]/gi, "").length !== 12) return "";
+  return normalizeMac(query);
+}
+
 function macSearchNeedle(value) {
   const source = String(value ?? "").trim();
   if (!source || normalizeIp(source)) return "";

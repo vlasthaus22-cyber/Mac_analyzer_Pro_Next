@@ -163,3 +163,15 @@ test("IP enrichment respects disabled and explicit overwrite settings", () => {
   assert.equal(applyIpMapping(known, mapping, { enabled: true, overwrite: true }), true);
   assert.equal(known.address, "Imported Room");
 });
+
+test("an exact switch rule can complete its matching floor without replacing a full device address", () => {
+  const address = "ТБ, Тверь, Новая, 10, 4 этаж";
+  const mappings = createIpMappingIndex([{ switchIp: "192.0.2.2", address }, { switchIp: "192.0.2.2", address: "4 этаж" }], { partialMatch: true });
+  const row = { switchIp: "192.0.2.2", ip: "192.0.2.9", address: "4 этаж" };
+  assert.equal(applyIpMapping(row, mappings), true);
+  assert.equal(row.address, address);
+  assert.equal(row.ip, "192.0.2.9");
+  assert.equal(applyIpMapping({ switchIp: row.switchIp, address: "5 этаж" }, mappings), false);
+  assert.equal(applyIpMapping({ switchIp: row.switchIp, address: "ТБ, Тверь, Другая улица, 3" }, mappings), false);
+  assert.equal(applyIpMapping({ switchIp: row.ip, address: "4 этаж" }, mappings, { partialMatch: true }), false);
+});

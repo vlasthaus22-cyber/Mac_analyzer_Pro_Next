@@ -4,13 +4,13 @@ import { pyqtVendorTopChartItems, pyqtRoomDistributionChartItems } from "./analy
 import { hasKnownRoom, isFloorOnlyAddress, text as identityText, normalizeMac } from "./normalize.js";
 
 const KPI_KEYS = ["devices", "modified", "absent", "unchanged", "manufacturers", "rooms", "withoutRoom"];
-const SOURCE_COUNTS = ["mainRaw", "mainUnique", "mainUniqueMacs", "smartroomRaw", "afterSmartroom", "finalUnique", "ddioRaw", "ddioMatchedIp", "identityConflictsTotal", "currentSmartroomRoomFilled", "historicalSmartroomRoomFilled"];
+const SOURCE_COUNTS = ["mainRaw", "mainUnique", "mainUniqueMacs", "smartroomRaw", "afterSmartroom", "finalUnique", "ddioRaw", "ddioMatchedIp", "identityConflictsTotal", "smartroomMatchedMacs", "smartroomMatchedWithRoom", "smartroomMacLocationConflicts", "ipMappingFilled", "historicalAddressFilled", "currentSmartroomRoomFilled", "historicalSmartroomRoomFilled"];
 const ERROR_NAMES = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "AbortError", "QuotaExceededError", "InvalidStateError", "NotFoundError", "TransactionInactiveError"]);
 const count = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
 
 // Explicit numeric allowlists are intentional: never serialize metadata, filters,
 // exceptions or imported records into a report intended to leave a closed network.
-export async function buildAnalyticsBugReport({ analytics, visitCurrentChunks, visitLatestChunks, applicationLog = [], uiCounts = {}, chartCounts = {}, listCounts = {}, comparisonReadFailures = 0 }) {
+export async function buildAnalyticsBugReport({ analytics, visitCurrentChunks, visitLatestChunks, applicationLog = [], uiCounts = {}, chartCounts = {}, listCounts = {}, comparisonReadFailures = 0, changeReportMode, periodEventCount }) {
   const filters = analytics?.dashboardFilters || {};
   const filtered = Boolean(filters.query || filters.manufacturer || filters.room);
   const matches = createDashboardDeviceMatcher(filters);
@@ -58,12 +58,16 @@ export async function buildAnalyticsBugReport({ analytics, visitCurrentChunks, v
     "Содержит только счётчики и типы ошибок. Строки устройств, идентификаторы, адреса, имена файлов, тексты поиска и ошибок не включаются.",
     `Фильтры поиска/производителя/помещения: ${filtered ? "включены (значения скрыты)" : "выключены"}`,
     `Статус сравнения: ${["all", "changed", "missing", "unchanged"].includes(filters.status) ? filters.status : "all"}`,
+    `Подтверждённые изменения: ${changeReportMode === "period" ? `история за отдельный период · событий ${count(periodEventCount) ?? "недоступно"}` : "сравнение выбранных снимков"}`,
     "", "Этапы обработки:"];
   for (const key of SOURCE_COUNTS) lines.push(`source.${key}=${count(metadata?.diagnostics?.counts?.[key]) ?? "не сохранено"}`);
   lines.push(`final.metadataRows=${count(metadata?.deviceCount) ?? "не сохранено"}`, `final.metadataMainMacs=${count(metadata?.mainUniqueMacs) ?? "не сохранено"}`);
   for (const [key, value] of Object.entries(scan)) lines.push(`scan.${key}=${value}`);
   lines.push(`scan.selectedMainMacs=${mainMacs.size}`, "", "Показатели интерфейса и расчёта:");
-  for (const key of KPI_KEYS) lines.push(`ui.${key}=${count(uiCounts[key]) ?? "недоступно"}`, `pair.${key}=${count(analytics?.kpis?.[key]) ?? "недоступно"}`);
+  for (const key of KPI_KEYS) {
+    lines.push(`ui.${key}=${count(uiCounts[key]) ?? "недоступно"}`);
+    lines.push(`${key === "rooms" ? "pair.roomIdentities" : "pair." + key}=${count(analytics?.kpis?.[key]) ?? "недоступно"}`);
+  }
   for (const key of ["addedCount", "absentCount", "modifiedDeviceCount", "unchangedCount", "ambiguousCount", "identityConflictCount"]) lines.push(`comparison.${key}=${count(analytics?.comparison?.[key]) ?? "недоступно"}`);
   for (const key of ["modified", "absent", "unchanged"]) lines.push(`list.${key}=${count(listCounts[key]) ?? "недоступно"}`);
   const dataset = analytics?.dataset;
@@ -90,6 +94,7 @@ export async function buildAnalyticsBugReport({ analytics, visitCurrentChunks, v
   check("EMPTY_ROOM_UI", uiCounts.withoutRoom, latestEmptyRoom);
   check("DEVICES_UI", uiCounts.devices, !filtered && count(metadata?.mainUniqueMacs) !== null ? metadata.mainUniqueMacs : scan.selectedDevices);
   const sum = (items = []) => items.reduce((total, item) => total + (count(item.value) ?? 0), 0);
+  check("ROOMS_UI", uiCounts.rooms, dataset?.roomOccupancy?.uniqueRooms);
   check("ROOM_OVERVIEW", chartCounts.roomOverview, dataset?.roomOccupancy?.uniqueRooms);
   check("VENDOR_CHART", chartCounts.vendorTop, dataset ? sum(pyqtVendorTopChartItems(dataset)) : null);
   const statusVendors = status === "all" ? dataset?.charts?.vendors : analytics?.dashboardExportSummary?.statusVendors;

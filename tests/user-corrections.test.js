@@ -211,3 +211,53 @@ test("restored archives join chronological analytics exactly once and preserve t
   assert.equal(analytics.weekly.reduce((sum, row) => sum + row.modified, 0), 1, "the room change must include the restored archive evidence");
 });
 
+
+test("exact Main MAC joins SmartRoom independently of IDs and rejects contradictory SmartRoom locations", async () => {
+  const options = {
+    mainRows: [[mac, "main-id", "4 этаж"], ["02:00:00:00:00:02", "other-id", ""]],
+    mappings: { main: { mac: 0, deviceId: 1, address: 2 }, smartroom: { mac: 0, deviceId: 1, address: 2, room: 3 } },
+    smartroomExactMac: true,
+  };
+  const correct = ["0011.2233.4455", "smart-id", "ТБ, Тверь, Центральная, 5, 4 этаж", "Переговорная 105"];
+  const wrong = ["02:00:00:00:00:03", "other-id", "ТБ, Самара, Северная, 10, 4 этаж", "Кабинет 12"];
+  const result = await enrich({ ...options, smartroomRows: [wrong, correct] });
+  assert.equal(result.devices.length, 2);
+  assert.equal(result.devices[0].address, correct[2]);
+  assert.equal(result.devices[0].room, correct[3]);
+  assert.equal(result.devices[0].deviceId, "main-id");
+  assert.equal(result.devices[1].room, "");
+  assert.equal(result.diagnostics.counts.smartroomMatchedMacs, 1);
+  assert.equal(result.diagnostics.counts.smartroomMatchedWithRoom, 1);
+  const conflict = await enrich({ ...options, smartroomRows: [correct, [mac, "smart-id", wrong[2], wrong[3]]] });
+  assert.equal(conflict.devices[0].room, "");
+  assert.equal(conflict.diagnostics.counts.smartroomMacLocationConflicts, 1);
+});
+
+test("a unique explicitly mapped SmartRoom alternate MAC enriches Main and enables exact DDIO lookup", async () => {
+  const smartMac = "02:00:00:00:00:44";
+  const mainOptions = {
+    mainRows: [[mac]], smartroomRows: [[smartMac, mac, "Room 44"]], ddioRows: [[smartMac, "192.0.2.44"]],
+    mappings: { main: { mac: 0 }, smartroom: { mac: 0, mac2: 1, room: 2 }, ddio: { reservationMac: 0, reservationIp: 1 } },
+    smartroomExactMac: true,
+  };
+  const joined = await enrich(mainOptions);
+  assert.equal(joined.devices[0].mac, mac);
+  assert.equal(joined.devices[0].room, "Room 44");
+  assert.equal(joined.devices[0].ip, "192.0.2.44");
+  const twoMainDevices = await enrich({ ...mainOptions, mainRows: [[mac], [smartMac]] });
+  assert.deepEqual(twoMainDevices.devices.map(({ mac, room, ip }) => [mac, room, ip]),
+    [[mac, "", ""], [smartMac, "Room 44", "192.0.2.44"]]);
+});
+
+test("exact Inventory search presents the most recent record and retains both historical candidates", async () => {
+  const database = new Database("mac-analyzer-pro-next-test-" + crypto.randomUUID());
+  const oldRow = { id: "old", deviceId: "OLD", serial: "OLD", mac, address: "Old address" };
+  const newRow = { id: "new", deviceId: "NEW", serial: "NEW", mac, address: "New address" };
+  await database.saveFinal({ id: "one", createdAt: "2026-11-01", devices: [oldRow] });
+  await database.saveFinal({ id: "two", createdAt: "2026-11-02", devices: [newRow] });
+  const page = await database.searchInventory({ query: mac });
+  assert.equal(page.total, 1);
+  assert.equal(page.macCandidates, 2);
+  assert.equal(page.items[0].address, "New address");
+  assert.equal((await database.searchInventory({ query: mac, includeMacCandidates: true })).total, 2);
+});

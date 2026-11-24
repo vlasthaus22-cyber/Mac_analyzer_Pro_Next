@@ -44,7 +44,8 @@ import { legacyWorkspaceSourceRole, restoreLegacyWorkspaceMapping } from "./core
 import { applyHistoricalAddress, createHistoricalAddressAccumulator, createHistoricalAddressDeviceSummaryAccumulator, createAppliedSmartroomMappingSummaryAccumulator, createImportedSmartroomRoomIndexAccumulator, buildSmartroomRoomIndex, compareSwitchIpHistoryInBatches, mappingIndexPage } from "./core/historical-mapping.js";
 import { createIpMappingDetector, DEFAULT_IP_ENRICHMENT_SETTINGS, detectIpMappingColumns, ipMappingsCsv, ipMappingsJson, ipMappingsXlsxSheets, normalizeIpEnrichmentSettings, normalizeIpMappings } from "./core/ip-mapping.js";
 import { clusterPyqtFeatureRows, compactPyqtClusterLabels, writePyqtDeviceFeatures } from "./core/pyqt-clustering.js";
-import { keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/normalize.js";
+import { visitDeviceMacAddresses } from "./core/identity.js";
+import { isFloorOnlyAddress, keyText, locationKey, normalizeIp, normalizeMac, text } from "./core/normalize.js";
 import { createRequestGate } from "./core/request-gate.js";
 import { canAccessView, createEngineerCredential, createEngineeringSession, engineeringSessionRemainingSeconds, isEngineeringSessionActive, normalizeEngineeringSessionMinutes, verifyEngineerCredential } from "./core/engineering-session.js";
 import { DASHBOARD_CHART_WIDGETS, DASHBOARD_KPI_WIDGETS, DEFAULT_ANALYTICS_DASHBOARD_SETTINGS, isDashboardWidgetVisible, legacyAnalyticsDashboardSettings, normalizeAnalyticsDashboardSettings } from "./core/analytics-dashboard-settings.js";
@@ -57,11 +58,11 @@ import { dataDirectoryControlState } from "./ui/data-directory-controls.js";
 import { deleteOptionalHostSnapshot, deleteOptionalHostSnapshots, deleteOptionalHostWorkspaceFile, importOptionalHostOuiReferenceIntoDatabase, listOptionalHostHistoryForMac, listOptionalHostSnapshots, listOptionalHostWorkspaceFiles, loadOptionalHostDatabaseConnection, loadOptionalHostDiagnostics, optionalHostDatabaseExportHref, restoreOptionalHostWorkspaceFile, restoreWorkspaceBackupFromOptionalHost, runOptionalHostDatabaseMaintenance, saveOptionalHostWorkspaceFile, saveWorkspaceBackupToOptionalHost, scanOptionalHostBatchFolders, searchOptionalHostDatabase, uploadFinalSnapshotToOptionalHost, uploadInventoryToOptionalHost, uploadSnapshotHistoryToOptionalHost, uploadSQLiteBackupToOptionalHost } from "./ui/optional-host-controls.js";
 import { createAnalyticsIdleScheduler, createBoundedComparisonPageCache, feedAnalyticsDatasetRows, reuseInFlightRequest, runAnalyticsInStages, usableAnalyticsFallback } from "./core/analytics-lifecycle.js";
 import { aggregateSnapshotHistoryInWorker } from "./core/analytics-history-worker-client.js";
-import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, roomFilterCascadeOptions, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
+import { addRoomCatalogDevices, cachedRoomCatalogLoad, matchesRoomFilters, publishRoomCatalogForRevision, reconcileRoomCatalog, roomFilterCascadeOptions, roomFilterOptions, roomFilterSignature, ROOM_FILTER_FIELDS, uniqueRoomFilterSelection } from "./core/room-filters.js";
 import { carryForwardRoomHistoryPage, compactRoomHistoryChunkInPlace, roomHistoryFallbackKey } from "./core/room-history.js";
 import { backfillComparisonDevices } from "./core/history-enrichment.js";
 import { defaultHistoryLogFilters, historyLogNeedsRefresh } from "./core/history-log-state.js";
-import { matchesDeviceSearch, searchResultDoubleClickTarget, searchSavedFinalSnapshots } from "./core/search.js";
+import { exactMacSearchQuery, matchesDeviceSearch, searchResultDoubleClickTarget, searchSavedFinalSnapshots } from "./core/search.js";
 import { analyzeSingleFile, analyzeSingleFileBatches, analyzeSingleFileBatchesIntoStore, countSingleFileDeviceFields, detectSingleFileMapping, formatSingleFileSourceRows, hasSingleFileMappingConflicts, SINGLE_FILE_FIELDS, singleFileDeviceJson, singleFileDevicesCsvBatchChunks, singleFileDevicesCsvChunks } from "./core/single-file-analysis.js";
 import { createStagedMultiFileComparisonPlan, multiFileComparisonRowsPageAsync, multiFileComparisonWorkbookSheets, pairwiseComparisonCsvChunksAsync, pairwiseComparisonPairs, pairwiseCsvHeader } from "./core/multi-file-comparison.js";
 import { fileComparisonColumns, fileComparisonCsvChunksFromPlan, fileComparisonExportRowsFromPlan, fileComparisonJsonFromPlan, fileComparisonRowsPagesFromPlan } from "./core/file-comparison-export.js";
@@ -523,7 +524,7 @@ async function showAnalyticsBugReport() {
     if (analytics && analytics === state.analytics) {
       for (const [key, kind] of [["modified", "modifiedDevices"], ["absent", "absent"], ["unchanged", "unchanged"]]) {
         try {
-          const page = await loadDashboardComparisonPage(analytics, kind, 0, 1);
+          const page = await loadDashboardComparisonPage(analytics, kind, 0, 1, {}, false);
           if (page) listCounts[key] = page.total;
           else comparisonReadFailures++;
         } catch { comparisonReadFailures++; }
@@ -534,6 +535,7 @@ async function showAnalyticsBugReport() {
       visitLatestChunks: latestId && latestId !== snapshotId ? (visit) => database.forEachSnapshotChunk(latestId, visit) : null,
       visitCurrentChunks: (visit) => snapshotId ? database.forEachSnapshotChunk(snapshotId, visit) : Promise.resolve(null),
       applicationLog: await database.applicationLog().catch(() => []), uiCounts, chartCounts, listCounts, comparisonReadFailures,
+      changeReportMode: state.changeReportSettings.mode, periodEventCount: state.periodChangeSummary?.counts?.all,
     });
     if (report.mismatchCount) await database.recordApplicationLog("analytics_audit_mismatch", "").catch(() => {});
     showDialog($("#detailsDialog"), "Отчёт о багах аналитики", '<p>Отчёт сформирован локально. Просмотрите его перед передачей. Тексты ошибок и данные устройств исключены.</p><button type="button" class="button primary" data-download-bug-report>Скачать TXT</button><pre data-bug-report-preview></pre>');
@@ -2179,12 +2181,14 @@ async function renderDeviceTable() {
   const revision = ++state.tableRevision;
   let result;
   try {
-    result = await database.searchInventory({ query: state.search, field: state.sort.field, direction: state.sort.direction, page: state.page, pageSize: state.pageSize, signal: controller.signal });
+    result = await database.searchInventory({ query: state.search, includeMacCandidates: $("#showInventoryMacCandidates").checked, field: state.sort.field, direction: state.sort.direction, page: state.page, pageSize: state.pageSize, signal: controller.signal });
   } catch (error) {
     if (controller.signal.aborted) return;
     throw error;
   }
   if (revision !== state.tableRevision) return;
+  const variants = $("#showInventoryMacCandidates");
+  variants.closest("label").hidden = !(result.macCandidates > 1);
   state.inventory = result.items;
   state.page = result.page;
   scheduleWorkspaceStateSave();
@@ -4415,6 +4419,9 @@ async function restoreOriginalSources(snapshotId, button) {
 
 async function executeEnrichment({ tables, mappings, files, name, strategy, progressRange = [0, 100], includeSwitchIpReport = false }) {
   const processingStartedAt = performance.now();
+  if (files.smartroom && (!Number.isInteger(mappings.main?.mac) || !Number.isInteger(mappings.smartroom?.mac))) {
+    throw new Error("Для объединения со SmartRoom выберите колонки основного MAC в Main и SmartRoom");
+  }
   const [start, end] = progressRange;
   const sourceDigests = {};
   try {
@@ -4506,6 +4513,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
     ddioRows: rowsFor("ddio"),
     mappings,
     strategy,
+    smartroomExactMac: true,
     ...(activeSnapshotId ? { loadPreviousIdentityIndex: (currentDevices) => database.buildPreviousFinalIdentityIndex(activeSnapshotId, currentDevices) } : {}),
     ipAddressMappings,
     ipEnrichmentSettings,
@@ -4546,7 +4554,7 @@ async function executeEnrichment({ tables, mappings, files, name, strategy, prog
   let presentation = null;
   const historicalAddressSummary = includeSwitchIpReport ? createHistoricalAddressDeviceSummaryAccumulator() : null;
   const appliedSmartroomSummary = includeSwitchIpReport ? createAppliedSmartroomMappingSummaryAccumulator() : null;
-  const sourceKey = buildSourceKey({ strategy, files, mappings, sourceDigests });
+  const sourceKey = buildSourceKey({ strategy, files, mappings, sourceDigests, mergeVersion: 2 });
   progress(start + 0.96 * (end - start), "Атомарное сохранение снимок объединения", "Обогащение");
   const finalDeviceCount = Number(result.deviceCount ?? result.devices.length);
   let historyPlan = null;
@@ -4811,6 +4819,7 @@ async function runEnrichment() {
   if (!state.sourceTables.main) throw new Error("Выберите основной файл");
   const mappingIssues = [
     ...batchMappingProblems("main", state.mappings.main, { rowCount: state.sourceTables.main.rowCount }),
+    ...(state.sourceTables.smartroom && !Number.isInteger(state.mappings.main.mac) ? ["Main: выберите основной MAC"] : []),
     ...(state.sourceTables.smartroom && state.sourceTables.smartroom.rowCount !== 0 ? batchMappingProblems("smartroom", state.mappings.smartroom) : []),
     ...(state.sourceTables.ddio && state.sourceTables.ddio.rowCount !== 0 ? batchMappingProblems("ddio", state.mappings.ddio) : []),
   ];
@@ -5165,8 +5174,8 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
   const matchesDashboard = createDashboardDeviceMatcher(analytics.dashboardFilters || {});
   const datasetSnapshotId = analytics.current?.id || "";
   const datasetCacheSnapshotId = datasetSnapshotId;
-  const datasetCacheKey = `selected-final-dataset-v13:${JSON.stringify([datasetCacheSnapshotId, historyFilters, state.ipEnrichmentSettings.historicalAddress])}`;
-  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 13);
+  const datasetCacheKey = `selected-final-dataset-v14:${JSON.stringify([datasetCacheSnapshotId, historyFilters, state.ipEnrichmentSettings.historicalAddress])}`;
+  const cachedDataset = force ? null : await database.loadAnalyticsCache(datasetCacheKey, historySignature, 14);
   if (!state.analyticsRequests.isCurrent(revision)) return null;
   let dataset = cachedDataset?.snapshotId === datasetCacheSnapshotId ? cachedDataset.dataset : null;
   if (!dataset) {
@@ -5257,7 +5266,7 @@ async function calculateAnalyticsDetails(analytics, revision, metadata, historyS
       };
       stage("Сохранение рассчитанной сводки Dashboard…");
     }
-    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 13, {
+    if (datasetSnapshotId) await database.saveAnalyticsCache(datasetCacheKey, historySignature, { snapshotId: datasetCacheSnapshotId, dataset }, 14, {
       onProgress: ({ phase }) => {
         const labels = {
           started: "Сохранение сводки: открыта транзакция…",
@@ -5441,6 +5450,7 @@ function createDashboardRoomChangeAccumulator(database) {
       }
       await database.mergeAnalyticsAggregateBatches(queryId, metrics);
     },
+    writeRoomChangeDetails: (rows) => database.mergeAnalyticsAggregateBatches(queryId, { "room-change-details": rows }),
     writeRoomSwitchVotes: (rows) => database.mergeAnalyticsAggregateBatches(queryId, { "room-switch-votes": rows }),
     writeRoomSwitchSummaries: (rows) => database.mergeAnalyticsAggregateBatches(queryId, { "room-switch-anomaly-summary": rows }),
     writeRoomLocationEvidence: (metric, rows) => database.mergeAnalyticsRoomLocationEvidence(queryId, metric, rows),
@@ -5904,7 +5914,8 @@ function normalizeChangeReportSettings(settings = {}) {
 }
 
 function defaultChangeReportRange() {
-  const end = new Date();
+  const latest = Date.parse(state.activeSnapshot?.createdAt || "");
+  const end = Number.isFinite(latest) ? new Date(latest) : new Date();
   const start = new Date(end.getTime() - 29 * 86_400_000);
   return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
 }
@@ -5976,8 +5987,8 @@ async function renderPeriodChangeCategory(category = state.comparisonChangeCateg
     }).join("");
     const pageNumber = state.periodChangePage.previous.length + 1;
     const pager = page.total > 100 ? `<div class="action-row"><span class="muted">Страница ${pageNumber} · показано ${page.rows.length.toLocaleString("ru-RU")} из ${page.total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-period-change-page="previous" ${state.periodChangePage.previous.length ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-period-change-page="next" ${page.hasMore ? "" : "disabled"}>Дальше</button></div>` : `<p class="muted">Событий: ${page.total.toLocaleString("ru-RU")}</p>`;
-    const body = rows ? `<div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>Важность</th><th>Тип</th><th>MAC / ID</th><th>Помещение</th><th>Изменение</th><th>Источник</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}` : '<p class="empty">За выбранный период изменений нет.</p>';
-    const periodLabel = `<p class="muted">${settings.from} — ${settings.to} · ${page.total.toLocaleString("ru-RU")} событий</p>`;
+    const body = rows ? `<div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>Важность</th><th>Тип</th><th>MAC / ID</th><th>Помещение</th><th>Изменение</th><th>Источник</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}` : '<p class="empty">За выбранный период событий в истории нет.</p><button type="button" class="button secondary" data-use-snapshot-change-report>Показать изменения между выбранными снимками</button>';
+    const periodLabel = `<p class="muted">История за период ${settings.from} — ${settings.to} · ${page.total.toLocaleString("ru-RU")} событий</p>`;
     $("#changeTable").innerHTML = `${tabs}<div id="analyticsChangeEventsPanel" role="tabpanel" aria-label="${CHANGE_CATEGORY_LABELS[category]}">${periodLabel}${body}</div>`;
   } catch (error) {
     if (requestId === state.periodChangePage.requestId) throw error;
@@ -6029,7 +6040,7 @@ async function renderAnalyticsStatusRoster(analytics = state.analytics, status =
   const shownEnd = Math.min(result.offset + result.devices.length, result.total);
   const pager = result.total > result.limit ? `<div class="action-row"><span class="muted">Показано ${Math.min(result.offset + 1, result.total).toLocaleString("ru-RU")}–${shownEnd.toLocaleString("ru-RU")} из ${result.total.toLocaleString("ru-RU")}</span><button class="button secondary" type="button" data-status-roster-page="${status}" data-page-offset="${Math.max(0, result.offset - result.limit)}" ${result.offset ? "" : "disabled"}>Назад</button><button class="button secondary" type="button" data-status-roster-page="${status}" data-page-offset="${result.offset + result.limit}" ${result.hasNext ? "" : "disabled"}>Дальше</button></div>` : `<p class="muted">Устройств: ${result.total.toLocaleString("ru-RU")}</p>`;
   const body = rows ? `<div class="table-scroll"><table class="data-table" data-virtual-scroll="true"><thead><tr><th>MAC / ID</th><th>Производитель</th><th>Модель</th><th>Помещение</th><th>IP</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}` : '<p class="empty">Устройств с этим статусом нет.</p>';
-  $("#changeTable").innerHTML = `<h3>${labels[status]}</h3>${body}`;
+  $("#dashboardStatusRoster").innerHTML = `<h3>${labels[status]}</h3>${body}`;
 }
 async function renderAnalyticsChangeCategories(comparison = state.analytics?.comparison, category, offset) {
   const analytics = state.analytics;
@@ -6037,7 +6048,10 @@ async function renderAnalyticsChangeCategories(comparison = state.analytics?.com
   if (reportUsesPeriod) return renderPeriodChangeCategory(category ?? state.comparisonChangeCategory);
   if (!comparison) return;
   const defaultStatus = category === undefined && !reportUsesPeriod ? state.analyticsDashboardSettings.filters.status : "all";
-  if (category === undefined && !reportUsesPeriod) return renderAnalyticsStatusRoster(analytics, defaultStatus, 0);
+  if (category === undefined && !reportUsesPeriod) {
+    category = defaultStatus === "changed" ? "modified" : defaultStatus === "missing" ? "absent" : "all";
+    offset = 0;
+  }
   const requestedCategory = category ?? (!reportUsesPeriod && defaultStatus === "changed" ? "modified" : !reportUsesPeriod && defaultStatus === "missing" ? "absent" : state.comparisonChangeCategory);
   const selected = CHANGE_CATEGORIES.includes(requestedCategory) ? requestedCategory : "all";
   offset ??= state.comparisonChangeOffset;
@@ -6306,13 +6320,16 @@ async function loadRoomCoveragePage(analytics, roomKey, page) {
   const render = () => renderRoomCoverageDialog(state.analytics);
   $("#detailsDialog [data-dialog-content]").innerHTML = render();
   try {
-    const result = await database.loadSnapshotRoomAnomalyPage(snapshotId, { roomKey, page, limit: 100, filters: analytics.dashboardFilters });
+    const [result, changes] = await Promise.all([
+      database.loadSnapshotRoomAnomalyPage(snapshotId, { roomKey, page, limit: 100, filters: analytics.dashboardFilters }),
+      current?.changes || database.analyticsAggregateValuePage(analytics.roomChangeIndex.queryId, "room-change-details", { prefix: JSON.stringify(roomKey) + ":", limit: 25 }),
+    ]);
     if (state.analytics !== analytics || state.analyticsRoomCoverageRequests.get(roomKey) !== requestId) return;
     const expected = state.analyticsRoomCoverageList?.analytics === analytics
       ? state.analyticsRoomCoverageList.rooms.find((room) => room.key === roomKey)?.rosterCount
       : analytics.roomChanges?.find((room) => room.key === roomKey)?.rosterCount;
     if (result.total !== Number(expected || 0)) throw new Error("Число устройств помещения не совпало с выбранным снимком объединения");
-    state.analyticsRoomCoveragePages[roomKey] = result;
+    state.analyticsRoomCoveragePages[roomKey] = { ...result, changes, previousChangeCursors: current?.previousChangeCursors || [], changeCursor: current?.changeCursor || null };
     $("#detailsDialog [data-dialog-content]").innerHTML = render();
   } catch (error) {
     if (state.analytics !== analytics || state.analyticsRoomCoverageRequests.get(roomKey) !== requestId) return;
@@ -6320,6 +6337,27 @@ async function loadRoomCoveragePage(analytics, roomKey, page) {
     $("#detailsDialog [data-dialog-content]").innerHTML = render();
     throw error;
   }
+}
+
+async function loadRoomCoverageChanges(analytics, roomKey, direction) {
+  const room = state.analyticsRoomCoveragePages[roomKey];
+  if (!room?.changes || room.loading) return;
+  const { nextCursor } = room.changes;
+  const previous = room.previousChangeCursors;
+  const cursor = direction === "next" ? nextCursor : previous.at(-1);
+  room.loading = true;
+  try {
+    const result = await database.analyticsAggregateValuePage(analytics.roomChangeIndex.queryId, "room-change-details", {
+      prefix: JSON.stringify(roomKey) + ":", limit: 25,
+      after: cursor || null,
+    });
+    if (state.analytics !== analytics || state.analyticsRoomCoveragePages[roomKey] !== room) return;
+    if (direction === "next") previous.push(room.changeCursor);
+    else previous.pop();
+    room.changes = result;
+    room.changeCursor = cursor;
+    $("#detailsDialog [data-dialog-content]").innerHTML = renderRoomCoverageDialog(analytics);
+  } finally { room.loading = false; }
 }
 
 async function showUnassignedAnalyticsPage(analytics, page = 1, open = false) {
@@ -6347,6 +6385,7 @@ async function showUnassignedAnalyticsPage(analytics, page = 1, open = false) {
 
 async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 100, options = {}, sharedRequestId = null) {
   const requestId = sharedRequestId ?? ++state.analyticsComparisonDetailRequest;
+  const isCurrent = () => state.analytics === analytics && (requestId === false || requestId === state.analyticsComparisonDetailRequest);
   const currentId = analytics.current?.id || "";
   const baselineId = analytics.previous?.id || "";
   const cacheKey = JSON.stringify([
@@ -6360,7 +6399,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
   const cachedPage = state.analyticsComparisonPageCache.get(cacheKey);
   if (cachedPage) return cachedPage;
   const cachePage = (result) => {
-    if (result && state.analytics === analytics && requestId === state.analyticsComparisonDetailRequest) {
+    if (result && isCurrent()) {
       state.analyticsComparisonPageCache.set(cacheKey, result);
     }
     return result;
@@ -6383,7 +6422,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
       (visit) => database.forEachSnapshotChunk(currentId, visit),
       { offset, limit, deviceMatches: createDashboardDeviceMatcher(analytics.dashboardFilters || {}) },
     );
-    if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
+    if (!isCurrent()) return null;
     return cachePage(result);
   }
   if (!baselineId) {
@@ -6395,7 +6434,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
       (visit) => database.forEachSnapshotChunk(currentId, visit),
       { offset, limit, timestamp: analytics.comparison.timestamp, deviceMatches: createDashboardDeviceMatcher(analytics.dashboardFilters || {}), ...(["modified", "modifiedGroups"].includes(kind) ? options : {}) },
     );
-    if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
+    if (!isCurrent()) return null;
     return cachePage(result);
   }
   const metadata = state.snapshotMetadata;
@@ -6404,9 +6443,9 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
   const baselineIndex = metadata.indexOf(baselineMetadata);
   const supportsIndexedIdentityPage = ["identityDiagnostics", "absent", "added", "unchanged", "modifiedDevices", "modified", "modifiedGroups"].includes(kind);
   if (supportsIndexedIdentityPage) {
-    const comparisonIndex = await ensureDashboardComparisonIndex(metadata, baselineMetadata, () => state.analytics === analytics && requestId === state.analyticsComparisonDetailRequest);
+    const comparisonIndex = await ensureDashboardComparisonIndex(metadata, baselineMetadata, () => isCurrent());
     if (!comparisonIndex) return null;
-    if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
+    if (!isCurrent()) return null;
     const resolveIdentityChunk = (chunk) => database.buildFinalAnalyticsIdentityIndex(
       comparisonIndex.snapshotId,
       comparisonIndex.signature,
@@ -6432,7 +6471,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
       } : {}),
       ...(["modified", "modifiedGroups"].includes(kind) ? options : {}),
     });
-    if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
+    if (!isCurrent()) return null;
     if (kind === "identityDiagnostics"
       && (result.ambiguousCount !== Number(analytics.comparison.ambiguousCount || 0)
         || result.identityConflictCount !== Number(analytics.comparison.identityConflictCount || 0))) {
@@ -6447,14 +6486,14 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
     await database.forEachSnapshotChunk(baselineId, (chunk) => {
       for (const device of chunk) previousDevices.push(trimComparisonDeviceInPlace(device));
     });
-    if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
+    if (!isCurrent()) return null;
     try {
       await database.saveFinalAnalyticsIndex(baselineId, signature, previousDevices, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
     } catch (error) {
       console.warn("Не удалось сохранить компактный индекс FinalAnalytics", error?.message || error);
     }
   }
-  if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
+  if (!isCurrent()) return null;
   if (baselineIndex > 0 && baselineId !== currentId) {
     const restored = await backfillComparisonDevices(
       previousDevices,
@@ -6465,14 +6504,14 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
     previousDevices = restored.devices;
   }
   trimComparisonBaseline(previousDevices);
-  if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
+  if (!isCurrent()) return null;
   if (kind === "identityDiagnostics") {
     const result = await compareFinalIdentityDiagnosticPage(
       previousDevices,
       (visit) => database.forEachSnapshotChunk(currentId, visit),
       { offset, limit, timestamp: analytics.comparison.timestamp },
     );
-    if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
+    if (!isCurrent()) return null;
     if (result.ambiguousCount !== Number(analytics.comparison.ambiguousCount || 0)
       || result.identityConflictCount !== Number(analytics.comparison.identityConflictCount || 0)) {
       throw new Error("Страница диагностики идентичности не совпала с точным сравнением выбранной пары снимок объединения");
@@ -6490,7 +6529,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
     (visit) => database.forEachSnapshotChunk(currentId, visit),
     { offset, limit, timestamp: analytics.comparison.timestamp, deviceMatches: createDashboardDeviceMatcher(analytics.dashboardFilters || {}), ...(["modified", "modifiedGroups"].includes(kind) ? options : {}) },
   );
-  if (state.analytics !== analytics || requestId !== state.analyticsComparisonDetailRequest) return null;
+  if (!isCurrent()) return null;
   return cachePage(result);
 }
 
@@ -6646,7 +6685,7 @@ function paintAnalyticsSummary(analytics) {
   paintHistoryBackfill(analytics);
   paintSelectedMainMacs(analytics);
   $("#datasetOverview").textContent = "Подробная сводка выбранного снимка рассчитывается…";
-  for (const selector of ["#vendorRanking", "#modelRanking", "#churnRanking", "#roomOccupancyRanking", "#clusterSummary", "#changeTable"]) {
+  for (const selector of ["#vendorRanking", "#modelRanking", "#churnRanking", "#roomOccupancyRanking", "#clusterSummary", "#changeTable", "#dashboardStatusRoster"]) {
     const host = $(selector);
     if (host) host.replaceChildren();
   }
@@ -6778,12 +6817,13 @@ function paintAnalyticsDetails(analytics) {
     const button = event.target.closest("[data-model-prefix-query]");
     if (button) openModelPrefixAnalytics(button.dataset.modelPrefixQuery).catch(showError);
   };
-  renderRanked($("#churnRanking"), analytics.churn.slice(0, 12).map((item) => ({ label: item.mac, value: item.transitions })), "Повторно исчезающих MAC нет");
-  $("#openChurnButton").onclick = () => {
+  $("#churnRanking").innerHTML = analytics.churn.slice(0, 12).map((item) => `<button type="button" class="rank-row model-prefix-link" data-churn-open="${escapeHtml(item.mac)}"><span>${escapeHtml(item.mac)} · ${escapeHtml(item.model || item.vendor || "Устройство")}</span><strong>${Number(item.transitions)}</strong></button>`).join("") || '<p class="empty">Повторно исчезающих MAC нет.</p>';
+  const openChurn = (query = "") => {
     let page = 1;
-    showDialog($("#detailsDialog"), "MAC, которые исчезают и появляются", `<label>Поиск по MAC и данным устройства<input type="search" data-churn-search placeholder="MAC, модель, помещение, IP"></label><div class="table-scroll"><table class="data-table"><thead><tr><th>MAC</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Помещение</th><th>Появлений</th><th>Исчезновений</th><th>Возвращений</th><th>Всего переходов</th></tr></thead><tbody data-churn-rows>${churnContent(analytics.churn, { page, pageSize: 100 })}</tbody></table></div>`);
+    showDialog($("#detailsDialog"), "MAC, которые исчезают и появляются", `<label>Поиск по MAC и данным устройства<input type="search" data-churn-search placeholder="MAC, модель, помещение, IP"></label><div class="table-scroll"><table class="data-table"><thead><tr><th>MAC</th><th>Производитель</th><th>Модель</th><th>IP</th><th>Помещение</th><th>Появлений</th><th>Исчезновений</th><th>Возвращений</th><th>Всего переходов</th></tr></thead><tbody data-churn-rows>${churnContent(analytics.churn, { query, page, pageSize: 100 })}</tbody></table></div>`);
     const search = $("#detailsDialog [data-churn-search]");
     const rows = $("#detailsDialog [data-churn-rows]");
+    search.value = query;
     search.addEventListener("input", () => { page = 1; rows.innerHTML = churnContent(analytics.churn, { query: search.value, page, pageSize: 100 }); });
     rows.addEventListener("click", async (event) => {
       const pageButton = event.target.closest("[data-churn-page]");
@@ -6801,9 +6841,11 @@ function paintAnalyticsDetails(analytics) {
       if (!row || !content) return;
       if (row.dataset.loaded === "true") {
         row.hidden = !row.hidden;
+        button.setAttribute("aria-expanded", String(!row.hidden));
         return;
       }
       button.disabled = true;
+      const buttonLabel = button.textContent;
       button.textContent = "Загрузка…";
       try {
         const transitions = await collectPresenceTransitions(mac, state.snapshotMetadata, (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit), { filters: analytics.dashboardFilters || {}, snapshotsAscending: true });
@@ -6812,24 +6854,39 @@ function paintAnalyticsDetails(analytics) {
           : '<p class="empty">Переходы не найдены для текущих фильтров.</p>';
         row.dataset.loaded = "true";
         row.hidden = false;
+        button.setAttribute("aria-expanded", "true");
       } catch (error) {
         content.textContent = error?.message || String(error);
         row.hidden = false;
       } finally {
         if (button.isConnected) {
           button.disabled = false;
-          button.textContent = "Детали";
+          button.textContent = buttonLabel;
         }
       }
     });
+    if (query) rows.querySelector("[data-churn-transitions]")?.click();
   };
-  renderAnalyticsChangeCategories(analytics.comparison)?.catch(showError);
+  $("#openChurnButton").onclick = () => openChurn();
+  $("#churnRanking").onclick = (event) => {
+    const button = event.target.closest("[data-churn-open]");
+    if (button) openChurn(button.dataset.churnOpen);
+  };
+  renderAnalyticsStatusRoster(analytics, analytics.dashboardFilters.status).then(() => {
+    if (state.analytics === analytics) return renderAnalyticsChangeCategories(analytics.comparison);
+  }).catch(showError);
   applyDashboardWidgetVisibility();
   $("#datasetOverview").innerHTML = renderOverview(analytics.dataset);
   const occupancy = analytics.dataset.roomOccupancy;
   $("#roomOccupancyStatus").textContent = `Распределено ${occupancy.assignedDevices.toLocaleString("ru-RU")} из ${analytics.dataset.summary.devices.toLocaleString("ru-RU")} (${occupancy.assignedPercent.toFixed(1)}%) · без помещения ${occupancy.unassignedDevices.toLocaleString("ru-RU")} · помещений ${occupancy.uniqueRooms.toLocaleString("ru-RU")} · среднее ${occupancy.averageDevicesPerRoom.toFixed(1)} устройства на помещение`;
   renderRanked($("#roomOccupancyRanking"), occupancy.rooms.map((item) => ({ label: `${item.label} · ${item.percentOfAssigned.toFixed(1)}% распределённых`, value: item.count })), "Нет данных о заполненных помещениях");
-  $("#analyticsReportPreview").textContent = analytics.dataset.reportText;
+  analytics.datasetReportText = [
+    `Выбранный Final · ${analytics.current?.name || "без названия"}`,
+    `Уникальные MAC основного файла · ${analytics.current?.mainUniqueMacs ?? "не сохранено"}`,
+    `Последний успешный Final · ${analytics.unassignedSnapshot.name} · без помещения ${analytics.kpis.withoutRoom.toLocaleString("ru-RU")}`,
+    "", analytics.dataset.reportText,
+  ].join("\n");
+  $("#analyticsReportPreview").textContent = analytics.datasetReportText;
   $("#exportAnalyticsReportButton").disabled = !analytics.dataset.summary.devices;
   const clusterSummary = $("#clusterSummary");
   const clusteringSnapshotId = analytics.current?.id || "";
@@ -7294,6 +7351,18 @@ async function saveIpEnrichmentSettings() {
   $("#ipEnrichmentStatus").textContent = "Настройки сохранены локально и применятся при следующем объединении.";
 }
 
+async function inventorySearchExportMatcher(query) {
+  const mac = exactMacSearchQuery(query);
+  if (!mac) return (device, search) => !search || matchesDeviceSearch(device, search);
+  if ($("#showInventoryMacCandidates").checked) return (device) => {
+    let matched = false;
+    visitDeviceMacAddresses(device, (candidate) => { if (candidate === mac) matched = true; });
+    return matched;
+  };
+  const result = await database.searchInventory({ query, pageSize: 1 });
+  return (device) => device.id === result.items[0]?.id;
+}
+
 async function exportSearchCsv() {
   const columns = visibleInventoryColumns(state.inventoryColumnConfig);
   const query = keyText(state.search);
@@ -7301,7 +7370,7 @@ async function exportSearchCsv() {
     readPage: ({ afterId, limit }) => database.inventoryPage({ afterId, limit }),
     query,
     columns,
-    matches: (device, search) => !search || matchesDeviceSearch(device, search),
+    matches: await inventorySearchExportMatcher(query),
     cellText: (device, key, rowNumber) => inventoryCellText(device, key, rowNumber),
     pageSize: 500,
     chunkRows: 500,
@@ -7317,7 +7386,7 @@ async function exportSearchXlsx() {
   const columns = visibleInventoryColumns(state.inventoryColumnConfig);
   const result = await createInventorySearchXlsxSheets(database, {
     query,
-    matches: (device, search) => !search || matchesDeviceSearch(device, search),
+    matches: await inventorySearchExportMatcher(query),
     columns,
     onProgress: (exported, total) => { button.textContent = `Excel · ${exported.toLocaleString("ru-RU")} / ${total.toLocaleString("ru-RU")}`; },
   });
@@ -7333,7 +7402,7 @@ async function exportSearchXlsx() {
 
 async function projectConfirmedAddresses(devices) {
   if (!state.ipEnrichmentSettings.historicalAddress) return;
-  const ips = new Set(devices.filter((device) => device && !text(device.address) && !text(device.physicalAddress)).map((device) => normalizeIp(device.switchIp)).filter(Boolean));
+  const ips = new Set(devices.filter((device) => device && (!text(device.address) || isFloorOnlyAddress(device.address)) && (!text(device.physicalAddress) || isFloorOnlyAddress(device.physicalAddress))).map((device) => normalizeIp(device.switchIp)).filter(Boolean));
   if (!ips.size) return;
   const accumulator = createHistoricalAddressAccumulator();
   await database.forEachSwitchAddressEvidenceForIps([...ips], (record) => accumulator.add(record));
@@ -7904,7 +7973,7 @@ async function initializeRoomFilters() {
         await database.forEachSnapshotChunk(snapshot.id, (devices) => addRoomCatalogDevices(rooms, devices));
         if (revision !== state.roomCatalogRevision) return null;
       }
-      return [...rooms.values()];
+      return reconcileRoomCatalog([...rooms.values()]);
     });
     if (!publishRoomCatalogForRevision(state, revision, catalog)) return;
     if (!state.roomCatalog.length && !state.snapshotMetadata.length) return;
@@ -7917,9 +7986,14 @@ function selectedRoomKey() {
   const query = keyText($("#roomSearch").value);
   const filters = ROOM_FILTER_FIELDS;
   const selected = Object.fromEntries(filters.map((field) => [field, $( `#${field === "businessUnit" ? "businessUnit" : field}Filter`).value]));
-  const device = roomDevices().find((item) => matchesRoomFilters(item, selected, filters)
+  const matches = roomDevices().filter((item) => matchesRoomFilters(item, selected, filters)
     && (!query || matchesDeviceSearch(item, query)));
-  return device ? locationKey(device) : "";
+  const candidates = $("#roomSearchResults");
+  if (matches.length === 1) return matches[0].key;
+  candidates.innerHTML = matches.length ? `<label>Найдено помещений ${matches.length.toLocaleString("ru-RU")}<select id="roomSearchChoice"></select></label>` : '<p class="muted">Подходящих помещений нет.</p>';
+  const choice = $("#roomSearchChoice");
+  if (choice) renderSelect(choice, matches.map((room) => ({ value: room.key, label: fullRoomAddress(room) + (room.smartroomId ? " · " + room.smartroomId : "") })), "", "Выберите помещение");
+  return "";
 }
 
 function roomTimelineMatch(device, key, room = {}) {
@@ -8306,9 +8380,10 @@ async function scanRoomPairComparison(snapshot, key, room, baselineIndex, knownI
 }
 
 async function showRoomTimeline(roomKey = "", room = {}) {
-  const key = roomKey || selectedRoomKey();
-  if (!key) throw new Error("Выберите помещение или уточните поиск");
-  room = { ...roomDevices().find((device) => locationKey(device) === key), ...room };
+  if (!roomKey) await initializeRoomFilters();
+  const key = roomKey || $("#roomSearchChoice")?.value || selectedRoomKey();
+  if (!key) return;
+  room = { ...roomDevices().find((device) => device.key === key), ...room };
   const revision = ++state.roomTimelineRevision;
   const timeline = $("#roomTimeline");
   timeline.classList.remove("empty");
@@ -8522,9 +8597,10 @@ async function updateRoomTimelinePage(snapshotId, section, page) {
 }
 
 async function compareLatestRoomFinals() {
-  const key = selectedRoomKey();
-  if (!key) throw new Error("Выберите помещение или уточните поиск");
-  const room = roomDevices().find((device) => locationKey(device) === key) || {};
+  await initializeRoomFilters();
+  const key = $("#roomSearchChoice")?.value || selectedRoomKey();
+  if (!key) return;
+  const room = roomDevices().find((device) => device.key === key) || {};
   const snapshots = state.snapshotMetadata;
   if (snapshots.length < 2) throw new Error("Для сравнения помещения нужны минимум два снимок объединения");
   state.roomPair = { key, room, baseSnapshot: snapshots.at(-2), currentSnapshot: snapshots.at(-1) };
@@ -8658,8 +8734,10 @@ function renderBatchPreview() {
     host.innerHTML = '<p class="empty">В папке Main нет поддерживаемых файлов.</p>';
     return;
   }
+  const previouslyRendered = host.querySelector("[data-batch-pair-details]");
+  const openPairs = new Set([...host.querySelectorAll("[data-batch-pair-details][open]")].map((details) => details.dataset.batchPairDetails));
   const unmatched = unmatchedBatchEntries(state.batch.pairs, state.batch.entries);
-  host.innerHTML = `<p class="notice"><strong>Принцип:</strong> каждый включённый Main создаёт один снимок объединения. SmartRoom/DDIO назначаются не более чем одному Main. Выберите одинаковую календарную дату либо ближайшую дату с допуском. Файлы без достоверной даты остаются неназначенными. Можно отключить цикл, переназначить источники и увидеть неназначенные файлы до запуска.</p>${unmatched.length ? `<p class="batch-validation error">Без пары (${unmatched.length}): ${unmatched.map((entry) => escapeHtml(`${entry.role}: ${batchEntryDisplayName(entry)}`)).join(" · ")}</p>` : ""}<div class="table-scroll"><table class="data-table batch-table"><thead><tr><th>Цикл</th><th>№</th><th>Дата</th><th>Main</th><th>SmartRoom</th><th>DDIO</th></tr></thead><tbody>${state.batch.pairs.map((pair, index) => `<tr><td><input type="checkbox" aria-label="Включить цикл ${index + 1}" data-batch-pair-enabled="${index}" ${pair.enabled !== false ? "checked" : ""}></td><td>${index + 1}</td><td>${escapeHtml(pair.date.date.slice(0, 10) || "Дата неизвестна")}</td><td>${escapeHtml(batchEntryDisplayName(pair.main))}</td><td>${batchSourceSelect(pair, index, "smartroom")}</td><td>${batchSourceSelect(pair, index, "ddio")}</td></tr><tr class="batch-details-row"><td colspan="6"><details ${index === 0 ? "open" : ""}><summary>Проверить и изменить сопоставление колонок</summary><p data-batch-problems="${index}"></p><div class="batch-mapping-grid">${batchMappingEditor(pair.main)}${batchMappingEditor(pair.smartroom)}${batchMappingEditor(pair.ddio)}</div><label class="batch-review"><input type="checkbox" data-batch-pair-reviewed="${index}" ${pair.reviewed ? "checked" : ""}>Я проверил файлы и mapping этой пары</label></details></td></tr>`).join("")}</tbody></table></div>`;
+  host.innerHTML = `<p class="notice"><strong>Принцип:</strong> каждый включённый Main создаёт один снимок объединения. SmartRoom/DDIO назначаются не более чем одному Main. Выберите одинаковую календарную дату либо ближайшую дату с допуском. Файлы без достоверной даты остаются неназначенными. Можно отключить цикл, переназначить источники и увидеть неназначенные файлы до запуска.</p>${unmatched.length ? `<p class="batch-validation error">Без пары (${unmatched.length}): ${unmatched.map((entry) => escapeHtml(`${entry.role}: ${batchEntryDisplayName(entry)}`)).join(" · ")}</p>` : ""}<div class="table-scroll"><table class="data-table batch-table"><thead><tr><th>Цикл</th><th>№</th><th>Дата</th><th>Main</th><th>SmartRoom</th><th>DDIO</th></tr></thead><tbody>${state.batch.pairs.map((pair, index) => `<tr><td><input type="checkbox" aria-label="Включить цикл ${index + 1}" data-batch-pair-enabled="${index}" ${pair.enabled !== false ? "checked" : ""}></td><td>${index + 1}</td><td>${escapeHtml(pair.date.date.slice(0, 10) || "Дата неизвестна")}</td><td>${escapeHtml(batchEntryDisplayName(pair.main))}</td><td>${batchSourceSelect(pair, index, "smartroom")}</td><td>${batchSourceSelect(pair, index, "ddio")}</td></tr><tr class="batch-details-row"><td colspan="6"><details data-batch-pair-details="${escapeHtml(pair.main.id)}" ${openPairs.has(pair.main.id) || (!previouslyRendered && index === 0) ? "open" : ""}><summary>Проверить и изменить сопоставление колонок</summary><p data-batch-problems="${index}"></p><div class="batch-mapping-grid">${batchMappingEditor(pair.main)}${batchMappingEditor(pair.smartroom)}${batchMappingEditor(pair.ddio)}</div><label class="batch-review"><input type="checkbox" data-batch-pair-reviewed="${index}" ${pair.reviewed ? "checked" : ""}>Я проверил файлы и mapping этой пары</label></details></td></tr>`).join("")}</tbody></table></div>`;
   host.insertAdjacentHTML("afterbegin", '<button type="button" class="button secondary" data-review-valid-batch>Подтвердить все корректные пары</button>');
   host.querySelector("[data-review-valid-batch]").addEventListener("click", () => {
     for (const pair of state.batch.pairs) if (!batchPairProblems(pair).length) pair.reviewed = true;
@@ -8688,7 +8766,13 @@ function renderBatchPreview() {
     if (assigned.replaced.length) $("#batchStartStatus").textContent = `Колонка переназначена из: ${assigned.replaced.map((field) => FIELD_LABELS[field] || field).join(", ")}`;
     const pair = state.batch.pairs.find((item) => [item.main, item.smartroom, item.ddio].some((source) => source?.id === entry.id));
     if (pair) pair.reviewed = false;
-    renderBatchPreview();
+    const editor = select.closest(".batch-details-row");
+    for (const control of editor.querySelectorAll("[data-batch-mapping-field]")) {
+      if (control.dataset.batchEntryId !== entry.id) continue;
+      control.value = entry.mapping[control.dataset.batchMappingField] ?? "";
+    }
+    editor.querySelector("[data-batch-pair-reviewed]").checked = false;
+    refreshBatchValidation();
   }));
   host.querySelectorAll("[data-batch-pair-reviewed]").forEach((input) => input.addEventListener("change", () => {
     state.batch.pairs[Number(input.dataset.batchPairReviewed)].reviewed = input.checked;
@@ -9757,7 +9841,7 @@ async function runSavedFinalSearch() {
     });
     if (savedFinalSearchController !== controller) return;
     renderSavedFinalSearchResults(result.rows);
-    status.textContent = `Найдено уникальных MAC: ${result.rows.length.toLocaleString("ru-RU")} · проверено устройств: ${result.scanned.toLocaleString("ru-RU")} · снимок объединения: ${result.snapshotsScanned.toLocaleString("ru-RU")}${result.truncated ? " · показаны первые 100, есть другие совпадения" : ""}.`;
+    status.textContent = `Найдено уникальных MAC: ${result.rows.length.toLocaleString("ru-RU")} · прочитано строк по всем снимкам: ${result.scanned.toLocaleString("ru-RU")} · снимков: ${result.snapshotsScanned.toLocaleString("ru-RU")}${result.truncated ? " · показаны первые 100, есть другие совпадения" : ""}.`;
   } catch (error) {
     if (savedFinalSearchController !== controller) return;
     if (error?.name === "AbortError") status.textContent = "Поиск по сохранённым снимкам объединения отменён.";
@@ -10631,6 +10715,8 @@ function bindEvents() {
   $("#pageSizeSelect").addEventListener("change", (event) => { state.pageSize = Number(event.target.value); state.page = 1; scheduleWorkspaceStateSave(); renderDeviceTable().catch(showError); });
   $("#previousPageButton").addEventListener("click", () => { state.page -= 1; scheduleWorkspaceStateSave(); renderDeviceTable().catch(showError); });
   $("#nextPageButton").addEventListener("click", () => { state.page += 1; scheduleWorkspaceStateSave(); renderDeviceTable().catch(showError); });
+  $("#showInventoryMacCandidates").addEventListener("change", () => { state.page = 1; renderDeviceTable().catch(showError); });
+  $("#globalSearch").addEventListener("input", () => { $("#showInventoryMacCandidates").checked = false; });
   $("#exportSearchCsvButton").addEventListener("click", () => exportSearchCsv().catch(showError));
   $("#exportSearchXlsxButton").addEventListener("click", () => {
     const button = $("#exportSearchXlsxButton");
@@ -10976,13 +11062,17 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   });
   $("#exportAnalyticsReportButton").addEventListener("click", () => {
     if (!state.analytics?.dataset?.summary.devices) return showError(new Error("Сначала рассчитайте аналитику полного снимок объединения"));
-    download(`analytics_report_${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}.txt`, state.analytics.dataset.reportText, "text/plain;charset=utf-8");
+    download(`analytics_report_${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}.txt`, state.analytics.datasetReportText, "text/plain;charset=utf-8");
   });
   $("#openMacHistoryButton").addEventListener("click", () => openMacHistory().catch(showError));
   $("#loadOptionalHostMacHistoryButton").addEventListener("click", () => openMacHistory({ includeOptionalHostHistory: true }).catch(showError));
   $("#changeTable").addEventListener("click", (event) => {
-    const statusRosterPage = event.target.closest("[data-status-roster-page]");
-    if (statusRosterPage && !statusRosterPage.disabled) return renderAnalyticsStatusRoster(state.analytics, statusRosterPage.dataset.statusRosterPage, Number(statusRosterPage.dataset.pageOffset) || 0).catch(showError);
+    if (event.target.closest("[data-use-snapshot-change-report]")) {
+      const select = $("#changeReportModeSelect");
+      select.value = "snapshots";
+      select.dispatchEvent(new globalThis.Event("change"));
+      return;
+    }
     const unchangedPage = event.target.closest("[data-unchanged-page]");
     if (unchangedPage && !unchangedPage.disabled) return renderAnalyticsUnchangedPage(state.analytics, Number(unchangedPage.dataset.unchangedPage) || 0).catch(showError);
     const modifiedDevicePage = event.target.closest("[data-modified-device-page]");
@@ -11003,6 +11093,10 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     }
     const page = event.target.closest("[data-change-page]");
     if (page && !page.disabled) renderAnalyticsChangeCategories(state.analytics?.comparison, state.comparisonChangeCategory, Number(page.dataset.changePage))?.catch(showError);
+  });
+  $("#dashboardStatusRoster").addEventListener("click", (event) => {
+    const page = event.target.closest("[data-status-roster-page]");
+    if (page && !page.disabled) renderAnalyticsStatusRoster(state.analytics, page.dataset.statusRosterPage, Number(page.dataset.pageOffset) || 0).catch(showError);
   });
   $("#changeTable").addEventListener("keydown", (event) => {
     if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
@@ -11183,7 +11277,11 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   $("#deleteHistoryEventsButton").addEventListener("click", () => deleteSelectedHistoryEvents().catch(showError));
   $("#deleteFilteredHistoryEventsButton").addEventListener("click", () => deleteFilteredHistoryEvents().catch(showError));
 
-  ["businessUnit", "city", "site", "floor", "room"].forEach((field) => $(`#${field === "businessUnit" ? "businessUnit" : field}Filter`).addEventListener("change", () => cascadeRoomFilters(field)));
+  ["businessUnit", "city", "site", "floor", "room"].forEach((field) => $(`#${field === "businessUnit" ? "businessUnit" : field}Filter`).addEventListener("change", () => { $("#roomSearchResults").replaceChildren(); cascadeRoomFilters(field); }));
+  $("#roomSearch").addEventListener("input", () => $("#roomSearchResults").replaceChildren());
+  $("#roomSearch").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); showRoomTimeline().catch(showError); }
+  });
   $("#showRoomButton").addEventListener("click", () => showRoomTimeline().catch(showError));
   $("#compareRoomFinalsButton").addEventListener("click", () => compareLatestRoomFinals().catch(showError));
   $("#showAllChangedRoomButton").addEventListener("click", () => showAllChangedRooms().catch(showError));
@@ -11622,6 +11720,11 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
       loadRoomCoverageSummaryPage(state.analytics, Math.max(1, next)).catch(showError);
       return;
     }
+    const roomChangesButton = event.target.closest("[data-room-coverage-changes]");
+    if (roomChangesButton) {
+      loadRoomCoverageChanges(state.analytics, roomChangesButton.dataset.roomCoverageChanges, roomChangesButton.dataset.direction).catch(showError);
+      return;
+    }
     const roomCoveragePageButton = event.target.closest("[data-room-coverage-page]");
     if (roomCoveragePageButton && state.analytics) {
       loadRoomCoveragePage(
@@ -11704,6 +11807,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
       $("#detailsDialog").close();
       activateView("rooms");
       $("#roomSearch").value = "";
+      $("#roomSearchResults").replaceChildren();
       const selectors = { businessUnit: "businessUnitFilter", city: "cityFilter", site: "siteFilter", floor: "floorFilter", room: "roomFilter" };
       for (const [field, id] of Object.entries(selectors)) {
         const select = $(`#${id}`);
@@ -11716,6 +11820,7 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     const link = event.target.closest("[data-search-mac]");
     if (!link) return;
     event.preventDefault();
+    $("#showInventoryMacCandidates").checked = false;
     state.search = link.dataset.searchMac;
     state.page = 1;
     $("#globalSearch").value = state.search;

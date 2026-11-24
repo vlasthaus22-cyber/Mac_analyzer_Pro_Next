@@ -109,6 +109,7 @@
       <section class="view active" id="searchView">
         <div class="view-heading">
           <div><p class="eyebrow">Пользовательский режим</p><h2>Поиск по всему Inventory</h2></div>
+          <label class="inline-setting" hidden><input id="showInventoryMacCandidates" type="checkbox">Показать все записи этого MAC</label>
           <span id="searchCount" class="count-badge">0 устройств</span>
         </div>
         <div class="toolbar">
@@ -222,6 +223,7 @@
         </div>
         <details class="analytics-chart-details"><summary>Таблицы изменений MAC и снимок объединения</summary><div class="analytics-grid">
           <article class="panel wide" data-dashboard-widget="chart:presence-churn"><h3>MAC, которые исчезают и появляются</h3><p><button id="openChurnButton" class="button secondary" type="button">Открыть полный список</button></p><div id="churnRanking"></div></article>
+          <article id="dashboardStatusRoster" class="panel wide"></article>
           <article class="panel wide"><h3>Подтверждённые изменения</h3><details class="report-scope-settings"><summary>Отдельный период отчёта</summary><div class="toolbar compare-toolbar"><label>Режим отчёта изменений<select id="changeReportModeSelect"><option value="period">За период</option><option value="snapshots">Между снимками объединения</option></select></label><div id="changePeriodControls" class="toolbar"><label>С даты<input id="changeReportFrom" type="date"></label><label>По дату<input id="changeReportTo" type="date"></label><button id="applyChangeReportButton" class="button primary" type="button">Применить период</button></div><p id="changeSnapshotControls" class="muted">Используются снимок объединения, выбранные в верхней панели Dashboard.</p></div></details><div id="changeTable"></div></article>
         </div></details>
         </details>
@@ -328,6 +330,7 @@
         </div>
         <div class="action-row"><button id="showRoomButton" class="button primary" type="button">Показать помещение</button><button id="compareRoomFinalsButton" class="button secondary" type="button">Сравнить два последних снимок объединения</button><button id="showAllChangedRoomButton" class="button secondary" type="button">Проверить всё оборудование</button></div>
         <div id="roomFinalComparison" class="panel empty">Выберите помещение и сравните два последних снимок объединения.</div>
+        <div id="roomSearchResults" aria-live="polite"></div>
         <div id="roomTimeline" class="panel empty">Выберите помещение по каскаду.</div>
       </section>
 

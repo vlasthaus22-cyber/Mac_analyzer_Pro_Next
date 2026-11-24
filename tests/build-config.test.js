@@ -1260,8 +1260,8 @@ test("streamed Main and SmartRoom keep the identity index on disk outside bounde
   assert.match(enrichment, /const smartroomInputIsEmpty = Array\.isArray\(smartroomRows\) && smartroomRows\.length === 0/);
   assert.match(enrichment, /rowCount: mainDevices\.length, identityIndex: smartroomInputIsEmpty \? null : await buildIdentityIndexAsync\(mainDevices, \{ signal \}\)/);
   assert.match(enrichment, /signal, !smartroomInputIsEmpty\)/);
-  assert.match(enrichment, /enrichSmartroom\(devices, smartroomRows,[\s\S]*?fieldSettings, configuredComparisonSettings, main\.identityIndex, signal\)/);
-  assert.ok(smartroom.replaceAll("\r\n", "\n").includes("index.tokens.clear();\n  await devices.finalize?.(devices.count);\n  return rowIndex;"));
+  assert.match(enrichment, /enrichSmartroom\(devices, smartroomRows,[\s\S]*?fieldSettings, configuredComparisonSettings, main\.identityIndex, signal, smartroomExactMac\)/);
+  assert.ok(smartroom.replaceAll("\r\n", "\n").includes("index.tokens.clear();\n  await devices.finalize?.(devices.count);\n  if (exactMac)"));
 });
 
 test("autonomous enrichment checks available heap before hashing sources and XLSX inflation", () => {
@@ -1327,7 +1327,7 @@ test("source mapping review uses a local draft dialog and validates before apply
   assert.match(app, /renderMapping\(role\);/);
   assert.match(app, /Ручной выбор запоминается для этой схемы заголовков/);
   assert.match(app, /dialog\.close\(\);/);
-  assert.match(batch, /STRONG_FIELDS\.main\.some/);
+  assert.match(batch, /MAIN_IDENTITY_FIELDS\.some/);
   assert.match(batch, /reservationMac\).*reservationIp/);
   assert.match(batch, /new Set\(selected\)\.size !== selected\.length/);
   assert.match(css, /\.mapping-review-table/);
@@ -1897,7 +1897,7 @@ test("weekly history chart stays independent from the configurable status chart 
   assert.match(html, /data-dashboard-widget="chart:presence-churn"/);
   assert.match(app, /data-churn-search/);
   assert.match(app, /data-churn-rows/);
-  assert.match(app, /churnContent\(analytics\.churn, \{ page, pageSize: 100 \}\)/);
+  assert.match(app, /churnContent\(analytics\.churn, \{ query, page, pageSize: 100 \}\)/);
   assert.match(renderer, /export function churnContent\(/);
   assert.match(renderer, /data-churn-page=/);
   assert.match(app, /data-churn-transitions/);
@@ -2134,9 +2134,9 @@ test("extended selected-Final analytics reuses its loaded payload and falls back
   assert.doesNotMatch(app, /loadCompactFinalForComparison\(currentMetadata/);
   assert.match(app, /renderDashboardFilterOptions\(\[\], builtAnalytics\.dashboardFilterOptions\)/);
   assert.match(app, /await feedAnalyticsDatasetRows\(\{[\s\S]*?devices: datasetSnapshotId \? undefined : analytics\.devices[\s\S]*?visitChunks: \(snapshotId, visit\) => database\.forEachSnapshotChunk\(snapshotId, visit, \{/);
-    assert.match(app, /selected-final-dataset-v13:/);
-  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 13\)/);
-  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 13, \{[\s\S]*?onProgress/);
+    assert.match(app, /selected-final-dataset-v14:/);
+  assert.match(app, /database\.loadAnalyticsCache\(datasetCacheKey, historySignature, 14\)/);
+  assert.match(app, /database\.saveAnalyticsCache\(datasetCacheKey, historySignature, \{ snapshotId: datasetCacheSnapshotId, dataset \}, 14, \{[\s\S]*?onProgress/);
   assert.match(app, /\.\.\.collectTopologyBuckets\(selectedChunk\)/);
   assert.match(app, /analyticsAggregateRankedPage\(clusterQueryId, "topology-switch", \{ limit: 20 \}\)/);
   assert.match(app, /dataset\.sourceRowCount !== expectedDevices/);
@@ -2569,7 +2569,7 @@ test("Final analytics change table exposes accessible category tabs with per-eve
   assert.match(app, /addEventListener\("keydown", \(event\) => \{/);
   assert.match(app, /data-change-page=/);
   assert.match(app, /const reportUsesPeriod = state\.changeReportSettings\.mode === "period"/);
-  assert.match(app, /if \(category === undefined && !reportUsesPeriod\) return renderAnalyticsStatusRoster\(analytics, defaultStatus, 0\)/);
+  assert.match(app, /renderAnalyticsStatusRoster\(analytics, analytics\.dashboardFilters\.status\)[\s\S]*?renderAnalyticsChangeCategories\(analytics\.comparison\)/);
   assert.match(app, /async function renderAnalyticsStatusRoster\(/);
   assert.match(app, /data-status-roster-page=/);
 });
@@ -2637,7 +2637,7 @@ test("historical Smartroom room mappings are fetched only for devices needing a 
   assert.match(enrichment, /async function loadDeviceIndexInBatches\(devices, needsLookup, keyFor, loadIndex, \{ retain = true, apply = null, pageKeyFor = null, signal \} = \{\}\)[\s\S]*?forEachDevicePage\(devices, async \(rows\)[\s\S]*?keys\.add\(key\)[\s\S]*?loadIndex\(\[\.\.\.keys\], \{ signal \}\)[\s\S]*?pageKeyFor\(key\)[\s\S]*?writeBack: \(_rows, result\) => Boolean\(apply && result\?\.changed === true\)/);
   assert.match(enrichment, /applyVendorDetectionAsync\(devices,\s*\{\s*\.\.\.detectorSettings,\s*inferenceProfile: historySettings\.precedenceProfile,\s*\}, \{ signal \}\)/);
   assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.room\) && text\(device\.smartroomId\)/);
-  assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => !text\(device\.address\) && text\(device\.switchIp\)/);
+  assert.match(enrichment, /loadDeviceIndexInBatches\([\s\S]*?\(device\) => \(!text\(device\.address\) \|\| isFloorOnlyAddress\(device\.address\)\) && text\(device\.switchIp\)/);
   assert.doesNotMatch(app, /buildSmartroomRoomIndex\(await database\.smartroomRoomMappings\(\)\)/);
 });
 
@@ -2920,7 +2920,7 @@ test("filtered Inventory CSV export streams keyset pages with the visible column
   const exportBody = app.match(/async function exportSearchCsv\(\)\s*\{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(exportBody, /visibleInventoryColumns\(state\.inventoryColumnConfig\)/);
   assert.match(exportBody, /database\.inventoryPage\(\{ afterId, limit \}\)/);
-  assert.match(exportBody, /matchesDeviceSearch\(device, search\)/);
+  assert.match(exportBody, /inventorySearchExportMatcher\(query\)/);
   assert.match(exportBody, /readableTextStreamFromIterable\(iterable\)/);
   assert.match(exportBody, /downloadReadableStream\("devices\.csv", stream, mime, "Inventory CSV"\)/);
   assert.doesNotMatch(exportBody, /showSaveFilePicker|Response\(stream\)\.blob\(\)/);
@@ -3628,7 +3628,7 @@ test("batch queue commits each pair serially and applies its explicit failure po
   const runBatchStart = app.indexOf("async function runBatch(");
   const runBatch = app.slice(runBatchStart, app.indexOf("\nfunction ", runBatchStart));
   const queueStart = batch.indexOf("export async function runBatchQueue(");
-  const queueRunner = batch.slice(queueStart, batch.indexOf("\nconst STRONG_FIELDS", queueStart));
+  const queueRunner = batch.slice(queueStart, batch.indexOf("\nconst MAIN_IDENTITY_FIELDS", queueStart));
   assert.match(html, /id="batchPreview"/);
   assert.match(html, /id="runBatchButton"/);
   assert.match(html, /id="batchFailurePolicy"[\s\S]*value="continue"[\s\S]*value="stop"/);
@@ -3744,7 +3744,7 @@ test("source-key reuse includes a bounded streaming digest of each imported file
   const digest = readFileSync("src/core/incremental-sha256.js", "utf8");
   const sourceKey = readFileSync("src/core/source-key.js", "utf8");
   assert.match(app, /sourceDigests\[role\] = await sha256File\(file/);
-  assert.match(app, /buildSourceKey\(\{ strategy, files, mappings, sourceDigests \}\)/);
+  assert.match(app, /buildSourceKey\(\{ strategy, files, mappings, sourceDigests, mergeVersion: 2 \}\)/);
   assert.match(sourceKey, /sha256: String\(sourceDigests\[role\] \|\| ""\)/);
   assert.match(digest, /file\.slice\(offset, Math\.min\(fileSize, offset \+ chunkSize\)\)\.arrayBuffer\(\)/);
   assert.match(digest, /typeof file\?\.stream === "function"/);

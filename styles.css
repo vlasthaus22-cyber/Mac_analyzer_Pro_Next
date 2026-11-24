@@ -443,3 +443,9 @@ body.is-resizing-column, body.is-resizing-column * { cursor: col-resize !importa
 @media (min-width: 1200px) {
   #enrichmentView .mapping-grid label, .batch-mapping .mapping-grid label { grid-template-columns: minmax(100px, .8fr) minmax(130px, 1.2fr); }
 }
+
+.data-table .churn-location {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 14rem;
+}

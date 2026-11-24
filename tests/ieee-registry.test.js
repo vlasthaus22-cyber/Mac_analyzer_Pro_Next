@@ -160,7 +160,9 @@ test("user OUI entries override bundled IEEE assignments with the same prefix", 
   const bundled = new Map([["001122", "IEEE Vendor"], ["001122A", "IEEE Suballocation"]]);
   const custom = new Map([["001122", "Local Vendor"]]);
   const overlay = createOuiIndexOverlay(bundled, custom);
-  assert.equal(lookupOuiVendor("00:11:22:AA:BB:CC", overlay), "IEEE Suballocation");
+  const ieeeRule = lookupOuiVendorRule("00:11:22:AA:BB:CC", overlay);
+  assert.equal(ieeeRule.vendor, "IEEE Suballocation");
+  assert.equal(ieeeRule.source, "Встроенный IEEE OUI");
   assert.equal(lookupOuiVendor("00:11:22:00:00:00", overlay), "Local Vendor");
 });
 

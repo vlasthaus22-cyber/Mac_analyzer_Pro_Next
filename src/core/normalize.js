@@ -343,6 +343,23 @@ function parseLocationPath(value) {
   };
 }
 
+export function addressLocationParts(value) {
+  const parts = text(value).split(/[;,]/).map(text).filter(Boolean);
+  const floor = isFloorOnlyAddress(parts.at(-1)) ? parts.pop() : "";
+  if (parts.length < 3) return { floor };
+  const [businessUnit, city, ...siteParts] = parts;
+  if (!/^[\p{L}]{2,6}$/u.test(businessUnit)) return { floor };
+  return { businessUnit, city: city.replace(/^(?:г\.|город)\s*/iu, ""), site: siteParts.join(", "), floor };
+}
+
+export function canCompletePhysicalAddress(current, proposed) {
+  if (!text(proposed) || isFloorOnlyAddress(proposed)) return false;
+  if (!text(current)) return true;
+  if (!isFloorOnlyAddress(current)) return false;
+  const floorKey = (value) => keyText(value).match(/-?\d+/u)?.[0] || keyText(value);
+  return floorKey(current) === floorKey(addressLocationParts(proposed).floor);
+}
+
 function locationInference(input) {
   // A full location path may be supplied in the room column for legacy
   // SmartRoom exports. A normal address may contain commas and must never be

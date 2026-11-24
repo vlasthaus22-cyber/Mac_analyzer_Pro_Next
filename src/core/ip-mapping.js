@@ -1,5 +1,5 @@
 import { csvQuote } from "./csv-cell.js";
-import { normalizeIp, text } from "./normalize.js";
+import { canCompletePhysicalAddress, isFloorOnlyAddress, normalizeIp, text } from "./normalize.js";
 
 export const DEFAULT_IP_ENRICHMENT_SETTINGS = Object.freeze({
   enabled: true,
@@ -45,6 +45,8 @@ export function createIpMappingAccumulator() {
     const switchIp = normalizeIp(record?.switchIp);
     const address = text(record?.address);
     if (!switchIp || !address || /^(unknown|none|не указано)$/i.test(address)) return false;
+    const existing = byIp.get(switchIp);
+    if (existing && !isFloorOnlyAddress(existing.address) && isFloorOnlyAddress(address)) return false;
     byIp.set(switchIp, { switchIp, address, source: text(record.source) || "Ручное правило" });
     return true;
   }
@@ -94,7 +96,9 @@ export function applyIpMapping(device, mappings, settings = { enabled: true, par
   const mapping = index
     ? index.exact.get(switchIp) || (normalizedSettings.partialMatch ? index.partial.get(switchIp.split(".").slice(0, 3).join(".")) : null)
     : mappings?.get(switchIp);
-  if (!mapping || text(device.address) && !normalizedSettings.overwrite) return false;
+  if (!mapping || isFloorOnlyAddress(mapping.address)) return false;
+  if (!normalizedSettings.overwrite && (!canCompletePhysicalAddress(device.address, mapping.address) || (text(device.address) && !exactMatch))) return false;
+  if (text(device.physicalAddress) && !isFloorOnlyAddress(device.physicalAddress) && !text(device.address)) return false;
   device.address = mapping.address;
   device.fieldSources ||= {};
   device.fieldSources.address = mapping.source || "IP mapping";
@@ -109,7 +113,7 @@ export function createIpMappingDetector(existing = []) {
     for (const device of Array.isArray(devices) ? devices : []) {
       const switchIp = normalizeIp(device?.switchIp);
       const address = text(device?.address);
-      if (!switchIp || !address || /^(unknown|none|не указано)$/i.test(address)) continue;
+      if (!switchIp || !address || isFloorOnlyAddress(address) || /^(unknown|none|не указано)$/i.test(address)) continue;
       if (!candidates.has(switchIp)) candidates.set(switchIp, new Set());
       candidates.get(switchIp).add(address);
     }
