@@ -7375,7 +7375,7 @@ for (let attempt = 0; attempt < 7200; attempt += 1) {
     console.log(`browser smoke: large Dashboard progress: ${previousAnalyticsProgress}`);
   }
   if (fullFinalAnalytics.loading
-      && fullFinalAnalytics.overview.includes("Подробнаясводкавыбранногостатусарассчитывается")
+      && fullFinalAnalytics.overview.includes("Подробнаясводкавыбранногоснимкарассчитывается")
       && fullFinalAnalytics.kpis.includes("Отсутствуют 5 000")
       && fullFinalAnalytics.kpis.includes("Без изменений 0")) {
     selectedPairKpisVisibleBeforeDetails = true;
@@ -7387,10 +7387,10 @@ for (let attempt = 0; attempt < 7200; attempt += 1) {
       let restartedAnalytics = null;
       for (let restartAttempt = 0; restartAttempt < 100; restartAttempt += 1) {
         restartedAnalytics = await evaluate(`(()=>({view:document.querySelector('.nav-button.active')?.dataset.view||'',current:document.querySelector('#currentSnapshotSelect').value,loading:!document.querySelector('#analyticsLoadingStatus').hidden,overview:document.querySelector('#datasetOverview').textContent.replace(/\\s+/g,''),error:!document.querySelector('#errorBanner').hidden}))()`);
-        if (restartedAnalytics.loading && restartedAnalytics.overview.includes("Подробнаясводкавыбранногостатусарассчитывается")) break;
+        if (restartedAnalytics.loading && restartedAnalytics.overview.includes("Подробнаясводкавыбранногоснимкарассчитывается")) break;
         await wait(50);
       }
-      if (restartedAnalytics?.view !== "analytics" || restartedAnalytics.current !== largeAnalyticsPair.current || !restartedAnalytics.loading || !restartedAnalytics.overview.includes("Подробнаясводкавыбранногостатусарассчитывается") || restartedAnalytics.error) {
+      if (restartedAnalytics?.view !== "analytics" || restartedAnalytics.current !== largeAnalyticsPair.current || !restartedAnalytics.loading || !restartedAnalytics.overview.includes("Подробнаясводкавыбранногоснимкарассчитывается") || restartedAnalytics.error) {
         throw new Error(`Повторный вход не начал полную загрузку актуальной пары снимок объединения: ${JSON.stringify({largeAnalyticsPair,restartedAnalytics})}`);
       }
       analyticsInterruptedAndRestarted = true;
