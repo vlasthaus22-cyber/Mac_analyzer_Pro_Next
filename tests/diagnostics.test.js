@@ -88,7 +88,7 @@ test("browser diagnostics reports static import limits when heap telemetry is un
 test("browser diagnostics reports a denied IndexedDB write without committing probe data", async () => {
   const source = new Database(`diagnostics-readonly-${crypto.randomUUID()}`);
   await source.saveFinal({ id: "readonly-final", devices: [] });
-  const database = Object.create(source);
+  const database = new Database(source.name);
   database.open = async () => {
     const db = await source.open();
     return new Proxy(db, {
@@ -164,7 +164,7 @@ test("browser diagnostics pages every snapshot and never materializes the comple
     await database.saveFinal({ id: `paged-${String(index).padStart(3, "0")}`, devices: [{ id: `device-${index}` }] });
   }
   const calls = [];
-  const pagedDatabase = Object.create(database);
+  const pagedDatabase = new Database(database.name);
   pagedDatabase.listSnapshots = async () => { throw new Error("Diagnostics must not materialize every snapshot"); };
   pagedDatabase.snapshotMetadataPage = async (options) => {
     calls.push({ ...options });
