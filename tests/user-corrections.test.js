@@ -1,7 +1,7 @@
 import "fake-indexeddb/auto";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeDevice, hasKnownRoom } from "../src/core/normalize.js";
+import { normalizeDevice, hasKnownRoom, locationKey } from "../src/core/normalize.js";
 import { enrich, mergeDevice } from "../src/core/enrichment.js";
 import { detectMappingReport } from "../src/data/importer.js";
 import { Database } from "../src/data/database.js";
@@ -188,29 +188,95 @@ test("ambiguous MAC history retains bounded visible candidates with their full a
   assert.ok(macTimelineCandidateRowsContent(candidates).html.includes("Other address"));
 });
 
-test("restored archives join chronological analytics exactly once and preserve the active snapshot", async () => {
+test("archive visibility is reversible and archive-only snapshots join analytics without restoring the working database", async () => {
   const database = new Database("mac-analyzer-pro-next-test-" + crypto.randomUUID());
-  await database.saveFinal({ id: "old", name: "Older", createdAt: "2026-11-01", devices: [{ id: "d", mac, room: "Old" }] });
-  const archive = await database.createLocalArchive("Older data");
-  await database.saveFinal({ id: "new", name: "Newer", createdAt: "2026-11-02", devices: [{ id: "d", mac, room: "New" }] });
-  const db = await database.open();
-  const tx = db.transaction(["snapshots", "snapshotChunks"], "readwrite");
-  tx.objectStore("snapshots").delete("old");
-  tx.objectStore("snapshotChunks").delete(["old", 0]);
-  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
-  assert.equal((await database.restoreLocalArchivesForAnalytics()).archiveCount, 1);
-  assert.equal((await database.activeSnapshotMetadata()).id, "new");
-  assert.deepEqual((await database.listSnapshots({ finalOnly: true })).map((row) => row.id), ["old", "new"]);
-  await database.restoreLocalArchivesForAnalytics();
-  assert.equal((await database.listSnapshots({ finalOnly: true })).length, 2);
-  assert.equal((await database.listLocalArchivesPage()).rows[0].id, archive.id);
-  const analytics = await aggregateSnapshotHistory(await database.listSnapshots({ finalOnly: true }), (id, visit) => database.forEachSnapshotChunk(id, visit));
+  const oldDevice = { id: "d", mac, room: "Old" };
+  await database.saveFinal({
+    id: "old", name: "Older", createdAt: "2026-11-01", devices: [oldDevice],
+    comparisonEvents: (add) => add({ type: "added", deviceId: oldDevice.id, mac, macKey: mac, newValue: "present", timestamp: "2026-11-01T00:00:00Z" }),
+  });
+  const backup = await database.createLocalArchive("Ordinary backup");
+  assert.deepEqual(backup.hiddenSnapshotIds, []);
+  const archive = await database.createLocalArchive("Older data", { hideFromAnalytics: true });
+  assert.deepEqual(archive.hiddenSnapshotIds, ["old"]);
+  await database.saveFinal({
+    id: "new", name: "Newer", createdAt: "2026-11-02", devices: [{ id: "d", mac, room: "New" }],
+    comparisonEvents: (add) => add({ type: "modified", deviceId: oldDevice.id, mac, macKey: mac, field: "room", oldValue: "Old", newValue: "New", timestamp: "2026-11-02T00:00:00Z" }),
+  });
+  const live = () => database.listSnapshots({ finalOnly: true, catalogOnly: true });
+  const hidden = await database.analyticsSnapshotCatalog(await live());
+  assert.deepEqual(hidden.snapshots.map(({ id }) => id), ["new"]);
+  assert.deepEqual([...hidden.hidden], ["old"]);
+  assert.equal((await database.historyChangeCategoryCounts({}, { scope: hidden })).added, 0);
+  assert.deepEqual((await live()).map(({ id }) => id), ["old", "new"], "hiding does not remove live snapshots");
+  await database.deleteSnapshots(["old"]);
+  const before = await database.historyChangeCategoryCounts();
+  const active = await database.activeSnapshotMetadata();
+  const catalogue = await database.analyticsSnapshotCatalog(await live(), { includeArchives: true });
+  assert.equal(catalogue.archiveCount, 2);
+  assert.deepEqual(catalogue.snapshots.map(({ id }) => id), ["old", "new"]);
+  assert.equal(catalogue.sources.size, 1);
+  database.setAnalyticsArchiveSources(catalogue.sources);
+  assert.equal((await database.loadSnapshotPage("old")).devices[0].room, "Old");
+  const roomRows = [];
+  await database.forEachSnapshotRoomChunk("old", locationKey(oldDevice), oldDevice, (devices) => {
+    roomRows.push(...devices.map(({ id }) => id));
+  });
+  assert.deepEqual(roomRows, ["d"]);
+  const analytics = await aggregateSnapshotHistory(catalogue.snapshots, (id, visit) => database.forEachSnapshotChunk(id, visit));
   assert.deepEqual(analytics.totals.map((row) => row.value), [1, 1]);
   assert.equal(analytics.history.snapshots, 2);
   assert.equal(analytics.history.selectedSnapshotUniqueMacs, 1, "archived snapshot must not inflate the current device count");
-  assert.equal(analytics.weekly.reduce((sum, row) => sum + row.modified, 0), 1, "the room change must include the restored archive evidence");
+  assert.equal(analytics.weekly.reduce((sum, row) => sum + row.modified, 0), 1, "the room change must include the archive evidence");
+  const scope = { sources: catalogue.sources, hidden: new Set() };
+  const counts = await database.historyChangeCategoryCounts({}, { scope });
+  assert.deepEqual(counts, { ...before, all: before.all + 1, added: before.added + 1 });
+  const first = await database.historySearchPage({}, { scope, limit: 1 });
+  assert.equal(first.total, counts.all);
+  assert.equal(first.rows[0].snapshotId, "old");
+  assert.equal(first.rows[0].archived, true);
+  assert.equal(first.hasMore, true);
+  const next = await database.historySearchPage({}, { scope, limit: 1, cursor: first.nextCursor });
+  assert.equal(next.rows[0].snapshotId, "new");
+  const timelineIds = [];
+  await database.forEachMacHistoryPage(mac, (events) => timelineIds.push(...events.map(({ snapshotId }) => snapshotId)), { scope });
+  assert.deepEqual(timelineIds.sort(), ["new", "old"]);
+  assert.deepEqual(await database.historyChangeCategoryCounts(), before);
+  assert.deepEqual(await database.activeSnapshotMetadata(), active);
+  assert.deepEqual((await live()).map(({ id }) => id), ["new"]);
+  database.setAnalyticsArchiveSources(new Map());
+  await assert.rejects(database.loadSnapshotPage("old"), { code: "SNAPSHOT_INTEGRITY" });
 });
 
+test("archive creation verifies chunks during copying and publishes no visibility changes after an error", async () => {
+  const database = new Database("mac-analyzer-pro-next-test-" + crypto.randomUUID());
+  await database.saveFinal({ id: "old", name: "Older", devices: [{ id: "d", mac, address: fullAddress }] });
+  const db = await database.open();
+  const original = db.transaction.bind(db);
+  let chunkPasses = 0;
+  db.transaction = (stores, ...args) => {
+    if (stores === "snapshotChunks" && args[0] === "readonly") chunkPasses += 1;
+    return original(stores, ...args);
+  };
+  await database.createLocalArchive("No separate preflight", { hideFromAnalytics: false });
+  db.transaction = original;
+  assert.equal(chunkPasses, 2, "one chunk pass copies and validates, the other detects concurrent changes");
+  let mutation;
+  await assert.rejects(database.createLocalArchive("Changed", {
+    hideFromAnalytics: true,
+    onProgress: ({ stage }) => {
+      if (stage === "verify") mutation = database.setSetting("concurrentUpdate", "value");
+    },
+  }), /База изменилась/);
+  await mutation;
+  const tx = db.transaction("snapshotChunks", "readwrite");
+  tx.objectStore("snapshotChunks").delete(["old", 0]);
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
+  await assert.rejects(database.createLocalArchive("Corrupt", { hideFromAnalytics: true }), { code: "SNAPSHOT_INTEGRITY" });
+  const ready = await database.listLocalArchivesPage();
+  assert.deepEqual(ready.rows.map(({ name }) => name), ["No separate preflight"]);
+  assert.equal((await database.analyticsSnapshotCatalog(await database.listSnapshots())).hidden.size, 0);
+});
 
 test("exact Main MAC joins SmartRoom independently of IDs and rejects contradictory SmartRoom locations", async () => {
   const options = {

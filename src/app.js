@@ -250,6 +250,9 @@ const state = {
   activeSnapshot: null,
   snapshotMetadata: [],
   snapshotMetadataCanonical: false,
+  analyticsSnapshotScope: { snapshots: [], sources: new Map(), hidden: new Set() },
+  showArchivedSnapshots: false,
+  analyticsScopeRequest: 0,
   localArchivePage: { after: null, previous: [], result: null, request: 0 },
   snapshotTimeCache: createSnapshotTimeCache((ids) => database.snapshotCreatedAtByIds(ids)),
   deviceAnalyticsRequestId: 0,
@@ -501,8 +504,8 @@ async function showAnalyticsBugReport() {
   const button = $("#analyticsBugReportButton");
   button.disabled = true;
   const analytics = displayedDashboard;
-  const latestId = analytics?.unassignedSnapshot?.id || state.activeSnapshot?.id;
-  const snapshotId = analytics?.current?.id || latestId || state.snapshotMetadata.at(-1)?.id;
+  const latestId = analytics?.unassignedSnapshot?.id || state.analyticsSnapshotScope.snapshots.at(-1)?.id;
+  const snapshotId = analytics?.current?.id || latestId;
   const uiCounts = {};
   if (analytics) {
     for (const key of ["devices", "modified", "absent", "unchanged", "manufacturers", "rooms", "withoutRoom"]) {
@@ -1149,7 +1152,7 @@ function renderEngineeringMode() {
   const dataQualityPanel = $("#dataQualityPanel");
   if (dataQualityPanel) dataQualityPanel.hidden = !engineer;
   if (engineer && dataQualityPanel?.dataset.historyLoaded !== "true") {
-    void renderDataQualityHistory().then(() => { dataQualityPanel.dataset.historyLoaded = "true"; }).catch(showError);
+    void renderDataQualityHistory().catch(showError);
   }
 }
 
@@ -1749,6 +1752,71 @@ function handleGlobalShortcut(event) {
   action();
 }
 
+async function refreshAnalyticsSnapshotScope(includeArchives = state.showArchivedSnapshots, onProgress) {
+  const request = ++state.analyticsScopeRequest;
+  const catalog = await database.analyticsSnapshotCatalog(state.snapshotMetadata, { includeArchives, onProgress });
+  if (request !== state.analyticsScopeRequest) return false;
+  const previousScope = state.analyticsSnapshotScope;
+  const hidden = includeArchives ? new Set() : catalog.hidden;
+  const changed = includeArchives !== state.showArchivedSnapshots
+    || hidden.size !== previousScope.hidden.size
+    || [...hidden].some((id) => !previousScope.hidden.has(id))
+    || snapshotHistorySignature(catalog.snapshots, { snapshotsAscending: true })
+      !== snapshotHistorySignature(previousScope.snapshots, { snapshotsAscending: true })
+    || catalog.sources.size !== previousScope.sources.size
+    || [...catalog.sources].some(([id, source]) => previousScope.sources.get(id)?.archiveId !== source.archiveId);
+  state.showArchivedSnapshots = includeArchives;
+  state.analyticsSnapshotScope = { ...catalog, hidden };
+  database.setAnalyticsArchiveSources(catalog.sources);
+  const button = $("#includeArchivedSnapshotsButton");
+  button.setAttribute("aria-pressed", String(includeArchives));
+  button.textContent = includeArchives ? "Скрыть архивные снимки" : "Показать все локальные архивы";
+  $("#archiveAnalyticsStatus").textContent = includeArchives
+    ? `Подключено архивов · ${catalog.archiveCount}. Доступно снимков · ${catalog.snapshots.length}.`
+    : hidden.size ? `Скрыто архивных снимков · ${hidden.size}.` : "";
+  if (changed) {
+    const previousAnalytics = state.analytics;
+    invalidateAnalyticsRequests();
+    state.analytics = null;
+    displayedDashboard = null;
+    clearDashboardRoomChangeIndex(previousAnalytics?.roomChangeIndex);
+    state.analyticsComparisonPageCache.clear();
+    state.snapshotTimeCache.clear();
+    state.roomCatalogRevision += 1;
+    state.roomCatalogPromise = null;
+    state.roomCatalog = [];
+    state.roomFilterCascadeSignature = "";
+    state.roomTimelineRevision += 1;
+    state.roomTimelineSelectedId = "";
+    state.roomPair = null;
+    $("#roomTimeline").textContent = "Выберите помещение по каскаду.";
+    $("#roomFinalComparison").textContent = "Выберите помещение для сравнения.";
+    $("#roomSearchResults").replaceChildren();
+    for (const property of ["activeMacTimelineQueryId", "dialogMacTimelineQueryId"]) {
+      const queryId = state[property];
+      state[property] = "";
+      if (queryId) database.clearMacTimelineQuery(queryId).catch(() => {});
+    }
+    $("#macTimeline").textContent = "Выберите MAC-адрес.";
+    $("#macTimelineSummary").hidden = true;
+    $("#macHistoryDialog").close();
+    $("#detailsDialog").close();
+    state.temporalStatistics = null;
+    state.temporalStatisticsWindowSignature = "";
+    state.temporalRevision += 1;
+    state.temporalDataRevision += 1;
+    state.periodChangeSummary = null;
+    state.periodChangePage = { category: "all", cursor: null, previous: [], page: null, requestId: state.periodChangePage.requestId + 1 };
+    state.dataQualityHistoryRequestId += 1;
+    state.dataQualityHistoryOffset = 0;
+    for (const selector of ["#analyticsKpis", "#temporalSummary", "#temporalTable", "#dataQualityHistory", "#dataQualityReport", "#datasetOverview"]) $(selector).replaceChildren();
+    delete $("#dataQualityPanel").dataset.historyLoaded;
+    $(".analytics-groups").hidden = true;
+  }
+  renderSnapshotSelectors();
+  return true;
+}
+
 async function refreshDatabaseState({ synchronizeArchive = true, verifyFinalIntegrity = true } = {}) {
   invalidateAnalyticsRequests();
   state.analytics = null;
@@ -1757,7 +1825,9 @@ async function refreshDatabaseState({ synchronizeArchive = true, verifyFinalInte
   const staleMacTimelineQueryId = state.activeMacTimelineQueryId;
   state.activeMacTimelineQueryId = "";
   if (staleMacTimelineQueryId) database.clearMacTimelineQuery(staleMacTimelineQueryId).catch(() => {});
-  state.snapshotMetadata = await database.listSnapshots({ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity });
+  state.snapshotMetadata = await database.listSnapshots({
+    includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity, skipArchivedIntegrity: !state.showArchivedSnapshots,
+  });
   state.snapshotMetadataCanonical = isCanonicalUploadHistoryOrder(state.snapshotMetadata);
   state.snapshotTimeCache.clear();
   state.roomCatalogRevision += 1;
@@ -1771,6 +1841,7 @@ async function refreshDatabaseState({ synchronizeArchive = true, verifyFinalInte
   state.periodChangeSummary = null;
   state.periodChangePage = { category: "all", cursor: null, previous: [], page: null, requestId: state.periodChangePage.requestId + 1 };
   state.activeSnapshot = await database.activeSnapshotMetadata();
+  await refreshAnalyticsSnapshotScope();
   const optionalSnapshotUploadButton = $("#optionalHostSnapshotUploadButton");
   if (optionalSnapshotUploadButton) optionalSnapshotUploadButton.disabled = !state.activeSnapshot;
   state.inventoryTotal = await database.inventoryCount();
@@ -1779,7 +1850,6 @@ async function refreshDatabaseState({ synchronizeArchive = true, verifyFinalInte
   const activeFinalCount = Number(state.activeSnapshot?.mainUniqueMacs ?? state.activeSnapshot?.deviceCount ?? 0);
   writeDatabaseStatusCache({ snapshotCount: state.snapshotMetadata.length, activeFinalCount, inventoryCount: state.inventoryTotal });
   $("#databaseStatus").textContent = `${state.snapshotMetadata.length} снимок объединения · ${activeFinalCount.toLocaleString("ru-RU")} в активном снимке объединения`;
-  renderSnapshotSelectors();
   // The catalogue is authoritative now. Restart active Dashboard work before
   // slower, unrelated page refreshes so cancellation cannot strand its UI.
   if ($(".nav-button.active")?.dataset.view === "analytics") {
@@ -1857,6 +1927,7 @@ async function renderLocalArchiveList(reset = false) {
     const archive = archives.find((item) => item.id === button.dataset.deleteLocalArchive);
     if (!globalThis.confirm(`Удалить локальный архив «${archive?.name || ""}»?`)) return;
     await database.deleteLocalArchive(button.dataset.deleteLocalArchive);
+    await refreshAnalyticsSnapshotScope();
     $("#localArchiveStatus").textContent = "Локальный архив удалён.";
     await renderLocalArchiveList();
   })().catch(showError)));
@@ -2543,7 +2614,7 @@ async function openDeviceAnalytics(device) {
     && $("#detailsDialog [data-dialog-title]").textContent === title;
   const appearances = await collectDeviceAppearances(
     device,
-    state.snapshotMetadata,
+    state.analyticsSnapshotScope.snapshots,
     (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit),
     {
       isCurrent,
@@ -5039,7 +5110,7 @@ async function showDashboardFleetDialog(analytics) {
       return;
     }
   }
-  const fleet = buildDashboardFleetSeries(analytics, state.snapshotMetadata, { snapshotsAscending: true });
+  const fleet = buildDashboardFleetSeries(analytics, state.analyticsSnapshotScope.snapshots, { snapshotsAscending: true });
   state.dashboardFleet = fleet;
   state.dashboardFleetOffset = 0;
   showContent(dashboardFleetDialogContent(fleet, { offset: 0 }));
@@ -5085,8 +5156,8 @@ function renderDashboardFilterOptions(devices = [], suppliedOptions = null) {
   syncDashboardFilterControls(filters);
 }
 function renderSnapshotSelectors() {
-  const items = state.snapshotMetadata.map((snapshot) => ({ value: snapshot.id, label: `${snapshot.name} · ${snapshot.deviceCount}` }));
-  const defaults = defaultSnapshotSelection(state.snapshotMetadata, { snapshotsAscending: true });
+  const items = state.analyticsSnapshotScope.snapshots.map((snapshot) => ({ value: snapshot.id, label: `${snapshot.name} · ${snapshot.deviceCount}` }));
+  const defaults = defaultSnapshotSelection(state.analyticsSnapshotScope.snapshots, { snapshotsAscending: true });
   const manual = state.pinnedDashboardPair;
   renderSelect($("#baseSnapshotSelect"), items, items.some(({ value }) => value === manual?.base) ? manual.base : defaults.baseId, "Нет базового снимка объединения");
   renderSelect($("#currentSnapshotSelect"), items, items.some(({ value }) => value === manual?.current) ? manual.current : defaults.currentId, "Нет текущего снимка объединения");
@@ -5501,13 +5572,16 @@ async function renderAnalytics(force = false) {
   const fallbackAnalytics = usableAnalyticsFallback(state.analytics);
   $("#analyticsHistoryFallback").hidden = true;
   $("#analyticsHistoryFallback").textContent = "";
-  if (!state.snapshotMetadata.length) {
+  if (!state.analyticsSnapshotScope.snapshots.length) {
     invalidateAnalyticsRequests();
     const previousRoomChangeIndex = state.analytics?.roomChangeIndex;
     state.analytics = null;
+    $(".analytics-groups").hidden = true;
     clearDashboardRoomChangeIndex(previousRoomChangeIndex);
     displayedDashboard = null;
-    $("#analyticsKpis").innerHTML = '<p class="empty">Сначала выполните обогащение.</p>';
+    $("#analyticsKpis").textContent = state.analyticsSnapshotScope.hidden.size
+      ? "Нет текущих снимков для аналитики. Можно открыть локальные архивы."
+      : "Сначала выполните обогащение.";
     $("#analyticsHistoryKpis").innerHTML = "";
     $("#datasetOverview").innerHTML = "";
     $("#changeTable").innerHTML = "";
@@ -5520,11 +5594,11 @@ async function renderAnalytics(force = false) {
       paintAnalyticsDetails(state.analytics);
       return;
     }
-    const cachedMetadata = state.snapshotMetadata;
+    const cachedMetadata = state.analyticsSnapshotScope.snapshots;
     return scheduleAnalyticsDetails(state.analytics, revision, cachedMetadata, snapshotHistorySignature(cachedMetadata, { snapshotsAscending: true }), false);
   }
   const revision = state.analyticsRequests.begin();
-  const metadata = state.snapshotMetadata;
+  const metadata = state.analyticsSnapshotScope.snapshots;
   const historySignature = snapshotHistorySignature(metadata, { snapshotsAscending: true });
   const pair = resolveDashboardSnapshotPair(metadata, {
     comparisonMode: $("#dashboardComparisonMode").value,
@@ -5599,7 +5673,7 @@ async function renderAnalytics(force = false) {
     await clearDashboardRoomChangeIndex(builtAnalytics.roomChangeIndex);
     return;
   }
-  const roomSnapshot = state.activeSnapshot || metadata.at(-1);
+  const roomSnapshot = metadata.find(({ id }) => id === state.activeSnapshot?.id) || metadata.at(-1);
   let unassignedPage;
   try {
     unassignedPage = await database.loadSnapshotUnassignedRoomPage(roomSnapshot.id, { filters: dashboardFilters });
@@ -5666,8 +5740,9 @@ function showAnalyticsFallback(error, candidate = state.analytics) {
 async function runDataQualityAnalysis() {
   if (!isEngineerActive()) throw new Error("Для проверки качества войдите в инженерный режим");
   const snapshotId = $("#currentSnapshotSelect").value || state.analytics?.current?.id || "";
-  const snapshot = state.snapshotMetadata.find((item) => item.id === snapshotId);
+  const snapshot = state.analyticsSnapshotScope.snapshots.find((item) => item.id === snapshotId);
   if (!snapshot) throw new Error("Выберите снимок объединения для анализа качества данных");
+  const scope = state.analyticsSnapshotScope;
   const button = $("#runDataQualityButton");
   const status = $("#dataQualityStatus");
   const output = $("#dataQualityReport");
@@ -5680,8 +5755,10 @@ async function runDataQualityAnalysis() {
     await database.forEachSnapshotChunk(snapshot.id, (chunk) => {
       accumulator.accept(chunk);
       read += chunk.length;
+      if (state.analyticsSnapshotScope !== scope) return false;
       status.textContent = "Проверено " + read.toLocaleString("ru-RU") + " из " + snapshot.deviceCount.toLocaleString("ru-RU") + " устройств…";
     });
+    if (state.analyticsSnapshotScope !== scope) return;
     const report = accumulator.finish();
     const savedReport = await database.saveDataQualityReport(snapshot, report);
     const issueRows = report.issues.map((issue) => "<li><strong>" + escapeHtml(issue.title) + "</strong> · " + escapeHtml(issue.count.toLocaleString("ru-RU")) + " · " + escapeHtml(issue.severity) + "<br>" + escapeHtml(issue.recommendation) + "</li>").join("");
@@ -5710,7 +5787,7 @@ async function renderDataQualityHistory(offset = state.dataQualityHistoryOffset)
   const host = $("#dataQualityHistory");
   if (!host) return;
   const requestId = ++state.dataQualityHistoryRequestId;
-  const page = await database.dataQualityReportsPage({ offset, limit: 20 });
+  const page = await database.dataQualityReportsPage({ offset, limit: 20, scope: state.analyticsSnapshotScope });
   if (requestId !== state.dataQualityHistoryRequestId) return;
   state.dataQualityHistoryOffset = page.offset;
   const panel = $("#dataQualityPanel");
@@ -5734,8 +5811,8 @@ async function renderDataQualityHistory(offset = state.dataQualityHistoryOffset)
 async function renderTemporalStatistics(force = false) {
   const period = $("#temporalPeriodSelect").value || "day";
   const rangeDays = Number($("#temporalRangeSelect").value || 30);
-  const signature = snapshotHistorySignature(state.snapshotMetadata, { snapshotsAscending: true });
-  const snapshots = selectTemporalSnapshotWindow(state.snapshotMetadata, { rangeDays, snapshotsAscending: true });
+  const signature = snapshotHistorySignature(state.analyticsSnapshotScope.snapshots, { snapshotsAscending: true });
+  const snapshots = selectTemporalSnapshotWindow(state.analyticsSnapshotScope.snapshots, { rangeDays, snapshotsAscending: true });
   const historyFilters = {
     query: state.analyticsDashboardSettings.filters.query,
     manufacturer: state.analyticsDashboardSettings.filters.manufacturer,
@@ -5774,7 +5851,7 @@ async function renderTemporalStatistics(force = false) {
     $("#temporalSummary").innerHTML = "";
     $("#temporalChart").hidden = true;
     $("#temporalTable").classList.add("empty");
-    $("#temporalTable").textContent = `За последние ${rangeDays} дней снимков объединения нет. В истории ${state.snapshotMetadata.length} снимков. Выберите больший диапазон.`;
+    $("#temporalTable").textContent = `За последние ${rangeDays} дней снимков объединения нет. В истории ${state.analyticsSnapshotScope.snapshots.length} снимков. Выберите больший диапазон.`;
     $("#exportTemporalCsvButton").disabled = true;
     state.temporalStatistics = null;
     state.temporalStatisticsWindowSignature = windowSignature;
@@ -5914,7 +5991,8 @@ function normalizeChangeReportSettings(settings = {}) {
 }
 
 function defaultChangeReportRange() {
-  const latest = Date.parse(state.activeSnapshot?.createdAt || "");
+  const snapshots = state.analyticsSnapshotScope.snapshots;
+  const latest = Date.parse((snapshots.find(({ id }) => id === state.activeSnapshot?.id) || snapshots.at(-1))?.createdAt || "");
   const end = Number.isFinite(latest) ? new Date(latest) : new Date();
   const start = new Date(end.getTime() - 29 * 86_400_000);
   return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
@@ -5964,12 +6042,12 @@ async function renderPeriodChangeCategory(category = state.comparisonChangeCateg
   state.periodChangePage.requestId = requestId;
   try {
     if (state.periodChangeSummary?.signature !== signature) {
-      const counts = await database.historyChangeCategoryCounts(periodHistoryFilters("", settings, dashboardFilters));
+      const counts = await database.historyChangeCategoryCounts(periodHistoryFilters("", settings, dashboardFilters), { scope: state.analyticsSnapshotScope });
       if (requestId !== state.periodChangePage.requestId) return;
       state.periodChangeSummary = { signature, counts };
     }
     const current = state.periodChangePage;
-    const page = await database.historySearchPage(periodHistoryFilters(category, settings, dashboardFilters), { cursor: current.cursor, limit: 100 });
+    const page = await database.historySearchPage(periodHistoryFilters(category, settings, dashboardFilters), { cursor: current.cursor, limit: 100, scope: state.analyticsSnapshotScope });
     if (requestId !== state.periodChangePage.requestId) return;
     state.periodChangePage = { ...state.periodChangePage, page };
     const counts = state.periodChangeSummary.counts;
@@ -6437,7 +6515,7 @@ async function loadDashboardComparisonPage(analytics, kind, offset = 0, limit = 
     if (!isCurrent()) return null;
     return cachePage(result);
   }
-  const metadata = state.snapshotMetadata;
+  const metadata = state.analyticsSnapshotScope.snapshots;
   const baselineMetadata = metadata.find((snapshot) => snapshot.id === baselineId);
   if (!baselineMetadata) throw new Error("Базовый снимок объединения выбранной пары не найден");
   const baselineIndex = metadata.indexOf(baselineMetadata);
@@ -6742,7 +6820,7 @@ function paintSelectedMainMacs(analytics) {
   const mainCount = analytics.current?.mainUniqueMacs;
   const legacyCount = analytics.detailsReady ? analytics.totals?.find((item) => item.id === analytics.current?.id)?.value : undefined;
   $("#analyticsHistoryKpis").innerHTML = [
-    ["снимок объединения в истории", state.snapshotMetadata.length],
+    ["снимок объединения в истории", state.analyticsSnapshotScope.snapshots.length],
     ["Уникальных MAC в Main выбранного снимка объединения", mainCount],
     ...(!Number.isInteger(mainCount) && Number.isInteger(legacyCount) ? [["Уникальных MAC в старом снимок объединения · число из Main не сохранено", legacyCount]] : []),
   ].map(([label, value]) => `<article class="kpi"><span>${label}</span><strong>${Number.isInteger(value) ? value.toLocaleString("ru-RU") : "—"}</strong></article>`).join("");
@@ -6753,6 +6831,10 @@ function paintSelectedMainMacs(analytics) {
 }
 
 function paintAnalyticsDetails(analytics) {
+  $(".analytics-groups").hidden = false;
+  if (isEngineerActive() && $("#dataQualityPanel").dataset.historyLoaded !== "true") {
+    renderDataQualityHistory().catch(showError);
+  }
   displayedDashboard = analytics;
   paintHistoryBackfill(analytics);
   paintSelectedMainMacs(analytics);
@@ -6848,7 +6930,7 @@ function paintAnalyticsDetails(analytics) {
       const buttonLabel = button.textContent;
       button.textContent = "Загрузка…";
       try {
-        const transitions = await collectPresenceTransitions(mac, state.snapshotMetadata, (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit), { filters: analytics.dashboardFilters || {}, snapshotsAscending: true });
+        const transitions = await collectPresenceTransitions(mac, state.analyticsSnapshotScope.snapshots, (snapshotId, visit) => database.forEachSnapshotChunk(snapshotId, visit), { filters: analytics.dashboardFilters || {}, snapshotsAscending: true });
         content.innerHTML = transitions.length
           ? `<details open><summary>Переходы: ${transitions.length.toLocaleString("ru-RU")}</summary><button type="button" class="button secondary" data-open-mac-dialog="${escapeHtml(mac)}">История MAC</button><ol class="churn-transition-events">${transitions.map((item) => `<li><details><summary><strong>${item.type === "absent" ? "Исчезновение" : "Возвращение"}</strong> · ${escapeHtml(item.date || "Дата не указана")} · ${escapeHtml(item.name || item.snapshotId || "снимок объединения")}</summary><p>Последний снимок с MAC · ${escapeHtml(item.lastSeen?.name || item.lastSeen?.snapshotId || "")} · ${escapeHtml(item.lastSeen?.date || "")}</p><div class="churn-transition-context">${item.before ? `<section><h4>Последние известные данные</h4>${deviceTable([item.before], { wrapAddresses: true })}</section>` : ""}${item.after ? `<section><h4>Данные при возвращении</h4>${deviceTable([item.after], { wrapAddresses: true })}</section>` : ""}</div></details></li>`).join("")}</ol></details>`
           : '<p class="empty">Переходы не найдены для текущих фильтров.</p>';
@@ -7435,7 +7517,7 @@ async function openMacHistory({ includeOptionalHostHistory = false, dialogMac = 
   const dialog = dialogMac ? $("#macHistoryDialog") : null;
   if (dialog) showDialog(dialog, `История MAC · ${mac}`, '<div data-mac-dialog-summary></div><div data-mac-dialog-timeline role="region" aria-label="Снимки MAC"><p role="status">Загрузка истории…</p></div>');
   const isCurrent = () => state[queryProperty] === queryId && (!dialog || dialog.open);
-  const orderedSnapshots = state.snapshotMetadata;
+  const orderedSnapshots = state.analyticsSnapshotScope.snapshots;
   const pendingRows = [];
   const pendingSnapshots = [];
   const pendingLookups = [];
@@ -7534,7 +7616,7 @@ async function openMacHistory({ includeOptionalHostHistory = false, dialogMac = 
         if (event) timeline.addEvent(event);
       }
       await flushTimelineBuffers();
-    });
+    }, { scope: state.analyticsSnapshotScope });
     let legacyCursor = null;
     do {
       const page = await database.legacyObservationPage({ mac, cursor: legacyCursor, limit: 500 });
@@ -7966,17 +8048,17 @@ function cascadeRoomFilters(changed = "") {
 
 async function initializeRoomFilters() {
   const revision = state.roomCatalogRevision;
-  if (!state.roomCatalog.length && state.snapshotMetadata.length) {
+  if (!state.roomCatalog.length && state.analyticsSnapshotScope.snapshots.length) {
     const catalog = await cachedRoomCatalogLoad(state, async () => {
       const rooms = new Map();
-      for (const snapshot of state.snapshotMetadata) {
+      for (const snapshot of state.analyticsSnapshotScope.snapshots) {
         await database.forEachSnapshotChunk(snapshot.id, (devices) => addRoomCatalogDevices(rooms, devices));
         if (revision !== state.roomCatalogRevision) return null;
       }
       return reconcileRoomCatalog([...rooms.values()]);
     });
     if (!publishRoomCatalogForRevision(state, revision, catalog)) return;
-    if (!state.roomCatalog.length && !state.snapshotMetadata.length) return;
+    if (!state.roomCatalog.length && !state.analyticsSnapshotScope.snapshots.length) return;
   }
   if (revision !== state.roomCatalogRevision) return;
   cascadeRoomFilters();
@@ -8399,7 +8481,7 @@ async function showRoomTimeline(roomKey = "", room = {}) {
   let previous = null;
   let knownRoomIndex = null;
   let ambiguousHistoryMatches = 0;
-  const snapshots = state.snapshotMetadata;
+  const snapshots = state.analyticsSnapshotScope.snapshots;
   let latestObservation = null;
   try {
     for (let snapshotIndex = 0; snapshotIndex < snapshots.length; snapshotIndex += 1) {
@@ -8498,7 +8580,7 @@ async function loadRoomTimelineObservation(snapshotId) {
   let knownRoomIndex = null;
   let ambiguousMatches = 0;
   try {
-    for (const snapshot of state.snapshotMetadata) {
+    for (const snapshot of state.analyticsSnapshotScope.snapshots) {
       if (snapshot.id === snapshotId) {
         const pages = state.roomTimelinePages[snapshotId] || {};
         const firstPage = ["roster", "changes", "added", "absent"].every((section) =>
@@ -8601,7 +8683,7 @@ async function compareLatestRoomFinals() {
   const key = $("#roomSearchChoice")?.value || selectedRoomKey();
   if (!key) return;
   const room = roomDevices().find((device) => device.key === key) || {};
-  const snapshots = state.snapshotMetadata;
+  const snapshots = state.analyticsSnapshotScope.snapshots;
   if (snapshots.length < 2) throw new Error("Для сравнения помещения нужны минимум два снимок объединения");
   state.roomPair = { key, room, baseSnapshot: snapshots.at(-2), currentSnapshot: snapshots.at(-1) };
   state.roomPairPage = 1;
@@ -8612,7 +8694,7 @@ async function compareLatestRoomFinals() {
 async function loadRoomPairComparison(pair, requestedPage = 1) {
   if (!pair) return null;
   const { key, room, baseSnapshot, currentSnapshot } = pair;
-  const snapshots = state.snapshotMetadata;
+  const snapshots = state.analyticsSnapshotScope.snapshots;
   const baseIndex = snapshots.findIndex((snapshot) => snapshot.id === baseSnapshot.id);
   const currentIndex = snapshots.findIndex((snapshot) => snapshot.id === currentSnapshot.id);
   if (baseIndex < 0 || currentIndex < 0) throw new Error("Снимки для сравнения помещения больше недоступны");
@@ -10416,13 +10498,16 @@ function bindEvents() {
     const button = $("#includeArchivedSnapshotsButton");
     const status = $("#archiveAnalyticsStatus");
     button.disabled = true;
-    status.textContent = "Проверка локальных архивов…";
+    const enabled = !state.showArchivedSnapshots;
+    status.textContent = enabled ? "Чтение каталога архивов…" : "Обновление списка снимков…";
     try {
-      const result = await database.restoreLocalArchivesForAnalytics(({ archiveCount, name }) => {
+      const applied = await refreshAnalyticsSnapshotScope(enabled, ({ archiveCount, name }) => {
         status.textContent = `Архив ${archiveCount} · ${name}`;
       });
-      await refreshDatabaseState({ synchronizeArchive: false });
-      status.textContent = `Учтено архивов · ${result.archiveCount}. Доступно снимков · ${state.snapshotMetadata.length}.`;
+      if (applied && $(".nav-button.active")?.dataset.view === "analytics") await renderAnalytics(false);
+    } catch (error) {
+      status.textContent = "Не удалось обновить список архивных снимков.";
+      throw error;
     } finally { button.disabled = false; }
   })().catch(showError));
   const reportPreviewError = (error) => {
@@ -11571,20 +11656,32 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
   });
   $("#localArchiveForm").addEventListener("submit", (event) => (async () => {
     event.preventDefault();
-    const button = $("#saveLocalArchiveButton");
-    button.disabled = true;
+    const archiveAndHide = $("#archiveAndHideButton");
+    const hideFromAnalytics = event.submitter === archiveAndHide;
+    const buttons = [$("#saveLocalArchiveButton"), archiveAndHide];
+    if (buttons.some((button) => button.disabled)) return;
+    buttons.forEach((button) => { button.disabled = true; });
     $("#localArchiveStatus").textContent = "Проверка и сохранение базы порциями…";
     try {
       await bundledOuiInitialization;
       await saveWorkspaceStateNow();
-      const archive = await database.createLocalArchive($("#localArchiveName").value, portableDatabaseArchiveOptions());
+      const archive = await database.createLocalArchive($("#localArchiveName").value, {
+        ...portableDatabaseArchiveOptions(), hideFromAnalytics,
+        onProgress: ({ stage, recordCount }) => {
+          const label = stage === "verify" ? "Проверка целостности архива" : "Сохранение архива";
+          $("#localArchiveStatus").textContent = `${label} · ${recordCount.toLocaleString("ru-RU")} записей…`;
+        },
+      });
+      await refreshAnalyticsSnapshotScope(hideFromAnalytics ? false : state.showArchivedSnapshots);
       recordArchiveReceipt(`Локальный архив «${archive.name}» создан в браузере`);
       $("#localArchiveName").value = "";
-      $("#localArchiveStatus").textContent = `Сохранён архив «${archive.name}»: ${archive.snapshotCount} снимок объединения, ${archive.recordCount.toLocaleString("ru-RU")} записей.`;
+      const archived = hideFromAnalytics && archive.hiddenSnapshotIds.length
+        ? ` Скрыто в аналитике · ${archive.hiddenSnapshotIds.length}.` : "";
+      $("#localArchiveStatus").textContent = `Сохранён архив «${archive.name}» · снимков ${archive.snapshotCount}, записей ${archive.recordCount.toLocaleString("ru-RU")}.${archived}`;
     } catch (error) {
       $("#localArchiveStatus").textContent = "Не удалось завершить сохранение локального архива.";
       throw error;
-    } finally { button.disabled = false; }
+    } finally { buttons.forEach((button) => { button.disabled = false; }); }
     await renderLocalArchiveList();
   })().catch(showError));
   $("#ouiFileInput").addEventListener("change", (event) => prepareOuiImport(event.target.files[0]).catch(showError).finally(() => { event.target.value = ""; }));
@@ -12294,7 +12391,7 @@ async function bootstrap() {
   document.documentElement.dataset.appReady = "true";
   bundledOuiInitialization = Promise.all([ensureBundledOui({ reportProgress: false }), loadBundledIeeeIndex()]);
   bundledOuiInitialization.catch(showError);
-  database.listSnapshots({ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true })
+  database.listSnapshots({ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity: true, skipArchivedIntegrity: true })
     .then(async (verified) => {
       if (verified.length !== state.snapshotMetadata.length) {
         await refreshDatabaseState({ synchronizeArchive: false });

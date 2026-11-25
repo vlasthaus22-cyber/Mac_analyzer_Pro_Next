@@ -569,11 +569,12 @@ test("portable HTML configuration includes every current runtime module", () => 
 test("database refresh filters single-analysis metadata during cursor traversal", () => {
   const app = readFileSync("src/app.js", "utf8");
   const database = readFileSync("src/data/database.js", "utf8");
-  assert.match(app, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity \}\)/);
-  assert.match(database, /async listSnapshots\(\{ includeDiagnostics = true, finalOnly = false, catalogOnly = false, verifyFinalIntegrity = false \} = \{\}\)/);
+  assert.match(app, /state\.snapshotMetadata = await database\.listSnapshots\(\{\s*includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity, skipArchivedIntegrity:/);
+  assert.match(database, /async listSnapshots\(\{ includeDiagnostics = true, finalOnly = false, catalogOnly = false, verifyFinalIntegrity = false, skipArchivedIntegrity = false \} = \{\}\)/);
   assert.match(database, /store\.indexNames\.contains\("by_created_id"\)[\s\S]{0,80}store\.index\("by_created_id"\)/);
   assert.match(database, /const request = \(chronologyIndex \|\| store\)\.openCursor\(\)/);
-  assert.match(database, /const projectRecord = \(metadata\) => \{[\s\S]*?if \(catalogOnly\)[\s\S]*?SNAPSHOT_CATALOG_FIELDS[\s\S]*?sourceFiles\.map/);
+  assert.match(database, /const projectRecord = \(metadata\) => \{\s*if \(catalogOnly\) return snapshotCatalogRecord\(metadata\)/);
+  assert.match(database, /function snapshotCatalogRecord\(metadata\) \{[\s\S]*?SNAPSHOT_CATALOG_FIELDS[\s\S]*?sourceFiles\.map/);
   assert.match(database, /items\.push\(projectRecord\(metadata\)\)/);
   assert.match(database, /records\.visitedCount !== totalCount \|\| records\.hasNonStringDate/);
   assert.match(database, /snapshots = records\.items/);
@@ -707,8 +708,8 @@ test("temporal analytics uses disposable IndexedDB sets and cleans them after ev
   assert.match(app, /macStore: database/);
   assert.match(app, /queryId: `temporal:\$\{crypto\.randomUUID\(\)\}`/);
   assert.match(app, /await accumulator\.observeChunk\(devices\)/);
-  assert.match(app, /selectTemporalSnapshotWindow\(state\.snapshotMetadata, \{ rangeDays, snapshotsAscending: true \}\)/);
-  assert.match(app, /snapshotHistorySignature\(state\.snapshotMetadata, \{ snapshotsAscending: true \}\)/);
+  assert.match(app, /selectTemporalSnapshotWindow\(state\.analyticsSnapshotScope\.snapshots, \{ rangeDays, snapshotsAscending: true \}\)/);
+  assert.match(app, /snapshotHistorySignature\(state\.analyticsSnapshotScope\.snapshots, \{ snapshotsAscending: true \}\)/);
   assert.match(html, /id="temporalRangeSelect"[\s\S]*?value="30"[\s\S]*?value="90"[\s\S]*?value="365"/);
   assert.match(statistics, /export function selectTemporalSnapshotWindow\(/);
   assert.match(app, /finally\s*\{\s*temporalStage\("Временная статистика: очистка временных MAC-индексов…"\);\s*await accumulator\.cleanup\(\(\{ phase, removed \}\) => temporalStage\(phase === "start"[\s\S]*?\)\);\s*\}/);
@@ -815,7 +816,7 @@ test("directory archive sync serializes writes and retries when IndexedDB change
   assert.match(app, /runCoalescedTask\(state, synchronizeDataDirectoryArchiveOnce,\s*\{\s*runningKey: "dataDirectorySyncing",\s*pendingKey: "dataDirectorySyncRequested"/);
   assert.match(once, /await writeDirectoryArchive\(handle, portableDatabaseArchiveStream\(\)\)/);
   assert.match(app, /function portableDatabaseArchiveOptions\(\)\s*\{\s*return\s*\{\s*readLegacyTaskQueueFile:\s*\(source, observation\) => readLegacyTaskQueueFileFromSQLite\(source, observation\)/);
-  assert.match(app, /database\.createLocalArchive\(\$\("#localArchiveName"\)\.value, portableDatabaseArchiveOptions\(\)\)/);
+  assert.match(app, /database\.createLocalArchive\(\$\("#localArchiveName"\)\.value, \{\s*\.\.\.portableDatabaseArchiveOptions\(\), hideFromAnalytics,/);
   assert.match(once, /if \(handle !== state\.dataDirectoryHandle\)\s*\{\s*state\.dataDirectorySyncRequested = true;/);
   assert.match(once, /state\.dataDirectoryWriteFailed = true/);
   assert.match(once, /снимок объединения сохранён в IndexedDB/);
@@ -1731,7 +1732,8 @@ test("Inventory result pages expose the full reference page-size choices up to 1
 test("Final comparison selectors update before expensive Inventory and MAC refreshes", () => {
   const app = readFileSync("src/app.js", "utf8");
   const refresh = app.slice(app.indexOf("async function refreshDatabaseState("), app.indexOf("\nasync function renderLocalArchiveList()"));
-  assert.match(refresh, /state\.snapshotMetadata = await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity \}\)[\s\S]*?renderSnapshotSelectors\(\);[\s\S]*?if \(\$\("\.nav-button\.active"\)\?\.dataset\.view === "analytics"\) \{\s*renderAnalytics\(false\)\.catch\(showError\);\s*\}[\s\S]*?await renderDeviceTable\(\);\s*await renderMacOptions\(\)/);
+  assert.match(refresh, /state\.snapshotMetadata = await database\.listSnapshots\([\s\S]*?await refreshAnalyticsSnapshotScope\(\);[\s\S]*?if \(\$\("\.nav-button\.active"\)\?\.dataset\.view === "analytics"\) \{\s*renderAnalytics\(false\)\.catch\(showError\);\s*\}[\s\S]*?await renderDeviceTable\(\);\s*await renderMacOptions\(\)/);
+  assert.match(app, /async function refreshAnalyticsSnapshotScope\([\s\S]*?renderSnapshotSelectors\(\);\s*return true;/);
   assert.match(refresh, /state\.snapshotTimeCache\.clear\(\)/);
   assert.doesNotMatch(refresh, /new Map\(state\.snapshotMetadata\.map/);
   assert.match(app, /snapshotTimeCache: createSnapshotTimeCache\(\(ids\) => database\.snapshotCreatedAtByIds\(ids\)\)/);
@@ -1901,7 +1903,7 @@ test("weekly history chart stays independent from the configurable status chart 
   assert.match(renderer, /export function churnContent\(/);
   assert.match(renderer, /data-churn-page=/);
   assert.match(app, /data-churn-transitions/);
-  assert.match(app, /collectPresenceTransitions\(mac, state\.snapshotMetadata,[\s\S]*?forEachSnapshotChunk\(snapshotId, visit\)/);
+  assert.match(app, /collectPresenceTransitions\(mac, state\.analyticsSnapshotScope\.snapshots,[\s\S]*?forEachSnapshotChunk\(snapshotId, visit\)/);
   assert.match(app, /filters: analytics\.dashboardFilters \|\| \{\}/);
   assert.match(analytics, /export async function collectPresenceTransitions\(/);
   assert.match(app, /drawFinalChangeTrend\(\$\("#presenceChart"\), analytics\.snapshotChanges\)/);
@@ -1985,7 +1987,7 @@ test("upload history screen searches, pages and opens successful Final snapshots
   assert.match(app, /snapshotsCanonical: state\.snapshotMetadataCanonical/);
   assert.doesNotMatch(app, /filterUploadHistorySnapshots\(state\.snapshotMetadata/);
   assert.match(app, /database\.deleteSnapshots\(ids\)/);
-  assert.match(app, /state\.snapshotMetadata\s*=\s*await database\.listSnapshots\(\{ includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity \}\)/);
+  assert.match(app, /state\.snapshotMetadata\s*=\s*await database\.listSnapshots\(\{\s*includeDiagnostics: false, finalOnly: true, catalogOnly: true, verifyFinalIntegrity, skipArchivedIntegrity:/);
   assert.match(app, /database\.deleteFinalSnapshots\(\)/);
   assert.match(app, /state\.uploadHistory\.selectedIds\.add/);
   assert.match(app, /const metadataMatchesQuery = Boolean\(query && metadataText\.includes\(query\)\)/);
@@ -2447,7 +2449,7 @@ test("paged comparison details retain only the currently displayed report", () =
   assert.match(app, /data-dashboard-aggregate-page[\s\S]*?dashboardAggregateDialogContent\(detail\.items, detail\)/);
   assert.match(app, /data-dashboard-aggregate-filter[\s\S]*?saveAnalyticsDashboardSettings\(\{ \.\.\.state\.analyticsDashboardSettings, filters \}\)/);
   assert.equal((app.match(/devices: async \(\) => \{\s*const selected = await selectDashboardKpiStatus\("devices", analytics\);\s*if \(selected\) return showDashboardMainDevices\(selected\)\.catch\(showError\);/g) || []).length, 2);
-  assert.match(app, /function showDashboardFleetDialog\(analytics\)[\s\S]*?buildDashboardFleetSeries\(analytics, state\.snapshotMetadata, \{ snapshotsAscending: true \}\)/);
+  assert.match(app, /function showDashboardFleetDialog\(analytics\)[\s\S]*?buildDashboardFleetSeries\(analytics, state\.analyticsSnapshotScope\.snapshots, \{ snapshotsAscending: true \}\)/);
   assert.match(app, /function selectDashboardKpiStatus\(key, analytics = state\.analytics\)\s*\{\s*const status = dashboardStatusForKpi\(key\)/);
   const kpiStatusHandler = app.match(/function selectDashboardKpiStatus\(key, analytics = state\.analytics\)\s*\{[\s\S]*?\n\}/)?.[0] || "";
   assert.match(kpiStatusHandler, /state\.dashboardKpiRequest !== requestId/);
@@ -2583,8 +2585,8 @@ test("change report mode is loaded from and saved to IndexedDB instead of revert
   assert.match(app, /if \(reportUsesPeriod\) return renderPeriodChangeCategory\(category \?\? state\.comparisonChangeCategory\)/);
   assert.match(app, /periodHistoryFilters\(category, settings, dashboardFilters\)/);
   assert.match(app, /JSON\.stringify\(\[settings\.from, settings\.to, dashboardFilters\.query, dashboardFilters\.manufacturer, dashboardFilters\.room, state\.temporalDataRevision\]\)/);
-  assert.match(app, /database\.historyChangeCategoryCounts\(periodHistoryFilters\("", settings, dashboardFilters\)\)/);
-  assert.match(app, /database\.historySearchPage\(periodHistoryFilters\(category, settings, dashboardFilters\), \{ cursor: current\.cursor, limit: 100 \}\)/);
+  assert.match(app, /database\.historyChangeCategoryCounts\(periodHistoryFilters\("", settings, dashboardFilters\), \{ scope: state\.analyticsSnapshotScope \}\)/);
+  assert.match(app, /database\.historySearchPage\(periodHistoryFilters\(category, settings, dashboardFilters\), \{ cursor: current\.cursor, limit: 100, scope: state\.analyticsSnapshotScope \}\)/);
 });
 
 test("historical address evidence is read in bounded lookup and UI pages", () => {
@@ -3692,7 +3694,7 @@ test("quality analysis is engineer-only and streams the complete selected Final 
   assert.match(quality, /createDataQualityAccumulator\(\)/);
   assert.match(quality, /escapeHtml\(issue\.title\)/);
   assert.match(quality, /database\.saveDataQualityReport\(snapshot, report\)/);
-  assert.match(app, /database\.dataQualityReportsPage\(\{ offset, limit: 20 \}\)/);
+  assert.match(app, /database\.dataQualityReportsPage\(\{ offset, limit: 20, scope: state\.analyticsSnapshotScope \}\)/);
   assert.match(app, /dataQualityHistoryPreviousButton/);
   assert.match(app, /dataQualityHistoryNextButton/);
   assert.match(html, /id="dataQualityHistoryPreviousButton"/);
@@ -3893,7 +3895,7 @@ test("analytics consumers reuse the canonical ascending snapshot metadata order"
   const app = readFileSync("src/app.js", "utf8");
   const analytics = readFileSync("src/core/analytics.js", "utf8");
   const workerClient = readFileSync("src/core/analytics-history-worker-client.js", "utf8");
-  assert.match(app, /defaultSnapshotSelection\(state\.snapshotMetadata, \{ snapshotsAscending: true \}\)/);
+  assert.match(app, /defaultSnapshotSelection\(state\.analyticsSnapshotScope\.snapshots, \{ snapshotsAscending: true \}\)/);
   assert.match(app, /aggregateSnapshotHistoryInWorker\(metadata, visitHistoryChunks, \{\s*snapshotsAscending: true/);
   assert.match(app, /aggregateSnapshotHistory\(metadata, visitHistoryChunks, \{ filters: historyFilters, snapshotsAscending: true \}\)/);
   assert.match(app, /buildSnapshotTotalSeries\(metadata, \{ snapshotsAscending: true \}\)/);

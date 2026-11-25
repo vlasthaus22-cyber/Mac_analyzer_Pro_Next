@@ -4035,7 +4035,15 @@ test("large portable archive streams snapshot chunks and store records without g
   };
   let archive;
   try {
-    archive = await readArchive(source);
+    let batches = 0;
+    const stream = source.exportArchiveStream().pipeThrough(new globalThis.TransformStream({
+      transform(chunk, controller) {
+        batches += 1;
+        controller.enqueue(chunk);
+      },
+    }));
+    archive = await new globalThis.Response(stream).json();
+    assert.ok(batches < 80, `JSON rows should be buffered before disk writes, got ${batches} batches`);
   } finally {
     globalThis.IDBObjectStore.prototype.getAll = originalGetAll;
   }

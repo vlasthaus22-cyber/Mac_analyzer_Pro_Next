@@ -57,6 +57,7 @@ const FINAL_ANALYTICS_IDENTITY_POSITION_WIDTH = 12;
 const INDEXED_DB_KEY_READ_BATCH_SIZE = 250;
 const SNAPSHOT_TIME_LOOKUP_MAX_IDS = 500;
 const ARCHIVE_PAGE_SIZE = 128;
+const ARCHIVE_STREAM_BUFFER_CHARS = 64 * 1024;
 const ARCHIVE_RECORD_STAGE_BATCH_SIZE = 5_000;
 const ARCHIVE_RECORD_STAGE_MAX_BATCH_SIZE = 10_000;
 const ARCHIVE_RESTORE_LEGACY_OBSERVATION_BATCH_SIZE = 20_000;
@@ -201,6 +202,70 @@ const ARCHIVE_STORES = Object.freeze([
   "oui", "switchAddressEvidence", "mac5Models", "smartroomRoomMappings", "originalFiles",
   "singleAnalyses", "singleAnalysisChunks", "legacyObservations", "dataQualityReports", "legacySmartroomRoomMappings",
 ]);
+function archivePageSize(collection) {
+  if (collection === "snapshotChunks" || collection === "singleAnalysisChunks") return 8;
+  if (collection === "originalFiles") return 4;
+  return ARCHIVE_PAGE_SIZE;
+}
+
+function archiveFingerprint() {
+  let hash = 2166136261;
+  const addString = (value) => {
+    for (let index = 0; index < value.length; index += 1) {
+      hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+    }
+    hash = Math.imul(hash ^ 0xff, 16777619);
+  };
+  return {
+    addCollection: addString,
+    async addPage(collection, rows) {
+      for (const { key, value } of rows) {
+        addString(JSON.stringify(key));
+        if (collection !== "originalFiles") {
+          addString(JSON.stringify(value));
+          continue;
+        }
+        const { blob, ...metadata } = value || {};
+        addString(JSON.stringify(metadata));
+        for (let offset = 0; blob instanceof globalThis.Blob && offset < blob.size; offset += SOURCE_FILE_ARCHIVE_CHUNK_BYTES) {
+          const bytes = new Uint8Array(await blob.slice(offset, offset + SOURCE_FILE_ARCHIVE_CHUNK_BYTES).arrayBuffer());
+          for (const byte of bytes) hash = Math.imul(hash ^ byte, 16777619);
+          hash = Math.imul(hash ^ 0xfe, 16777619);
+        }
+      }
+    },
+    digest: () => hash >>> 0,
+  };
+}
+
+function snapshotCatalogRecord(metadata) {
+  const summary = {};
+  for (const field of SNAPSHOT_CATALOG_FIELDS) if (Object.hasOwn(metadata, field)) summary[field] = metadata[field];
+  if (Array.isArray(metadata.sourceFiles)) {
+    summary.sourceFiles = metadata.sourceFiles.map((source) => {
+      if (typeof source === "string") return source;
+      return String(source?.name || source?.fileName || source?.filename || "");
+    }).filter(Boolean);
+  }
+  return summary;
+}
+
+function snapshotChunkLayout(metadata) {
+  const deviceCount = Number(metadata.deviceCount || 0);
+  const chunkCount = Number(metadata.chunkCount ?? Math.ceil(deviceCount / CHUNK_SIZE));
+  if (!Number.isInteger(deviceCount) || deviceCount < 0 || chunkCount !== Math.ceil(deviceCount / CHUNK_SIZE)) {
+    throw snapshotIntegrityError("Final-снимок повреждён: метаданные блоков некорректны");
+  }
+  return { deviceCount, chunkCount };
+}
+
+function checkedSnapshotChunk(chunk, index, deviceCount) {
+  const expectedLength = Math.min(CHUNK_SIZE, deviceCount - index * CHUNK_SIZE);
+  if (!Array.isArray(chunk?.devices) || chunk.devices.length !== expectedLength) {
+    throw snapshotIntegrityError(`Final-снимок повреждён: отсутствует или неполон блок ${index + 1}`);
+  }
+  return chunk.devices;
+}
 const INVENTORY_SORT_FIELDS = Object.freeze([
   "mac", "ip", "switchIp", "switchPort", "manufacturer", "model", "deviceType",
   "hostname", "serial", "smartroomId", "room", "address", "authenticationTime",
@@ -1218,6 +1283,8 @@ function validateArchive(archive) {
 }
 
 export class Database {
+  #analyticsArchiveSources = new Map();
+
   constructor(name = DB_NAME) {
     this.name = name;
     this.connection = null;
@@ -1547,24 +1614,14 @@ export class Database {
     return this.connection;
   }
 
-  async listSnapshots({ includeDiagnostics = true, finalOnly = false, catalogOnly = false, verifyFinalIntegrity = false } = {}) {
+  async listSnapshots({ includeDiagnostics = true, finalOnly = false, catalogOnly = false, verifyFinalIntegrity = false, skipArchivedIntegrity = false } = {}) {
     const db = await this.open();
     const tx = db.transaction("snapshots", "readonly");
     const done = transactionDone(tx);
     const store = tx.objectStore("snapshots");
     const chronologyIndex = store.indexNames.contains("by_created_id") ? store.index("by_created_id") : null;
     const projectRecord = (metadata) => {
-      if (catalogOnly) {
-        const summary = {};
-        for (const field of SNAPSHOT_CATALOG_FIELDS) if (Object.hasOwn(metadata, field)) summary[field] = metadata[field];
-        if (Array.isArray(metadata.sourceFiles)) {
-          summary.sourceFiles = metadata.sourceFiles.map((source) => {
-            if (typeof source === "string") return source;
-            return String(source?.name || source?.fileName || source?.filename || "");
-          }).filter(Boolean);
-        }
-        return summary;
-      }
+      if (catalogOnly) return snapshotCatalogRecord(metadata);
       if (!includeDiagnostics && metadata.diagnostics) {
         const { diagnostics: _diagnostics, ...summary } = metadata;
         return summary;
@@ -1623,9 +1680,10 @@ export class Database {
     }
     if (!finalOnly) return snapshots;
     if (verifyFinalIntegrity) {
+      const hidden = skipArchivedIntegrity ? (await this.analyticsSnapshotCatalog([])).hidden : null;
       for (const metadata of snapshots) {
         const id = String(metadata?.id || "");
-        if (!id || this.finalSnapshotIntegrityCache.has(id)) continue;
+        if (!id || hidden?.has(id) || this.finalSnapshotIntegrityCache.has(id)) continue;
         try {
           await this.forEachSnapshotChunk(id, () => {});
           this.finalSnapshotIntegrityCache.set(id, true);
@@ -3980,6 +4038,29 @@ export class Database {
   }
 
   async forEachSnapshotChunk(id, visit, { onProgress = null } = {}) {
+    const archived = this.#analyticsArchiveSources.get(String(id));
+    const { metadata, readChunk } = await this.#snapshotChunkReader(id, archived);
+    const { deviceCount, chunkCount } = snapshotChunkLayout(metadata);
+    let visitedDevices = 0;
+    for (let index = 0; index < chunkCount; index += 1) {
+      onProgress?.({ phase: "chunk-start", index, chunkCount, visitedDevices, deviceCount });
+      const chunk = await readChunk(index);
+      onProgress?.({ phase: "chunk-result", index, chunkCount, visitedDevices, deviceCount });
+      const devices = checkedSnapshotChunk(chunk, index, deviceCount);
+      visitedDevices += devices.length;
+      onProgress?.({ phase: "chunk-ready", index, chunkCount, visitedDevices, deviceCount });
+      if (await visit(devices, index, metadata) === false) break;
+      onProgress?.({ phase: "chunk-complete", index, chunkCount, visitedDevices, deviceCount });
+    }
+    return metadata;
+  }
+
+  async #snapshotChunkReader(id, archived = this.#analyticsArchiveSources.get(String(id))) {
+    if (archived) {
+      const { archiveId, metadata } = archived;
+      const key = metadata.stageKey ?? metadata.id;
+      return { metadata, readChunk: (index) => this.#localArchiveRecord(archiveId, "snapshotChunks", [key, index]) };
+    }
     const db = await this.open();
     const metadataTx = db.transaction("snapshots", "readonly");
     const metadataDone = transactionDone(metadataTx);
@@ -3988,34 +4069,15 @@ export class Database {
       metadataDone,
     ]);
     if (!metadata) throw snapshotIntegrityError("Final-снимок не найден");
-    const chunkCount = Number(metadata.chunkCount ?? Math.ceil(Number(metadata.deviceCount || 0) / CHUNK_SIZE));
-    const deviceCount = Number(metadata.deviceCount || 0);
-    if (!Number.isInteger(deviceCount) || deviceCount < 0 || chunkCount !== Math.ceil(deviceCount / CHUNK_SIZE)) {
-      throw snapshotIntegrityError("Final-снимок повреждён: метаданные блоков некорректны");
-    }
-    let visitedDevices = 0;
-    for (let index = 0; index < chunkCount; index += 1) {
-      if (typeof onProgress === "function") onProgress({ phase: "chunk-start", index, chunkCount, visitedDevices, deviceCount });
+    return { metadata, readChunk: (index) => {
       const chunkTx = db.transaction("snapshotChunks", "readonly");
       const chunkDone = transactionDone(chunkTx);
       // A successful readonly get already owns a detached structured clone of the
       // chunk. Do not hold the streaming consumer behind transaction.complete:
       // some browser profiles can leave that event pending even after request success.
       void chunkDone.catch(() => {});
-      const chunkRequest = chunkTx.objectStore("snapshotChunks").get([id, index]);
-      if (typeof onProgress === "function") {
-        chunkRequest.addEventListener("success", () => onProgress({ phase: "chunk-result", index, chunkCount, visitedDevices, deviceCount }));
-      }
-      const chunk = await requestResult(chunkRequest);
-      const expectedLength = Math.min(CHUNK_SIZE, Math.max(0, Number(metadata.deviceCount || 0) - index * CHUNK_SIZE));
-      if (!Array.isArray(chunk?.devices) || chunk.devices.length !== expectedLength) throw snapshotIntegrityError(`Final-снимок повреждён: отсутствует или неполон блок ${index + 1}`);
-      visitedDevices += chunk.devices.length;
-      if (typeof onProgress === "function") onProgress({ phase: "chunk-ready", index, chunkCount, visitedDevices, deviceCount });
-      if (await visit(chunk.devices, index, metadata) === false) return metadata;
-      if (typeof onProgress === "function") onProgress({ phase: "chunk-complete", index, chunkCount, visitedDevices, deviceCount });
-    }
-    if (visitedDevices !== deviceCount) throw snapshotIntegrityError("Final-снимок повреждён: число устройств не совпадает с метаданными");
-    return metadata;
+      return requestResult(chunkTx.objectStore("snapshotChunks").get([id, index]));
+    } };
   }
 
   async #ensureSnapshotRoomIndex(id) {
@@ -4081,6 +4143,19 @@ export class Database {
     const snapshotId = String(id || "");
     const targetKeys = snapshotRoomIndexQueryKeys(roomKey, room);
     if (!snapshotId || !String(roomKey || "")) return;
+    if (this.#analyticsArchiveSources.has(snapshotId)) {
+      const targets = new Set(targetKeys);
+      let visited = 0;
+      let indexedChunks = 0;
+      const metadata = await this.forEachSnapshotChunk(snapshotId, (devices, index, source) => {
+        const matching = devices.filter((device) => [...snapshotRoomIndexKeys(device)].some((key) => targets.has(key)));
+        if (!matching.length) return;
+        visited += matching.length;
+        indexedChunks += 1;
+        return visit(matching, index, source);
+      });
+      return { visited, indexedChunks, ...snapshotChunkLayout(metadata) };
+    }
     const expected = await this.#ensureSnapshotRoomIndex(snapshotId);
     const db = await this.open();
     const readPage = async (key, afterChunkIndex = null) => {
@@ -4196,16 +4271,8 @@ export class Database {
 
   async loadSnapshotPage(id, { page = 1, limit = 100 } = {}) {
     const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
-    const metadataDb = await this.open();
-    const metadataTx = metadataDb.transaction("snapshots", "readonly");
-    const metadata = await requestResult(metadataTx.objectStore("snapshots").get(id));
-    await transactionDone(metadataTx);
-    if (!metadata) throw snapshotIntegrityError("Final-снимок не найден");
-    const deviceCount = Number(metadata.deviceCount || 0);
-    const chunkCount = Number(metadata.chunkCount ?? Math.ceil(deviceCount / CHUNK_SIZE));
-    if (!Number.isInteger(deviceCount) || deviceCount < 0 || chunkCount !== Math.ceil(deviceCount / CHUNK_SIZE)) {
-      throw snapshotIntegrityError("Final-снимок повреждён: метаданные блоков некорректны");
-    }
+    const { metadata, readChunk } = await this.#snapshotChunkReader(id);
+    const { deviceCount } = snapshotChunkLayout(metadata);
     const pageCount = Math.max(1, Math.ceil(deviceCount / safeLimit));
     const selectedPage = Math.min(pageCount, Math.max(1, Math.floor(Number(page) || 1)));
     const offset = (selectedPage - 1) * safeLimit;
@@ -4214,17 +4281,11 @@ export class Database {
     const lastChunk = end > offset ? Math.floor((end - 1) / CHUNK_SIZE) : firstChunk - 1;
     const devices = [];
     for (let index = firstChunk; index <= lastChunk; index += 1) {
-      const chunkTx = metadataDb.transaction("snapshotChunks", "readonly");
-      const chunk = await requestResult(chunkTx.objectStore("snapshotChunks").get([id, index]));
-      await transactionDone(chunkTx);
-      const expectedLength = Math.min(CHUNK_SIZE, Math.max(0, deviceCount - index * CHUNK_SIZE));
-      if (!Array.isArray(chunk?.devices) || chunk.devices.length !== expectedLength) {
-        throw snapshotIntegrityError(`Final-снимок повреждён: отсутствует или неполон блок ${index + 1}`);
-      }
+      const chunk = checkedSnapshotChunk(await readChunk(index), index, deviceCount);
       const chunkStart = index * CHUNK_SIZE;
       const from = Math.max(0, offset - chunkStart);
-      const to = Math.min(chunk.devices.length, end - chunkStart);
-      devices.push(...chunk.devices.slice(from, to));
+      const to = Math.min(chunk.length, end - chunkStart);
+      devices.push(...chunk.slice(from, to));
     }
     return { metadata, devices, total: deviceCount, page: selectedPage, pageCount, hasPrevious: selectedPage > 1, hasNext: selectedPage < pageCount };
   }
@@ -6384,8 +6445,38 @@ export class Database {
     return { rows, hasMore, nextCursor: hasMore ? nextCursor : null };
   }
 
-  async historyChangeCategoryCounts(filters = {}) {
-    const { range, matches, needsDevice } = historySearchCriteria({ ...filters, type: "", severity: "" });
+  async #forEachArchivedAnalyticsHistory(sources, criteria, visit, { includeDevice = true } = {}) {
+    const archiveIds = new Set([...sources.values()].map(({ archiveId }) => archiveId));
+    for (const archiveId of archiveIds) {
+      const inventory = new Map();
+      for await (const page of this.#localArchivePages(archiveId, "history")) {
+        for (const { value: event } of page) {
+          const source = sources.get(event?.snapshotId);
+          if (source?.archiveId !== archiveId || event.id == null) continue;
+          const timestamp = event.timestamp || event.createdAt || source.metadata.createdAt;
+          const row = { ...event, timestamp, archived: true };
+          if (!criteria.matchesBase(row)) continue;
+          let device = null;
+          if (event.deviceId != null && (includeDevice || criteria.needsDevice(row))) {
+            const id = String(event.deviceId);
+            if (!inventory.has(id)) {
+              if (inventory.size >= 128) inventory.delete(inventory.keys().next().value);
+              inventory.set(id, await this.#localArchiveRecord(archiveId, "inventory", id) || null);
+            }
+            device = inventory.get(id);
+          }
+          if (criteria.matches(row, device)) {
+            const result = visit({ ...row, device });
+            if (result) await result;
+          }
+        }
+      }
+    }
+  }
+
+  async historyChangeCategoryCounts(filters = {}, { scope = null } = {}) {
+    const criteria = historySearchCriteria({ ...filters, type: "", severity: "" });
+    const { range, matches, needsDevice } = criteria;
     const db = await this.open();
     const tx = db.transaction(["history", "inventory"], "readonly");
     const index = tx.objectStore("history").index("by_timestamp");
@@ -6393,8 +6484,7 @@ export class Database {
     const counts = { all: 0, critical: 0, added: 0, absent: 0, modified: 0 };
     const done = transactionDone(tx);
     const request = index.openCursor(range, "next");
-    const countEvent = (event, device) => {
-      if (!matches(event, device)) return;
+    const addEvent = (event) => {
       counts.all += 1;
       const type = normalizeChangeType(event.type);
       if (isCriticalHistoryChange(type, event.field || event.label || event.fieldLabel, event.oldValue ?? event.before, event.newValue ?? event.after)) {
@@ -6402,10 +6492,17 @@ export class Database {
       }
       if (type === "added" || type === "absent" || type === "modified") counts[type] += 1;
     };
+    const countEvent = (event, device) => {
+      if (matches(event, device)) addEvent(event);
+    };
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor) return;
       const event = cursor.value;
+      if (scope?.hidden.has(event.snapshotId) || scope?.sources.has(event.snapshotId)) {
+        cursor.continue();
+        return;
+      }
       if (!needsDevice(event) || event.deviceId === undefined || event.deviceId === null) {
         countEvent(event, null);
         cursor.continue();
@@ -6418,12 +6515,14 @@ export class Database {
       };
     };
     await done;
+    if (scope?.sources.size) await this.#forEachArchivedAnalyticsHistory(scope.sources, criteria, addEvent, { includeDevice: false });
     return counts;
   }
 
-  async historySearchPage(filters = {}, { cursor: after = null, limit = 100 } = {}) {
+  async historySearchPage(filters = {}, { cursor: after = null, limit = 100, scope = null } = {}) {
     const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
-    const { range, matchesBase, matches, needsDevice } = historySearchCriteria(filters);
+    const criteria = historySearchCriteria(filters);
+    const { range, matchesBase, matches, needsDevice } = criteria;
     const db = await this.open();
     const tx = db.transaction(["history", "inventory"], "readonly");
     const index = tx.objectStore("history").index("by_timestamp");
@@ -6461,7 +6560,7 @@ export class Database {
       const current = cursorRequest.result;
       if (!current) return;
       const event = current.value;
-      if (!matchesBase(event)) {
+      if (scope?.hidden.has(event.snapshotId) || scope?.sources.has(event.snapshotId) || !matchesBase(event)) {
         current.continue();
         return;
       }
@@ -6482,6 +6581,27 @@ export class Database {
       current.continue();
     };
     await done;
+    if (scope?.sources.size) {
+      const archiveKey = (row) => row.archived ? String(row.snapshotId) : "";
+      const order = (a, b) => (
+        a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1
+          : globalThis.indexedDB.cmp(a.id, b.id) || globalThis.indexedDB.cmp(archiveKey(a), archiveKey(b))
+      );
+      await this.#forEachArchivedAnalyticsHistory(scope.sources, criteria, (event) => {
+        total += 1;
+        if (after && order(event, after) <= 0) return;
+        const index = rows.findIndex((row) => order(event, row) < 0);
+        if (index >= 0) rows.splice(index, 0, event);
+        else if (rows.length < pageSize) rows.push(event);
+        else { hasMore = true; return; }
+        if (rows.length > pageSize) {
+          rows.pop();
+          hasMore = true;
+        }
+      });
+      const last = rows.at(-1);
+      nextCursor = last ? { timestamp: last.timestamp, id: last.id, archived: last.archived, snapshotId: last.snapshotId } : null;
+    }
     return { rows, total, hasMore, nextCursor: hasMore ? nextCursor : null };
   }
 
@@ -6582,9 +6702,10 @@ export class Database {
     }
   }
 
-  async forEachMacHistoryPage(mac, visit = () => {}) {
+  async forEachMacHistoryPage(mac, visit = () => {}, { scope = null } = {}) {
     const macKey = normalizeMac(mac);
     if (!macKey) throw new Error("Для хронологии требуется корректный MAC-адрес");
+    const accept = (event) => !scope?.hidden.has(event.snapshotId) && !scope?.sources.has(event.snapshotId);
     const db = await this.open();
     const inventoryTx = db.transaction("inventory", "readonly");
     const inventoryDone = transactionDone(inventoryTx);
@@ -6642,6 +6763,10 @@ export class Database {
             cursor.continue();
             return;
           }
+          if (!accept(cursor.value)) {
+            cursor.continue();
+            return;
+          }
           if (page.length >= 500) {
             hasMore = true;
             return;
@@ -6672,7 +6797,7 @@ export class Database {
       let cursor = null;
       do {
         const result = await this.historyPage(deviceId, { cursor, limit: 500 });
-        const relatedEvents = result.rows.filter((event) => normalizeMac(event.mac) !== macKey);
+        const relatedEvents = result.rows.filter((event) => accept(event) && normalizeMac(event.mac) !== macKey);
         if (relatedEvents.length) {
           total += relatedEvents.length;
           await visit(relatedEvents);
@@ -6680,6 +6805,21 @@ export class Database {
         cursor = result.nextCursor;
         if (!result.hasMore) break;
       } while (cursor);
+    }
+    if (scope?.sources.size) {
+      // The regular MAC index resolves aliases through Inventory. Archive-only
+      // snapshots use the catalogue owner's copy of the same Inventory row.
+      const criteria = historySearchCriteria({ mac: macKey });
+      let pending = [];
+      await this.#forEachArchivedAnalyticsHistory(scope.sources, criteria, (event) => {
+        pending.push(event);
+        total += 1;
+        if (pending.length < 128) return;
+        const page = pending;
+        pending = [];
+        return visit(page);
+      }, { includeDevice: false });
+      if (pending.length) await visit(pending);
     }
     return total;
   }
@@ -7205,7 +7345,7 @@ export class Database {
     return records;
   }
 
-  async dataQualityReportsPage({ offset = 0, limit = 20, snapshotId = "" } = {}) {
+  async dataQualityReportsPage({ offset = 0, limit = 20, snapshotId = "", scope = null } = {}) {
     const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
     const pageLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 20)));
     const db = await this.open();
@@ -7213,6 +7353,39 @@ export class Database {
     const store = tx.objectStore("dataQualityReports");
     const index = snapshotId ? store.index("by_snapshot_created") : store.index("by_created");
     const range = snapshotId ? IDBKeyRange.bound([String(snapshotId), ""], [String(snapshotId), "\uffff"]) : null;
+    if (scope?.hidden.size || scope?.sources.size) {
+      const visible = (record) => !scope.hidden.has(record.snapshotId) && (!snapshotId || snapshotId === record.snapshotId);
+      const references = new Map();
+      const keep = (record, archiveId = "") => references.set(record.id, { id: record.id, createdAt: record.createdAt, archiveId });
+      const read = index.openCursor(range);
+      read.onsuccess = () => {
+        const cursor = read.result;
+        if (!cursor) return;
+        if (visible(cursor.value)) keep(cursor.value);
+        cursor.continue();
+      };
+      await transactionDone(tx);
+      for (const archiveId of new Set([...scope.sources.values()].map((source) => source.archiveId))) {
+        for await (const page of this.#localArchivePages(archiveId, "dataQualityReports")) {
+          for (const { value: record } of page) {
+            if (record?.id && !references.has(record.id) && visible(record)
+              && scope.sources.get(record.snapshotId)?.archiveId === archiveId) keep(record, archiveId);
+          }
+        }
+      }
+      const total = references.size;
+      const actualOffset = total ? Math.min(safeOffset, Math.floor((total - 1) / pageLimit) * pageLimit) : 0;
+      const selected = [...references.values()]
+        .sort((a, b) => globalThis.indexedDB.cmp(b.createdAt, a.createdAt) || globalThis.indexedDB.cmp(b.id, a.id))
+        .slice(actualOffset, actualOffset + pageLimit);
+      const recordsTx = db.transaction("dataQualityReports", "readonly");
+      const recordsDone = transactionDone(recordsTx);
+      const rows = await Promise.all(selected.map(({ archiveId, id }) => archiveId
+        ? this.#localArchiveRecord(archiveId, "dataQualityReports", id)
+        : requestResult(recordsTx.objectStore("dataQualityReports").get(id))));
+      await recordsDone;
+      return { rows: rows.filter(Boolean), total, offset: actualOffset, limit: pageLimit, hasPrevious: actualOffset > 0, hasNext: actualOffset + selected.length < total };
+    }
     let total = 0;
     let actualOffset = 0;
     const rows = await new Promise((resolve, reject) => {
@@ -8203,39 +8376,14 @@ export class Database {
   }
 
   async #fingerprint() {
-    let hash = 2166136261;
-    const feed = (value) => {
-      for (const char of value) {
-        hash ^= char.charCodeAt(0);
-        hash = Math.imul(hash, 16777619);
-      }
-      hash ^= 0xff;
-      hash = Math.imul(hash, 16777619);
-    };
-    const feedBytes = (bytes) => {
-      for (const byte of bytes) {
-        hash ^= byte;
-        hash = Math.imul(hash, 16777619);
-      }
-      hash ^= 0xfe;
-      hash = Math.imul(hash, 16777619);
-    };
+    const fingerprint = archiveFingerprint();
     for (const collection of ARCHIVE_STORES) {
-      feed(collection);
-      for await (const page of this.#recordPages(collection, ARCHIVE_PAGE_SIZE, true)) {
-        for (const row of page) {
-          feed(JSON.stringify(row.key));
-          if (collection === "originalFiles") {
-            const { blob, ...metadata } = row.value || {};
-            feed(JSON.stringify(metadata));
-            for (let offset = 0; blob instanceof globalThis.Blob && offset < blob.size; offset += SOURCE_FILE_ARCHIVE_CHUNK_BYTES) {
-              feedBytes(new Uint8Array(await blob.slice(offset, offset + SOURCE_FILE_ARCHIVE_CHUNK_BYTES).arrayBuffer()));
-            }
-          } else feed(JSON.stringify(row.value));
-        }
+      fingerprint.addCollection(collection);
+      for await (const page of this.#recordPages(collection, archivePageSize(collection), true)) {
+        await fingerprint.addPage(collection, page);
       }
     }
-    return (hash >>> 0).toString(16).padStart(8, "0");
+    return fingerprint.digest();
   }
 
   async listLocalArchivesPage({ after = null, limit = 25 } = {}) {
@@ -8278,7 +8426,7 @@ export class Database {
     return record?.status === "ready" ? record : null;
   }
 
-  async createLocalArchive(name = "", { readLegacyTaskQueueFile } = {}) {
+  async createLocalArchive(name = "", { readLegacyTaskQueueFile, hideFromAnalytics = false, onProgress = () => {} } = {}) {
     const archiveId = crypto.randomUUID();
     const record = {
       id: archiveId,
@@ -8294,28 +8442,30 @@ export class Database {
     tx.objectStore("archives").put(record);
     await transactionDone(tx);
     try {
-      let snapshotAfterId = "";
-      let snapshotCount = 0;
-      let firstSnapshotPage = true;
-      while (true) {
-        const snapshotPage = await this.snapshotMetadataPage({ afterId: snapshotAfterId, limit: 500, includeDiagnostics: false });
-        if (firstSnapshotPage) {
-          snapshotCount = snapshotPage.total;
-          firstSnapshotPage = false;
-        }
-        for (const snapshot of snapshotPage.rows) await this.forEachSnapshotChunk(snapshot.id, () => {});
-        if (!snapshotPage.hasMore) break;
-        if (!snapshotPage.nextCursor || snapshotPage.nextCursor === snapshotAfterId) {
-          throw new Error("Постраничная проверка снимков не продвинула курсор");
-        }
-        snapshotAfterId = snapshotPage.nextCursor;
-      }
-      const before = await this.#fingerprint();
+      const layouts = new Map();
+      const hiddenSnapshotIds = [];
+      const fingerprint = archiveFingerprint();
       let recordCount = 0;
       const counts = {};
       for (const collection of ARCHIVE_STORES) {
         counts[collection] = 0;
-        for await (const page of this.#recordPages(collection, ARCHIVE_PAGE_SIZE, true)) {
+        fingerprint.addCollection(collection);
+        for await (const page of this.#recordPages(collection, archivePageSize(collection), true)) {
+          if (collection === "snapshots") {
+            for (const { key, value } of page) {
+              layouts.set(key, { ...snapshotChunkLayout(value), nextIndex: 0 });
+              if (hideFromAnalytics && isFinalSnapshot(value)) hiddenSnapshotIds.push(key);
+            }
+          } else if (collection === "snapshotChunks") {
+            for (const { key: [snapshotId, index], value } of page) {
+              const layout = layouts.get(snapshotId);
+              if (!layout || index >= layout.chunkCount) continue;
+              if (index !== layout.nextIndex) throw snapshotIntegrityError(`Final-снимок повреждён: отсутствует блок ${layout.nextIndex + 1}`);
+              checkedSnapshotChunk(value, index, layout.deviceCount);
+              layout.nextIndex += 1;
+            }
+          }
+          await fingerprint.addPage(collection, page);
           tx = (await this.open()).transaction("archiveRecords", "readwrite");
           const done = transactionDone(tx);
           const store = tx.objectStore("archiveRecords");
@@ -8326,6 +8476,10 @@ export class Database {
           }
           await done;
         }
+        if (collection === "snapshotChunks" && [...layouts.values()].some(({ chunkCount, nextIndex }) => chunkCount !== nextIndex)) {
+          throw snapshotIntegrityError("Final-снимок повреждён: отсутствуют блоки устройств");
+        }
+        onProgress({ stage: "copy", recordCount });
       }
       for await (const page of this.#localArchivePages(archiveId, "legacyObservations")) {
         for (const { value: observation } of page) {
@@ -8373,9 +8527,10 @@ export class Database {
           }
         }
       }
-      if (before !== await this.#fingerprint()) throw new Error("База изменилась во время создания архива. Удалите черновик и повторите сохранение.");
-      const ready = { ...record, status: "ready", recordCount, snapshotCount, counts };
-      tx = (await this.open()).transaction("archives", "readwrite");
+      onProgress({ stage: "verify", recordCount });
+      if (fingerprint.digest() !== await this.#fingerprint()) throw new Error("База изменилась во время создания архива. Повторите сохранение.");
+      const ready = { ...record, status: "ready", recordCount, snapshotCount: layouts.size, counts, hiddenSnapshotIds };
+      tx = (await this.open()).transaction("archives", "readwrite", { durability: "strict" });
       tx.objectStore("archives").put(ready);
       await transactionDone(tx);
       return ready;
@@ -8387,32 +8542,49 @@ export class Database {
 
   async deleteLocalArchive(archiveId) {
     const db = await this.open();
-    const tx = db.transaction(["archiveRecords", "legacyObservationImportIds"], "readwrite");
+    const tx = db.transaction(["archives", "archiveRecords", "legacyObservationImportIds"], "readwrite", { durability: "strict" });
     const done = transactionDone(tx);
     const range = IDBKeyRange.bound([archiveId, "", ""], [archiveId, "\uffff", "\uffff"]);
     tx.objectStore("archiveRecords").delete(range);
     tx.objectStore("legacyObservationImportIds").delete(IDBKeyRange.bound([archiveId, ""], [archiveId, []]));
+    tx.objectStore("archives").delete(archiveId);
     await done;
-    const archiveTx = (await this.open()).transaction("archives", "readwrite");
-    archiveTx.objectStore("archives").delete(archiveId);
-    await transactionDone(archiveTx);
     return true;
   }
 
-  async restoreLocalArchivesForAnalytics(onProgress = () => {}) {
+  async analyticsSnapshotCatalog(liveSnapshots, { includeArchives = false, onProgress = () => {} } = {}) {
     let after = null;
     let archiveCount = 0;
+    const hidden = new Set();
+    const snapshots = new Map(liveSnapshots.map((item) => [item.id, item]));
+    const sources = new Map();
     do {
       const page = await this.listLocalArchivesPage({ after, limit: 25 });
       for (const archive of page.rows) {
-        await this.restoreLocalArchive(archive.id, { preserveActiveSnapshot: true });
+        for (const id of archive.hiddenSnapshotIds || []) hidden.add(id);
+        if (!includeArchives) continue;
+        for await (const entries of this.#localArchivePages(archive.id, "snapshots", archivePageSize("snapshots"))) {
+          for (const { value: metadata } of entries) {
+            if (!metadata?.id || snapshots.has(metadata.id) || !isFinalSnapshot(metadata)) continue;
+            snapshotChunkLayout(metadata);
+            snapshots.set(metadata.id, snapshotCatalogRecord(metadata));
+            sources.set(metadata.id, { archiveId: archive.id, metadata });
+          }
+        }
         archiveCount += 1;
         onProgress({ archiveCount, name: archive.name });
       }
       if (!page.hasMore) break;
       after = page.nextCursor;
     } while (after);
-    return { archiveCount };
+    const shown = includeArchives
+      ? [...snapshots.values()].sort(compareSnapshotHistoryMetadata)
+      : liveSnapshots.filter((snapshot) => !hidden.has(snapshot.id));
+    return { snapshots: shown, sources, hidden, archiveCount };
+  }
+
+  setAnalyticsArchiveSources(sources) {
+    this.#analyticsArchiveSources = sources;
   }
 
   async restoreLocalArchive(archiveId, {
@@ -9008,18 +9180,18 @@ export class Database {
         firstSnapshot = false;
         const prefix = JSON.stringify(metadata);
         yield `${prefix.slice(0, -1)},"devices":[`;
-        const chunkCount = Number(metadata.chunkCount ?? Math.ceil(Number(metadata.deviceCount || 0) / CHUNK_SIZE));
+        const { chunkCount, deviceCount } = snapshotChunkLayout(metadata);
         let firstDevice = true;
         for (let index = 0; index < chunkCount; index += 1) {
           let chunk;
-          if (archiveId) chunk = await this.#localArchiveRecord(archiveId, "snapshotChunks", [metadata.id, index]);
+          if (archiveId) chunk = await this.#localArchiveRecord(archiveId, "snapshotChunks", [metadata.stageKey ?? metadata.id, index]);
           else {
             const db = await this.open();
             const tx = db.transaction("snapshotChunks", "readonly");
             chunk = await requestResult(tx.objectStore("snapshotChunks").get([metadata.id, index]));
             await transactionDone(tx);
           }
-          for (const device of chunk?.devices || []) {
+          for (const device of checkedSnapshotChunk(chunk, index, deviceCount)) {
             if (!firstDevice) yield ",";
             firstDevice = false;
             yield JSON.stringify(device);
@@ -9344,16 +9516,25 @@ export class Database {
     return new globalThis.ReadableStream({
       async pull(controller) {
         try {
-          const result = await iterator.next();
-          if (result.done) controller.close();
-          else {
-            const chunk = encoder.encode(result.value);
+          const parts = [];
+          let size = 0;
+          let done = false;
+          while (size < ARCHIVE_STREAM_BUFFER_CHARS) {
+            const result = await iterator.next();
+            if (result.done) { done = true; break; }
+            parts.push(result.value);
+            size += result.value.length;
+          }
+          if (parts.length) {
+            const chunk = encoder.encode(parts.join(""));
             byteCount += chunk.byteLength;
             if (byteCount > MAX_PORTABLE_ARCHIVE_BYTES) throw new Error("Portable archive превышает лимит 4 ГиБ");
             controller.enqueue(chunk);
           }
+          if (done) controller.close();
         } catch (error) {
           controller.error(error);
+          await iterator.return().catch(() => {});
         }
       },
       cancel() {

@@ -680,13 +680,17 @@ if (process.argv.includes("--address-roster-regression-only")) {
   await check("document.querySelectorAll('#macTimeline .mac-timeline-ambiguous').length===2", "Ambiguous MAC chronology");
   const ambiguous=await evaluate("({summary:document.querySelector('#macTimelineSummary').textContent,candidates:document.querySelectorAll('#macTimeline .mac-timeline-ambiguous li').length,overflows:document.querySelector('#macTimeline').scrollWidth>document.querySelector('#macTimeline').clientWidth+1})");
   if(ambiguous.summary.includes("Выгрузок0") || ambiguous.summary.includes("Источников0") || ambiguous.candidates!==4 || ambiguous.overflows) throw new Error("Ambiguous chronology lost sources or candidate details: "+JSON.stringify(ambiguous));
-  await evaluate("document.querySelector('[data-view=\"data\"]').click();document.querySelector('#localArchiveName').value='Address regression';document.querySelector('#localArchiveForm').requestSubmit()");
+  await evaluate("document.querySelector('[data-view=\"data\"]').click();document.querySelector('#localArchiveName').value='Address regression';document.querySelector('#localArchiveForm').requestSubmit(document.querySelector('#archiveAndHideButton'))");
   await check("document.querySelector('#localArchiveStatus').textContent.includes('Сохранён архив') && !document.querySelector('#saveLocalArchiveButton').disabled", "Local archive save", 2400);
-  await evaluate("document.querySelector('[data-view=\"analytics\"]').click();document.querySelector('#includeArchivedSnapshotsButton').click()");
-  await check("document.querySelector('#archiveAnalyticsStatus').textContent.includes('Учтено архивов · 1') && !document.querySelector('#includeArchivedSnapshotsButton').disabled", "Archive analytics restore", 2400);
+  await evaluate("document.querySelector('[data-view=\"analytics\"]').click()");
+  await check("document.querySelector('#archiveAnalyticsStatus').textContent.includes('Скрыто архивных снимков · 2') && document.querySelector('.analytics-groups').hidden && !document.querySelector('#currentSnapshotSelect').value", "Archived snapshots disappear from analytics");
+  await evaluate("document.querySelector('#includeArchivedSnapshotsButton').click()");
+  await check("document.querySelector('#archiveAnalyticsStatus').textContent.includes('Подключено архивов · 1') && !document.querySelector('#includeArchivedSnapshotsButton').disabled", "Read-only archive analytics", 2400);
   const archived=await evaluate("document.querySelector('#databaseStatus').textContent");
   if(!archived.includes("2 снимок объединения")) throw new Error("Archive inclusion duplicated snapshots: "+archived);
   const reloaded=await reloadDatabaseAndWait(new URL(target.url).searchParams.get("db"));
+  await check("document.querySelector('#includeArchivedSnapshotsButton').getAttribute('aria-pressed')==='false' && !document.querySelector('#currentSnapshotSelect').value", "Archive visibility remains hidden after reload");
+  await evaluate("document.querySelector('#includeArchivedSnapshotsButton').click()");
   await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#analyticsKpis [data-kpi=\"devices\"] strong')?.textContent.trim()==='104'", "Automatic database reload");
   await evaluate("document.querySelector('#currentSnapshotSelect').selectedIndex=1;document.querySelector('#applyComparisonButton').click()");
   await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#roomOccupancyStatus').textContent.includes('без помещения 2')", "Historical Final has two devices without rooms");
@@ -711,6 +715,44 @@ if (process.argv.includes("--address-roster-regression-only")) {
   }
   if (!failedWriteReported) throw new Error("Failed archive write was not reported");
   if (await evaluate("document.querySelector('#lastArchiveReceipt').textContent") !== receipt) throw new Error("Failed or cancelled export replaced receipt");
+  const dbName = new URL(target.url).searchParams.get("db");
+  const oldSnapshot = await evaluate("document.querySelector('#currentSnapshotSelect')?.value || ''").catch(() => "");
+  const removedSource = await evaluate(`new Promise((resolve,reject)=>{
+    const dbName=${JSON.stringify(dbName)};
+    if(!dbName.startsWith('mac-analyzer-pro-next-test-'))return reject(new Error('Disposable database required'));
+    const request=indexedDB.open(dbName);
+    request.onerror=()=>reject(request.error);
+    request.onsuccess=()=>{
+      const db=request.result;
+      const tx=db.transaction(['snapshots','snapshotChunks','history'],'readwrite');
+      const pick=tx.objectStore('snapshots').index('by_created_id').openCursor();
+      let id='';
+      pick.onsuccess=()=>{
+        const cursor=pick.result;
+        if(!cursor)return;
+        id=cursor.value.id;
+        for(let index=0;index<cursor.value.chunkCount;index++)tx.objectStore('snapshotChunks').delete([id,index]);
+        cursor.delete();
+        const events=tx.objectStore('history').openCursor();
+        events.onsuccess=()=>{
+          const current=events.result;
+          if(!current)return;
+          if(current.value.snapshotId===id)current.delete();
+          current.continue();
+        };
+      };
+      tx.oncomplete=()=>{db.close();resolve(id)};
+      tx.onabort=()=>{db.close();reject(tx.error)};
+    };
+  })`);
+  if (!removedSource || (oldSnapshot && oldSnapshot !== removedSource)) throw new Error("Could not create archive-only source in the disposable profile");
+  await reloadDatabaseAndWait(dbName);
+  await evaluate("document.querySelector('[data-view=\"analytics\"]').click();document.querySelector('#includeArchivedSnapshotsButton').click()");
+  await check("document.querySelector('#archiveAnalyticsStatus').textContent.includes('Доступно снимков · 2') && document.querySelector('#analyticsLoadingStatus').hidden", "Archive-only comparison");
+  await evaluate(`document.querySelector('#currentSnapshotSelect').value=${JSON.stringify(removedSource)};document.querySelector('#applyComparisonButton').click()`);
+  await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#roomOccupancyStatus').textContent.includes('без помещения 2')", "Archive-only Final roster");
+  await check("document.querySelector('#databaseStatus').textContent.includes('1 снимок объединения') && document.querySelector('#analyticsKpis [data-kpi=devices] strong')?.textContent.trim()==='104'", "Archive-only viewing did not restore the source");
+  console.log("browser smoke: archive-only Final participates in comparison and roster without restoring the working database");
   console.log(JSON.stringify({addressRosterRegression:true,mainCount:104,pageTwo,missing,ambiguous,archived,reloaded,ok:true}));
   await command("Browser.close");
   socket.close();
