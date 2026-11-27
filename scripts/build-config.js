@@ -55,6 +55,7 @@ export const PORTABLE_MODULES = Object.freeze([
   "src/core/incremental-sha256.js",
   "src/core/snapshot-history-signature.js",
   "src/core/analytics.js",
+  "src/core/main-mac-absence.js",
   "src/core/analytics-detail.js",
   "src/core/pyqt-clustering.js",
   "src/core/historical-mapping.js",

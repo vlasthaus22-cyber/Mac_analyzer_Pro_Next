@@ -2645,11 +2645,20 @@ function mappingConfidence(candidate) {
   )));
 }
 
+export function smartroomLocationIdColumn(headers = []) {
+  const matches = headers.flatMap((header, index) => {
+    const label = keyText(header).replace(/[._-]+/g, " ").replace(/\s+/g, " ");
+    return /^(?:smart\s*room\s*id\s*(?:локации|помещения|location)|id\s*(?:локации|помещения)\s*smart\s*room)$/.test(label) ? [index] : [];
+  });
+  return matches.length === 1 ? matches[0] : -1;
+}
+
 export function detectMappingReport(headers = [], rows = [], role = "main") {
   const allowed = role === "ddio"
     ? ["reservationMac", "reservationIp", "leaseMac", "leaseIp"]
     : Object.keys(FIELD_LABELS).filter((field) => !field.startsWith("reservation") && !field.startsWith("lease") && field !== "possibleIps");
   const profiles = headers.map((_, index) => valueProfile(rows, index));
+  const locationColumn = role === "smartroom" ? smartroomLocationIdColumn(headers) : -1;
   const fieldCandidates = allowed.map((field) => {
     const aliases = ALIASES[field] || [];
     const ranked = headers.map((header, index) => {
@@ -2666,7 +2675,8 @@ export function detectMappingReport(headers = [], rows = [], role = "main") {
       const inferredFloor = field === "floor" && aliasScore === 0 ? 0 : sampleScore(rows, index, field);
       const sampleFit = Math.max(inferredFloor, descriptiveFields.includes(field) ? Math.min(profile.text, 0.45) : 0);
       const pyqtAiScore = pyqtAiColumnScore(rows, index, header, field);
-      const score = Math.max(aliasScore + sampleFit * 40 + semantic.score * 100, pyqtAiScore * 100);
+      const score = index === locationColumn && field === "smartroomId" ? 1_000
+        : Math.max(aliasScore + sampleFit * 40 + semantic.score * 100, pyqtAiScore * 100);
       const reason = mappingCandidateReason(aliasScore, sampleFit, semantic.reasons, pyqtAiScore);
       const examples = rows.slice(0, 100)
         .map((row) => text(row?.[index]))
@@ -2693,7 +2703,7 @@ export function detectMappingReport(headers = [], rows = [], role = "main") {
       const pyqtRecognized = item.pyqtAiScore > pyqtThreshold;
       return (field === "mac2" ? item.aliasScore > 0 : item.score >= 40 || pyqtRecognized)
         && !usedColumns.has(item.index)
-        && !samplesConflictWithIdentity
+        && (!samplesConflictWithIdentity || (field === "smartroomId" && item.index === locationColumn))
         && !weakSemanticOnlyMatch;
     });
     const best = ranked[0];

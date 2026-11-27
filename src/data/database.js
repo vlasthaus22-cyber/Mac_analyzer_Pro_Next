@@ -8403,7 +8403,7 @@ export class Database {
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor) return resolve();
-        if (cursor.value?.status === "ready") {
+        if (cursor.value?.status === "ready" && !cursor.value.analyticsPreview) {
           if (rows.length >= pageSize) {
             hasMore = true;
             return resolve();
@@ -8552,35 +8552,58 @@ export class Database {
     return true;
   }
 
-  async analyticsSnapshotCatalog(liveSnapshots, { includeArchives = false, onProgress = () => {} } = {}) {
+  async markExternalSnapshotArchive(name, snapshotIds) {
+    const record = {
+      id: crypto.randomUUID(), name: text(name).slice(0, 120), createdAt: new Date().toISOString(),
+      status: "ready", externalFile: true, snapshotCount: snapshotIds.length, recordCount: 0,
+      hiddenSnapshotIds: [...snapshotIds],
+    };
+    const db = await this.open();
+    const tx = db.transaction("archives", "readwrite", { durability: "strict" });
+    tx.objectStore("archives").add(record);
+    await transactionDone(tx);
+    return record;
+  }
+
+  async analyticsSnapshotCatalog(liveSnapshots, { includeArchives = false, selectedArchiveIds = [], onProgress = () => {} } = {}) {
     let after = null;
     let archiveCount = 0;
     const hidden = new Set();
-    const snapshots = new Map(liveSnapshots.map((item) => [item.id, item]));
+    const liveById = new Map(liveSnapshots.map((item) => [item.id, item]));
+    const archives = [];
     const sources = new Map();
     do {
       const page = await this.listLocalArchivesPage({ after, limit: 25 });
       for (const archive of page.rows) {
         for (const id of archive.hiddenSnapshotIds || []) hidden.add(id);
-        if (!includeArchives) continue;
-        for await (const entries of this.#localArchivePages(archive.id, "snapshots", archivePageSize("snapshots"))) {
-          for (const { value: metadata } of entries) {
-            if (!metadata?.id || snapshots.has(metadata.id) || !isFinalSnapshot(metadata)) continue;
-            snapshotChunkLayout(metadata);
-            snapshots.set(metadata.id, snapshotCatalogRecord(metadata));
-            sources.set(metadata.id, { archiveId: archive.id, metadata });
-          }
-        }
-        archiveCount += 1;
-        onProgress({ archiveCount, name: archive.name });
+        if (includeArchives && !archive.externalFile) archives.push(archive);
       }
       if (!page.hasMore) break;
       after = page.nextCursor;
     } while (after);
-    const shown = includeArchives
-      ? [...snapshots.values()].sort(compareSnapshotHistoryMetadata)
-      : liveSnapshots.filter((snapshot) => !hidden.has(snapshot.id));
-    return { snapshots: shown, sources, hidden, archiveCount };
+    const current = liveSnapshots.filter((snapshot) => !hidden.has(snapshot.id));
+    const snapshots = new Map(current.map((snapshot) => [snapshot.id, snapshot]));
+    for (const id of new Set(selectedArchiveIds)) {
+      const archive = await this.#localArchiveMetadata(id);
+      if (archive?.analyticsPreview) archives.unshift(archive);
+    }
+    for (const archive of archives) {
+      for await (const entries of this.#localArchivePages(archive.id, "snapshots", archivePageSize("snapshots"))) {
+        for (const { value: metadata } of entries) {
+          if (!metadata?.id || snapshots.has(metadata.id) || !isFinalSnapshot(metadata)) continue;
+          snapshotChunkLayout(metadata);
+          const live = archive.analyticsPreview ? null : liveById.get(metadata.id);
+          snapshots.set(metadata.id, live || snapshotCatalogRecord(metadata));
+          if (!live) sources.set(metadata.id, { archiveId: archive.id, metadata });
+        }
+      }
+      archiveCount += 1;
+      onProgress({ archiveCount, name: archive.name });
+    }
+    const archivedIds = new Set(hidden);
+    for (const id of snapshots.keys()) hidden.delete(id);
+    const shown = archives.length ? [...snapshots.values()].sort(compareSnapshotHistoryMetadata) : current;
+    return { snapshots: shown, sources, hidden, archivedIds, archiveCount };
   }
 
   setAnalyticsArchiveSources(sources) {
@@ -9169,13 +9192,17 @@ export class Database {
     return { snapshotCount, activeSnapshotId: selectedActiveId };
   }
 
-  async *#archiveJsonChunks(archiveId = "", { readLegacyTaskQueueFile } = {}) {
+  async *#archiveJsonChunks(archiveId = "", { readLegacyTaskQueueFile, snapshotIds = null } = {}) {
     yield `{"format":"MAC_ANALYZER_NEXT_ARCHIVE","version":1,"exportedAt":${JSON.stringify(new Date().toISOString())},"snapshots":[`;
     let firstSnapshot = true;
+    let selectedCount = 0;
+    const relatedDevices = new Set();
     const snapshots = archiveId ? this.#localArchivePages(archiveId, "snapshots") : this.#recordPages("snapshots");
     for await (const page of snapshots) {
       for (const entry of page) {
         const metadata = archiveId ? entry.value : entry;
+        if (snapshotIds && (!snapshotIds.has(metadata.id) || !isFinalSnapshot(metadata))) continue;
+        selectedCount += 1;
         if (!firstSnapshot) yield ",";
         firstSnapshot = false;
         const prefix = JSON.stringify(metadata);
@@ -9192,6 +9219,7 @@ export class Database {
             await transactionDone(tx);
           }
           for (const device of checkedSnapshotChunk(chunk, index, deviceCount)) {
+            if (snapshotIds && device.id != null) relatedDevices.add(String(device.id));
             if (!firstDevice) yield ",";
             firstDevice = false;
             yield JSON.stringify(device);
@@ -9200,14 +9228,20 @@ export class Database {
         yield "]}";
       }
     }
+    if (snapshotIds && selectedCount !== snapshotIds.size) throw new Error("Состав снимков изменился во время архивирования");
     yield "]";
-    for (const property of PORTABLE_ARCHIVE_RECORD_COLLECTIONS) {
+    const collections = snapshotIds ? ["history", "inventory", "switchAddressEvidence", "dataQualityReports"] : PORTABLE_ARCHIVE_RECORD_COLLECTIONS;
+    for (const property of collections) {
       yield `,"${property}":[`;
       let first = true;
       const pages = archiveId ? this.#localArchivePages(archiveId, property) : this.#recordPages(property);
       for await (const page of pages) {
         for (const entry of page) {
           const record = archiveId ? entry.value : entry;
+          if (snapshotIds) {
+            if (property === "inventory" ? !relatedDevices.has(String(record.id)) : !snapshotIds.has(record.snapshotId)) continue;
+            if (property === "history" && record.deviceId != null) relatedDevices.add(String(record.deviceId));
+          }
           if (!first) yield ",";
           first = false;
           yield JSON.stringify(property === "legacyObservations" ? legacyObservationArchiveRecord(record) : record);
@@ -9221,6 +9255,7 @@ export class Database {
     for await (const page of originalPages) {
       for (const entry of page) {
         const record = archiveId ? entry.value : entry;
+        if (snapshotIds && !snapshotIds.has(record.snapshotId)) continue;
         const { blob, ...metadata } = record;
         if (!blob || typeof blob.slice !== "function" || Number(blob.size) !== Number(metadata.size)) throw new Error(`Оригинал ${metadata.name || metadata.role} повреждён и не может быть экспортирован`);
         if (!firstOriginal) yield ",";
@@ -9238,6 +9273,7 @@ export class Database {
       }
     }
     yield "]";
+    if (snapshotIds) { yield "}"; return; }
     yield `,"legacyTaskQueueFiles":[`;
     let firstQueueFile = true;
     const writeQueueFile = async function* (metadata, readChunk) {
@@ -9316,6 +9352,12 @@ export class Database {
 
   exportArchiveStream(options = {}) {
     return this.#streamArchive(this.#archiveJsonChunks("", options));
+  }
+
+  exportSnapshotArchiveStream(snapshotIds) {
+    const selected = new Set(snapshotIds);
+    if (!selected.size) throw new Error("Выберите хотя бы один снимок для архивирования");
+    return this.exportArchiveStream({ snapshotIds: selected });
   }
 
   async *#referenceArchiveJsonChunks() {
@@ -9737,12 +9779,14 @@ export class Database {
     onProgress = () => {},
     signal,
     maxRecordsPerBatch = ARCHIVE_RECORD_STAGE_BATCH_SIZE,
+    analyticsPreviewName = "",
   } = {}) {
     const recordBatchSize = boundedArchiveBatchSize(maxRecordsPerBatch, ARCHIVE_RECORD_STAGE_MAX_BATCH_SIZE);
     const nativeArchive = header?.format === "MAC_ANALYZER_NEXT_ARCHIVE" && header.version === 1;
     const referenceArchive = header?.format === "mac-analyzer-full-json" && header.version === 2;
     const referenceDeviceArchive = header?.format === "mac-analyzer-devices-json" && header.version === 2;
     if (!nativeArchive && !referenceArchive && !referenceDeviceArchive) throw new Error("Неподдерживаемый формат архива");
+    if (analyticsPreviewName && referenceDeviceArchive) throw new Error("Для аналитики нужен архив со снимками объединения");
     const throwIfAborted = () => {
       if (!signal?.aborted) return;
       throw signal.reason instanceof Error ? signal.reason : new DOMException("Импорт архива отменён", "AbortError");
@@ -9751,7 +9795,7 @@ export class Database {
     const archiveId = crypto.randomUUID();
     const record = {
       id: archiveId,
-      name: `Импорт ${new Date().toLocaleString("ru-RU")}`,
+      name: text(analyticsPreviewName).slice(0, 120) || `Импорт ${new Date().toLocaleString("ru-RU")}`,
       createdAt: new Date().toISOString(),
       status: "building",
       recordCount: 0,
@@ -9762,6 +9806,7 @@ export class Database {
     tx.objectStore("archives").put(record);
     await transactionDone(tx);
     let recordCount = 0;
+    let retainedForAnalytics = false;
     let deviceCount = 0;
     let analysisRowCount = 0;
     let sequence = 0;
@@ -10319,13 +10364,19 @@ export class Database {
         reportValidationProgress("singleAnalysisChunks", page.length);
       }
       const snapshotCount = counts.snapshots || 0;
+      if (analyticsPreviewName && !snapshotCount) throw new Error("В архиве нет снимков объединения");
       // Cancellation is honored until the commit phase starts. Once restoration
       // begins, let its bounded collection transactions finish to avoid leaving
       // a partially restored archive in the user's database.
       throwIfAborted();
       tx = (await this.open()).transaction("archives", "readwrite");
-      tx.objectStore("archives").put({ ...record, status: "ready", recordCount, snapshotCount, counts });
+      const ready = { ...record, status: "ready", recordCount, snapshotCount, counts, analyticsPreview: Boolean(analyticsPreviewName) };
+      tx.objectStore("archives").put(ready);
       await transactionDone(tx);
+      if (analyticsPreviewName) {
+        retainedForAnalytics = true;
+        return ready;
+      }
       const result = await this.restoreLocalArchive(archiveId, {
         preserveActiveSnapshot: preserveActiveSnapshot || referenceDeviceArchive,
         consumeStagedLegacyObservationPages: Boolean(counts.legacyObservations),
@@ -10334,7 +10385,7 @@ export class Database {
       });
       return result;
     } finally {
-      await this.deleteLocalArchive(archiveId).catch(() => {});
+      if (!retainedForAnalytics) await this.deleteLocalArchive(archiveId).catch(() => {});
     }
   }
 

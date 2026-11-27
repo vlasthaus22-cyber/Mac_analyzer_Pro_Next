@@ -632,7 +632,8 @@ if (process.argv.includes("--address-roster-regression-only")) {
       runRooms[1] = [macAt(1), address, "", "SR-1"].join(";");
       runRooms[2] = [macAt(2), address, "Старое помещение", "SR-2"].join(";");
     }
-    await assignInput("#smartroomFileInput", "address-smartroom-"+run+".csv", "MAC;Адрес локации;Название комнаты;Smartroom ID\n"+runRooms.join("\n"));
+    await assignInput("#smartroomFileInput", "address-smartroom-"+run+".csv", "MAC;Адрес локации;Название комнаты;Smartroom ID локации;Smartroom ID\n"+runRooms.map((row)=>row+";Generic").join("\n"));
+    await check("document.querySelector('[data-mapping-role=smartroom][data-mapping-field=smartroomId]')?.value==='3'", "Automatic SmartRoom location ID");
     await check("[...document.querySelectorAll('[data-mapping-role=smartroom][data-mapping-field]')].filter(el=>!el.closest('details:not([open])')).length===10", "Primary SmartRoom fields include room");
     await evaluate("document.querySelector('[data-mapping-role=smartroom][data-mapping-field=locationPath]').closest('details').querySelector('summary').click()");
     await check("document.querySelector('[data-mapping-role=smartroom][data-mapping-field=locationPath]').getClientRects().length>0", "Optional SmartRoom fields expand");
@@ -680,17 +681,25 @@ if (process.argv.includes("--address-roster-regression-only")) {
   await check("document.querySelectorAll('#macTimeline .mac-timeline-ambiguous').length===2", "Ambiguous MAC chronology");
   const ambiguous=await evaluate("({summary:document.querySelector('#macTimelineSummary').textContent,candidates:document.querySelectorAll('#macTimeline .mac-timeline-ambiguous li').length,overflows:document.querySelector('#macTimeline').scrollWidth>document.querySelector('#macTimeline').clientWidth+1})");
   if(ambiguous.summary.includes("Выгрузок0") || ambiguous.summary.includes("Источников0") || ambiguous.candidates!==4 || ambiguous.overflows) throw new Error("Ambiguous chronology lost sources or candidate details: "+JSON.stringify(ambiguous));
-  await evaluate("document.querySelector('[data-view=\"data\"]').click();document.querySelector('#localArchiveName').value='Address regression';document.querySelector('#localArchiveForm').requestSubmit(document.querySelector('#archiveAndHideButton'))");
+  await evaluate(`window.__periodParts=[];Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:async()=>({createWritable:async()=>new WritableStream({write(part){window.__periodParts.push(part)},close(){window.__periodArchive=new Blob(window.__periodParts)}})})});document.querySelector('[data-view="data"]').click();document.querySelector('#localArchiveName').value='Address regression';document.querySelector('#localArchiveForm').requestSubmit(document.querySelector('#archiveAndHideButton'))`);
   await check("document.querySelector('#localArchiveStatus').textContent.includes('Сохранён архив') && !document.querySelector('#saveLocalArchiveButton').disabled", "Local archive save", 2400);
+  const savedArchive = await evaluate("window.__periodArchive.text()");
+  const attachArchiveFiles = () => evaluate(`(()=>{
+    const input=document.querySelector('#analyticsArchiveFiles');
+    const transfer=new DataTransfer();
+    for(const name of ['period-one.madb.json','period-two.madb.json'])transfer.items.add(new File([${JSON.stringify(savedArchive)}],name,{type:'application/json'}));
+    input.files=transfer.files;
+    input.dispatchEvent(new Event('change',{bubbles:true}));
+  })()`);
   await evaluate("document.querySelector('[data-view=\"analytics\"]').click()");
   await check("document.querySelector('#archiveAnalyticsStatus').textContent.includes('Скрыто архивных снимков · 2') && document.querySelector('.analytics-groups').hidden && !document.querySelector('#currentSnapshotSelect').value", "Archived snapshots disappear from analytics");
-  await evaluate("document.querySelector('#includeArchivedSnapshotsButton').click()");
-  await check("document.querySelector('#archiveAnalyticsStatus').textContent.includes('Подключено архивов · 1') && !document.querySelector('#includeArchivedSnapshotsButton').disabled", "Read-only archive analytics", 2400);
+  await attachArchiveFiles();
+  await check("document.querySelector('#archiveAnalyticsStatus').textContent.includes('Подключено архивов · 2') && !document.querySelector('#analyticsArchiveFiles').disabled", "Read-only analytics for selected archive files", 2400);
   const archived=await evaluate("document.querySelector('#databaseStatus').textContent");
   if(!archived.includes("2 снимок объединения")) throw new Error("Archive inclusion duplicated snapshots: "+archived);
   const reloaded=await reloadDatabaseAndWait(new URL(target.url).searchParams.get("db"));
   await check("document.querySelector('#includeArchivedSnapshotsButton').getAttribute('aria-pressed')==='false' && !document.querySelector('#currentSnapshotSelect').value", "Archive visibility remains hidden after reload");
-  await evaluate("document.querySelector('#includeArchivedSnapshotsButton').click()");
+  await attachArchiveFiles();
   await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#analyticsKpis [data-kpi=\"devices\"] strong')?.textContent.trim()==='104'", "Automatic database reload");
   await evaluate("document.querySelector('#currentSnapshotSelect').selectedIndex=1;document.querySelector('#applyComparisonButton').click()");
   await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#roomOccupancyStatus').textContent.includes('без помещения 2')", "Historical Final has two devices without rooms");
@@ -699,7 +708,7 @@ if (process.argv.includes("--address-roster-regression-only")) {
   await check("document.querySelector('#detailsDialog .detail-count strong')?.textContent==='1'", "Historical comparison opens latest room roster");
   await evaluate("document.querySelector('#detailsDialog').close()");
   await openArchiveDataView();
-  await check("document.querySelector('#lastArchiveReceipt').textContent.includes('Address regression')", "Local archive receipt survived restart");
+  await check("document.querySelector('#lastArchiveReceipt').textContent.includes('Address-regression.madb.json')", "File archive receipt survived restart");
   await evaluate(`window.__archiveParts=[];Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:async()=>({createWritable:async()=>new WritableStream({write(part){window.__archiveParts.push(part)},close(){window.__archiveBlob=new Blob(window.__archiveParts)}})})});document.querySelector('#exportDatabaseButton').click()`);
   const receipt = await check("document.querySelector('#lastArchiveReceipt').textContent.includes('Переносимый архив Next записан на диск') && document.querySelector('#lastArchiveReceipt').textContent", "Portable archive receipt after file close", 2400);
   const format = await evaluate("(async()=>JSON.parse(await window.__archiveBlob.text()).format)()");
@@ -747,12 +756,44 @@ if (process.argv.includes("--address-roster-regression-only")) {
   })`);
   if (!removedSource || (oldSnapshot && oldSnapshot !== removedSource)) throw new Error("Could not create archive-only source in the disposable profile");
   await reloadDatabaseAndWait(dbName);
-  await evaluate("document.querySelector('[data-view=\"analytics\"]').click();document.querySelector('#includeArchivedSnapshotsButton').click()");
+  await evaluate("document.querySelector('[data-view=\"analytics\"]').click()");
+  await attachArchiveFiles();
   await check("document.querySelector('#archiveAnalyticsStatus').textContent.includes('Доступно снимков · 2') && document.querySelector('#analyticsLoadingStatus').hidden", "Archive-only comparison");
   await evaluate(`document.querySelector('#currentSnapshotSelect').value=${JSON.stringify(removedSource)};document.querySelector('#applyComparisonButton').click()`);
   await check("document.querySelector('#analyticsLoadingStatus').hidden && document.querySelector('#roomOccupancyStatus').textContent.includes('без помещения 2')", "Archive-only Final roster");
   await check("document.querySelector('#databaseStatus').textContent.includes('1 снимок объединения') && document.querySelector('#analyticsKpis [data-kpi=devices] strong')?.textContent.trim()==='104'", "Archive-only viewing did not restore the source");
   console.log("browser smoke: archive-only Final participates in comparison and roster without restoring the working database");
+  await evaluate(`new Promise((resolve,reject)=>{
+    const dbName=${JSON.stringify(dbName)};
+    if(!dbName.startsWith('mac-analyzer-pro-next-test-'))return reject(new Error('Disposable database required'));
+    const request=indexedDB.open(dbName);
+    request.onerror=()=>reject(request.error);
+    request.onsuccess=()=>{
+      const db=request.result;
+      const tx=db.transaction(['snapshots','snapshotChunks'],'readwrite');
+      for(let index=0;index<5;index++){
+        const id='new-period-'+index;
+        const createdAt=new Date(Date.now()+(index+1)*3600000).toISOString();
+        const device={id:'new-device',mac:'02:20:00:00:00:01',source:'Main',sources:['Main']};
+        tx.objectStore('snapshots').put({id,snapshotType:'final',name:id,createdAt,chunkCount:1,deviceCount:1,mainUniqueMacs:1});
+        tx.objectStore('snapshotChunks').put({snapshotId:id,index:0,devices:[device]});
+      }
+      tx.oncomplete=()=>{db.close();resolve(true)};
+      tx.onabort=()=>{db.close();reject(tx.error)};
+    };
+  })`);
+  await reloadDatabaseAndWait(dbName);
+  await evaluate("document.querySelector('[data-view=\"analytics\"]').click()");
+  await check("[...document.querySelector('#currentSnapshotSelect').options].filter(option=>option.value).length===5", "Only current period is visible");
+  await attachArchiveFiles();
+  await check("document.querySelector('#archiveAnalyticsStatus').textContent.includes('Доступно снимков · 7') && !document.querySelector('#analyticsArchiveFiles').disabled", "Current period plus selected archives");
+  await evaluate("document.querySelector('#openMainAbsenceButton').click()");
+  await check("document.querySelector('[data-main-absence-total]')?.textContent.includes(' · 104')", "Report lists absent Main devices");
+  await evaluate(`(()=>{const search=document.querySelector('[data-main-absence-search]');search.value=${JSON.stringify(macAt(2))};search.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-main-absence-detail]').click()})()`);
+  await check(`document.querySelector('#detailsDialog').textContent.includes(${JSON.stringify(address)}) && document.querySelector('#detailsDialog [data-open-mac-dialog]')`, "Full details for absent device");
+  await evaluate("document.querySelector('#detailsDialog').close();document.querySelector('#clearAnalyticsArchiveFiles').click()");
+  await check("document.querySelector('#clearAnalyticsArchiveFiles').hidden && [...document.querySelector('#currentSnapshotSelect').options].filter(option=>option.value).length===5", "Disconnecting archives restores current period");
+  console.log("browser smoke: five new Main snapshots retain current data; selected file archives supply all 104 missing MACs and full historical addresses");
   console.log(JSON.stringify({addressRosterRegression:true,mainCount:104,pageTwo,missing,ambiguous,archived,reloaded,ok:true}));
   await command("Browser.close");
   socket.close();

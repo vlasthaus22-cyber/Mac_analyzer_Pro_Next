@@ -13,3 +13,15 @@ export const PORTABLE_ARCHIVE_RECORD_COLLECTIONS = Object.freeze([
   "dataQualityReports",
   "legacySmartroomRoomMappings",
 ]);
+
+export function selectArchiveSnapshotIds(snapshots, archivedIds, { from = "", to = "" } = {}) {
+  if (from && to && from > to) throw new Error("Начальная дата позже конечной");
+  const start = from ? Date.parse(`${from}T00:00:00`) : -Infinity;
+  const end = to ? Date.parse(`${to}T23:59:59.999`) : Infinity;
+  return snapshots.filter((snapshot) => {
+    if (archivedIds.has(snapshot.id)) return false;
+    if (!from && !to) return true;
+    const date = Date.parse(snapshot.createdAt);
+    return date >= start && date <= end;
+  }).map(({ id }) => id);
+}

@@ -1,5 +1,7 @@
 import { tsvQuote } from "./core/csv-cell.js";
 import { aggregateSnapshotHistory, buildAnalyticsPairFromChunks, buildSnapshotTotalSeries, collectPresenceTransitions, createUniqueAnalyticsDeviceFilter, defaultSnapshotSelection, releaseDashboardCurrentDevices, snapshotHistorySignature } from "./core/analytics.js";
+import { MAIN_MAC_ABSENCE_WINDOW, mainMacAbsenceReport } from "./core/main-mac-absence.js";
+import { selectArchiveSnapshotIds } from "./core/portable-archive.js";
 import { createDashboardDeviceMatcher, dashboardFilterOptions, dashboardStatusForKpi } from "./core/dashboard-filter.js";
 import { buildDashboardFleetSeries } from "./core/dashboard-fleet.js";
 import { createSnapshotTimeCache } from "./core/snapshot-time-cache.js";
@@ -103,7 +105,7 @@ import { installTableSorter } from "./ui/table-sorter.js";
 import { selectContextTableRow } from "./ui/table-context-selection.js";
 import { Database, database } from "./data/database.js";
 import { getDirectoryArchiveFile, MAX_PORTABLE_ARCHIVE_BYTES, pickDataDirectory, queryDirectoryPermission, reauthorizeDirectoryHandle, requestDirectoryPermission, writeDirectoryArchive, writeDirectoryFile } from "./data/data-directory.js";
-import { consumeStoredTableRows, assignSourceMapping, effectiveMergeMapping, detectMappingReport, FIELD_LABELS, SMARTROOM_DEFAULT_FIELDS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches, setFileObservationDateOverride, supportsBoundedTableRows } from "./data/importer.js";
+import { consumeStoredTableRows, assignSourceMapping, effectiveMergeMapping, detectMappingReport, FIELD_LABELS, SMARTROOM_DEFAULT_FIELDS, fileObservationDate, inspectPortableArchiveHeader, listXlsxSheets, mappingRecommendationsWithoutReservedColumns, readPortableArchiveEvents, readTable, readTablePreview, readTableRowBatches, setFileObservationDateOverride, smartroomLocationIdColumn, supportsBoundedTableRows } from "./data/importer.js";
 import {
   comparisonContent,
   comparisonDiagnosticsPageContent,
@@ -250,7 +252,8 @@ const state = {
   activeSnapshot: null,
   snapshotMetadata: [],
   snapshotMetadataCanonical: false,
-  analyticsSnapshotScope: { snapshots: [], sources: new Map(), hidden: new Set() },
+  analyticsSnapshotScope: { snapshots: [], sources: new Map(), hidden: new Set(), archivedIds: new Set() },
+  analyticsArchiveFileIds: [],
   showArchivedSnapshots: false,
   analyticsScopeRequest: 0,
   localArchivePage: { after: null, previous: [], result: null, request: 0 },
@@ -1354,6 +1357,7 @@ function handleAppPageHide(event) {
     ],
   });
   if (!cleaned) return;
+  for (const id of state.analyticsArchiveFileIds) database.deleteLocalArchive(id).catch(() => {});
   state.autoSaveTimer = 0;
   state.analyticsAutoRefreshTimer = 0;
   state.engineeringSessionTimer = 0;
@@ -1754,10 +1758,12 @@ function handleGlobalShortcut(event) {
 
 async function refreshAnalyticsSnapshotScope(includeArchives = state.showArchivedSnapshots, onProgress) {
   const request = ++state.analyticsScopeRequest;
-  const catalog = await database.analyticsSnapshotCatalog(state.snapshotMetadata, { includeArchives, onProgress });
+  const catalog = await database.analyticsSnapshotCatalog(state.snapshotMetadata, {
+    includeArchives, selectedArchiveIds: state.analyticsArchiveFileIds, onProgress,
+  });
   if (request !== state.analyticsScopeRequest) return false;
   const previousScope = state.analyticsSnapshotScope;
-  const hidden = includeArchives ? new Set() : catalog.hidden;
+  const hidden = catalog.hidden;
   const changed = includeArchives !== state.showArchivedSnapshots
     || hidden.size !== previousScope.hidden.size
     || [...hidden].some((id) => !previousScope.hidden.has(id))
@@ -1770,8 +1776,9 @@ async function refreshAnalyticsSnapshotScope(includeArchives = state.showArchive
   database.setAnalyticsArchiveSources(catalog.sources);
   const button = $("#includeArchivedSnapshotsButton");
   button.setAttribute("aria-pressed", String(includeArchives));
-  button.textContent = includeArchives ? "Скрыть архивные снимки" : "Показать все локальные архивы";
-  $("#archiveAnalyticsStatus").textContent = includeArchives
+  button.textContent = includeArchives ? "Скрыть локальные архивы" : "Показать локальные архивы";
+  $("#clearAnalyticsArchiveFiles").hidden = !state.analyticsArchiveFileIds.length;
+  $("#archiveAnalyticsStatus").textContent = includeArchives || state.analyticsArchiveFileIds.length
     ? `Подключено архивов · ${catalog.archiveCount}. Доступно снимков · ${catalog.snapshots.length}.`
     : hidden.size ? `Скрыто архивных снимков · ${hidden.size}.` : "";
   if (changed) {
@@ -1878,7 +1885,13 @@ async function renderLocalArchiveList(reset = false) {
   catalog.result = page;
   const archives = page.rows;
   host.innerHTML = archives.length
-    ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Архив</th><th>Создан</th><th>снимок объединения</th><th>Записей</th><th>Действия</th></tr></thead><tbody>${archives.map((archive) => `<tr><td>${escapeHtml(archive.name)}</td><td>${escapeHtml(new Date(archive.createdAt).toLocaleString("ru-RU"))}</td><td>${Number(archive.snapshotCount || 0).toLocaleString("ru-RU")}</td><td>${Number(archive.recordCount || 0).toLocaleString("ru-RU")}</td><td><button type="button" class="button secondary" data-restore-local-archive="${escapeHtml(archive.id)}">Восстановить</button> <button type="button" class="button secondary" data-export-local-archive="${escapeHtml(archive.id)}">Выгрузить</button> <button type="button" class="button secondary" data-delete-local-archive="${escapeHtml(archive.id)}">Удалить</button></td></tr>`).join("")}</tbody></table></div>`
+    ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>Архив</th><th>Создан</th><th>Снимков</th><th>Записей</th><th>Действия</th></tr></thead><tbody>${archives.map((archive) => {
+      const id = escapeHtml(archive.id);
+      const actions = archive.externalFile
+        ? `<button type="button" class="button secondary" data-delete-local-archive="${id}">Вернуть снимки в аналитику</button>`
+        : `<button type="button" class="button secondary" data-restore-local-archive="${id}">Восстановить</button> <button type="button" class="button secondary" data-export-local-archive="${id}">Выгрузить</button> <button type="button" class="button secondary" data-delete-local-archive="${id}">Удалить</button>`;
+      return `<tr><td>${escapeHtml(archive.name)}</td><td>${escapeHtml(new Date(archive.createdAt).toLocaleString("ru-RU"))}</td><td>${Number(archive.snapshotCount || 0).toLocaleString("ru-RU")}</td><td>${archive.externalFile ? "На диске" : Number(archive.recordCount || 0).toLocaleString("ru-RU")}</td><td>${actions}</td></tr>`;
+    }).join("")}</tbody></table></div>`
     : '<p class="empty">Локальные архивы ещё не сохранены.</p>';
   host.insertAdjacentHTML("beforeend", `<div class="action-row"><button type="button" class="button secondary" data-local-archive-previous${catalog.previous.length ? "" : " disabled"}>Назад</button><span class="muted">Страница ${catalog.previous.length + 1}</span><button type="button" class="button secondary" data-local-archive-next${page.hasMore ? "" : " disabled"}>Дальше</button></div>`);
   host.querySelector("[data-local-archive-previous]")?.addEventListener("click", () => {
@@ -1925,10 +1938,12 @@ async function renderLocalArchiveList(reset = false) {
   })().catch(showError)));
   host.querySelectorAll("[data-delete-local-archive]").forEach((button) => button.addEventListener("click", () => (async () => {
     const archive = archives.find((item) => item.id === button.dataset.deleteLocalArchive);
-    if (!globalThis.confirm(`Удалить локальный архив «${archive?.name || ""}»?`)) return;
+    const question = archive?.externalFile ? `Вернуть в аналитику снимки архива «${archive.name}»?`
+      : `Удалить локальный архив «${archive?.name || ""}»?`;
+    if (!globalThis.confirm(question)) return;
     await database.deleteLocalArchive(button.dataset.deleteLocalArchive);
     await refreshAnalyticsSnapshotScope();
-    $("#localArchiveStatus").textContent = "Локальный архив удалён.";
+    $("#localArchiveStatus").textContent = archive?.externalFile ? "Метка архивирования снята." : "Локальный архив удалён.";
     await renderLocalArchiveList();
   })().catch(showError)));
 }
@@ -4374,7 +4389,11 @@ function setSourceTable(role, file, table, { restored = false, restoredFrom = "�
   state.sourceTables[role] = table;
   const detected = detectMappingReport(table.headers, table.rows, role).mapping;
   sourceExtraFields.delete(role);
-  state.mappings[role] = allowedSourceMapping(role, restoreSourceMapping(table.headers, state.sourceMappingPreferences[role], detected));
+  const restoredMapping = restoreSourceMapping(table.headers, state.sourceMappingPreferences[role], detected);
+  const locationColumn = role === "smartroom" ? smartroomLocationIdColumn(table.headers) : -1;
+  state.mappings[role] = allowedSourceMapping(role, locationColumn >= 0
+    ? assignSourceMapping(restoredMapping, "smartroomId", locationColumn).mapping
+    : restoredMapping);
   const rowSummary = table.preview
     ? `предпросмотр ${table.rows.length.toLocaleString("ru-RU")} строк; полный файл обработается потоком`
     : `${table.rowCount.toLocaleString("ru-RU")} строк`;
@@ -5421,7 +5440,8 @@ async function ensureDashboardComparisonIndex(metadata, baselineMetadata, isCurr
     baselineSignature,
     historyMetadata.map((snapshot) => finalAnalyticsIndexSignature(snapshot)),
   ]);
-  for (let historyIndex = 0; historyIndex < historyMetadata.length; historyIndex += 1) {
+  let indexMetadata = await database.finalAnalyticsIndexMetadata(indexedSnapshotId, indexedSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
+  for (let historyIndex = 0; !indexMetadata && historyIndex < historyMetadata.length; historyIndex += 1) {
     const snapshot = historyMetadata[historyIndex];
     const historySignature = finalAnalyticsIndexSignature(snapshot);
     onProgress({ stage: "history-index", processed: historyIndex, total: historyMetadata.length, snapshot });
@@ -5438,7 +5458,6 @@ async function ensureDashboardComparisonIndex(metadata, baselineMetadata, isCurr
     onProgress({ stage: "history-index", processed: historyIndex + 1, total: historyMetadata.length, snapshot });
   }
 
-  let indexMetadata = await database.finalAnalyticsIndexMetadata(indexedSnapshotId, indexedSignature, FINAL_ANALYTICS_INDEX_SCHEMA_VERSION);
   if (!indexMetadata) {
     const backfillStats = { restoredFieldCount: 0, ambiguousMatchCount: 0 };
     let backfillChunks = 0;
@@ -5580,7 +5599,7 @@ async function renderAnalytics(force = false) {
     clearDashboardRoomChangeIndex(previousRoomChangeIndex);
     displayedDashboard = null;
     $("#analyticsKpis").textContent = state.analyticsSnapshotScope.hidden.size
-      ? "Нет текущих снимков для аналитики. Можно открыть локальные архивы."
+      ? "Нет текущих снимков для аналитики. Подтяните архивы или выполните новое объединение."
       : "Сначала выполните обогащение.";
     $("#analyticsHistoryKpis").innerHTML = "";
     $("#datasetOverview").innerHTML = "";
@@ -9567,6 +9586,144 @@ async function importPortableArchiveFile(file, { targetDatabase = database, head
   if (ipSettings) applyIpEnrichmentSettings(ipSettings);
 }
 
+async function setAnalyticsArchiveFiles(files) {
+  const input = $("#analyticsArchiveFiles");
+  const clear = $("#clearAnalyticsArchiveFiles");
+  const local = $("#includeArchivedSnapshotsButton");
+  const status = $("#archiveAnalyticsStatus");
+  const previous = state.analyticsArchiveFileIds;
+  const selected = [];
+  input.disabled = clear.disabled = local.disabled = true;
+  let applied = false;
+  try {
+    for (const [index, file] of files.entries()) {
+      if (file.size > MAX_PORTABLE_ARCHIVE_BYTES) throw new Error(`Архив «${file.name}» больше 4 ГиБ`);
+      status.textContent = `Чтение ${index + 1} из ${files.length} · ${file.name}`;
+      const header = await inspectPortableArchiveHeader(file);
+      const archive = await database.importArchiveEvents(header, readPortableArchiveEvents(file, {
+        sourceFormat: header.sourceFormat || "",
+      }), { analyticsPreviewName: file.name });
+      selected.push(archive.id);
+    }
+    state.analyticsArchiveFileIds = selected;
+    await refreshAnalyticsSnapshotScope(false);
+    applied = true;
+    if ($(".nav-button.active")?.dataset.view === "analytics") await renderAnalytics(false);
+  } catch (error) {
+    if (!applied) state.analyticsArchiveFileIds = previous;
+    status.textContent = error?.message || "Не удалось подключить файлы архивов.";
+    throw error;
+  } finally {
+    const disconnected = applied ? previous : selected;
+    await Promise.allSettled(disconnected.map((id) => database.deleteLocalArchive(id)));
+    input.value = "";
+    input.disabled = clear.disabled = local.disabled = false;
+  }
+}
+
+async function saveSelectedArchiveFile() {
+  const dates = { from: $("#archiveSnapshotFrom").value, to: $("#archiveSnapshotTo").value };
+  const ids = selectArchiveSnapshotIds(state.snapshotMetadata, state.analyticsSnapshotScope.archivedIds, dates);
+  if (!ids.length) throw new Error("В выбранном периоде нет новых снимков для архивирования");
+  const name = $("#localArchiveName").value.trim() || `Final-${dates.from || dates.to || new Date().toISOString().slice(0, 10)}`;
+  const filename = `${name.replace(/[^\p{L}\p{N}._-]+/gu, "-").slice(0, 100)}.madb.json`;
+  const { fileHandle, cancelled } = await resolveSaveHandle(requestReadableStreamFileHandle({
+    suggestedName: filename, description: "Архив снимков MAC Analyzer Next", extension: ".madb.json",
+  }));
+  if (cancelled) {
+    $("#localArchiveStatus").textContent = "Сохранение отменено.";
+    return;
+  }
+  if (!fileHandle) throw new Error("Для записи архива на диск откройте программу в Chrome или Edge");
+  const stream = database.exportSnapshotArchiveStream(ids);
+  await saveReadableStreamToFile(stream, { fileHandle });
+  const savedName = fileHandle.name || filename;
+  await database.markExternalSnapshotArchive(savedName, ids);
+  await refreshAnalyticsSnapshotScope(false);
+  recordArchiveReceipt(`Архив «${savedName}» записан на диск`);
+  $("#localArchiveStatus").textContent = `Сохранён архив «${savedName}» · снимков ${ids.length.toLocaleString("ru-RU")}.`;
+  $("#localArchiveName").value = "";
+}
+
+let mainAbsenceCache = null;
+
+async function openMainAbsenceDialog() {
+  const scope = state.analyticsSnapshotScope;
+  const dialog = $("#detailsDialog");
+  const title = `MAC, отсутствующие в последних ${MAIN_MAC_ABSENCE_WINDOW} Main`;
+  showDialog(dialog, title, '<p data-main-absence-progress role="status">Проверяю сохранённые Main…</p>');
+  const progressElement = dialog.querySelector("[data-main-absence-progress]");
+  const current = () => dialog.open && state.analyticsSnapshotScope === scope && progressElement.isConnected;
+  let report = mainAbsenceCache?.scope === scope ? mainAbsenceCache.report : null;
+  if (!report) {
+    report = await mainMacAbsenceReport(scope.snapshots, (id, visit) => database.forEachSnapshotChunk(id, visit), {
+      isCurrent: current,
+      onProgress: (processed, total) => { progressElement.textContent = `Проверено снимков · ${processed} из ${total}`; },
+    });
+    if (!report || !current()) return;
+    mainAbsenceCache = { scope, report };
+  }
+  if (!current()) return;
+  const incompleteRecent = report.unknown.filter(({ recent }) => recent);
+  const target = dialog.querySelector("[data-dialog-content]");
+  if (report.available <= MAIN_MAC_ABSENCE_WINDOW || incompleteRecent.length) {
+    target.textContent = incompleteRecent.length
+      ? `В ${incompleteRecent.length} из последних пяти снимков нельзя подтвердить состав Main. Подтяните архивы с сохранёнными данными Main.`
+      : `Доступно снимков · ${report.available}. Для отчёта нужны пять последних снимков и хотя бы один более ранний. Можно подтянуть архивы.`;
+    return;
+  }
+  target.innerHTML = `<p data-main-absence-total></p>${report.unknown.length ? '<p class="notice">Часть более ранних снимков без подтверждённого состава Main. Даты последних появлений указаны по подтверждённым данным.</p>' : ""}<label>Поиск<input type="search" data-main-absence-search placeholder="MAC, модель, IP, адрес, помещение"></label><div class="table-scroll"><table class="data-table"><thead><tr><th>MAC</th><th>Устройство</th><th>IP устройства</th><th>Адрес</th><th>Помещение</th><th>Последний Main</th><th>${report.unknown.length ? "Нет в последних пяти" : "Нет подряд"}</th><th>Наблюдений в Main</th></tr></thead><tbody data-main-absence-rows></tbody></table></div><div class="action-row"><button type="button" class="button secondary" data-main-absence-prev>Назад</button><button type="button" class="button secondary" data-main-absence-next>Дальше</button></div>`;
+  const search = target.querySelector("[data-main-absence-search]");
+  const rows = target.querySelector("[data-main-absence-rows]");
+  const previous = target.querySelector("[data-main-absence-prev]");
+  const next = target.querySelector("[data-main-absence-next]");
+  const pageSize = 100;
+  let offset = 0;
+  let matches = report.rows;
+  const paint = () => {
+    const selected = matches.slice(offset, offset + pageSize);
+    target.querySelector("[data-main-absence-total]").textContent = `Отсутствуют в последних пяти Main · ${report.rows.length.toLocaleString("ru-RU")}. ${selected.length ? `Показано ${offset + 1}–${offset + selected.length} из ${matches.length.toLocaleString("ru-RU")}.` : "Устройств нет."}`;
+    rows.innerHTML = selected.map((device, position) => {
+      const description = [device.manufacturer || device.vendor, device.model, device.deviceType].filter(Boolean).join(" · ");
+      const seenAt = device.lastSeen ? new Date(device.lastSeen).toLocaleString("ru-RU") : "—";
+      return `<tr><td><button class="link-button" type="button" data-main-absence-detail="${offset + position}" aria-expanded="false">${escapeHtml(device.mac)}</button></td><td>${escapeHtml(description || "—")}</td><td>${escapeHtml(device.ip || "—")}</td><td class="churn-location">${escapeHtml(device.address || device.physicalAddress || "—")}</td><td>${escapeHtml(device.room || "—")}</td><td>${escapeHtml(seenAt)}<br>${escapeHtml(device.snapshotName || "")}</td><td>${report.unknown.length ? MAIN_MAC_ABSENCE_WINDOW : device.missingSnapshots}</td><td>${device.appearances}</td></tr><tr hidden><td colspan="8"></td></tr>`;
+    }).join("");
+    previous.disabled = offset === 0;
+    next.disabled = offset + pageSize >= matches.length;
+  };
+  search.addEventListener("input", () => {
+    offset = 0;
+    const query = search.value.trim();
+    matches = query ? report.rows.filter((device) => matchesDeviceSearch(device, query)) : report.rows;
+    paint();
+  });
+  previous.addEventListener("click", () => { offset -= pageSize; paint(); });
+  next.addEventListener("click", () => { offset += pageSize; paint(); });
+  rows.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-main-absence-detail]");
+    if (!button) return;
+    const detail = button.closest("tr").nextElementSibling;
+    const device = matches[Number(button.dataset.mainAbsenceDetail)];
+    detail.hidden = !detail.hidden;
+    button.setAttribute("aria-expanded", String(!detail.hidden));
+    if (detail.hidden || detail.dataset.loaded) return;
+    const cell = detail.firstElementChild;
+    cell.textContent = "Чтение последней записи из Main…";
+    database.forEachSnapshotChunk(device.snapshotId, (chunk) => {
+      if (!detail.isConnected || scope !== state.analyticsSnapshotScope) return false;
+      const original = chunk.find((row) => (row.mainMacs || [row.mac]).some((mac) => normalizeMac(mac) === device.mac)
+        && (row.source === "Main" || row.sources?.includes("Main") || row.mainMacs?.length));
+      if (!original) return;
+      cell.innerHTML = `<button type="button" class="button secondary" data-open-mac-dialog="${escapeHtml(device.mac)}">Хронология MAC</button>${deviceTable([{ ...original, mac: device.mac }], { columnConfig: state.inventoryColumnConfig, wrapAddresses: true })}`;
+      detail.dataset.loaded = "true";
+      return false;
+    }).then(() => {
+      if (!detail.dataset.loaded) cell.textContent = "Последняя запись устройства недоступна.";
+    }).catch(showError);
+  });
+  paint();
+}
+
 function deleteIndexedDatabase(name) {
   return new Promise((resolve, reject) => {
     const request = globalThis.indexedDB.deleteDatabase(name);
@@ -10494,6 +10651,12 @@ function bindEvents() {
   // Keep error recovery available even if a later UI binding fails during bootstrap.
   bindErrorBannerDismiss($("#errorBanner"));
   $("#openFleetHistoryButton").addEventListener("click", () => showDashboardFleetDialog(state.analytics).catch(showError));
+  $("#openMainAbsenceButton").addEventListener("click", () => openMainAbsenceDialog().catch(showError));
+  $("#analyticsArchiveFiles").addEventListener("change", (event) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length) setAnalyticsArchiveFiles(files).catch(showError);
+  });
+  $("#clearAnalyticsArchiveFiles").addEventListener("click", () => setAnalyticsArchiveFiles([]).catch(showError));
   $("#includeArchivedSnapshotsButton").addEventListener("click", () => (async () => {
     const button = $("#includeArchivedSnapshotsButton");
     const status = $("#archiveAnalyticsStatus");
@@ -11663,23 +11826,26 @@ $("#dashboardComparisonMode").addEventListener("change", syncDashboardComparison
     buttons.forEach((button) => { button.disabled = true; });
     $("#localArchiveStatus").textContent = "Проверка и сохранение базы порциями…";
     try {
+      if (hideFromAnalytics) {
+        await saveSelectedArchiveFile();
+        await renderLocalArchiveList();
+        return;
+      }
       await bundledOuiInitialization;
       await saveWorkspaceStateNow();
       const archive = await database.createLocalArchive($("#localArchiveName").value, {
-        ...portableDatabaseArchiveOptions(), hideFromAnalytics,
+        ...portableDatabaseArchiveOptions(),
         onProgress: ({ stage, recordCount }) => {
           const label = stage === "verify" ? "Проверка целостности архива" : "Сохранение архива";
           $("#localArchiveStatus").textContent = `${label} · ${recordCount.toLocaleString("ru-RU")} записей…`;
         },
       });
-      await refreshAnalyticsSnapshotScope(hideFromAnalytics ? false : state.showArchivedSnapshots);
+      await refreshAnalyticsSnapshotScope();
       recordArchiveReceipt(`Локальный архив «${archive.name}» создан в браузере`);
       $("#localArchiveName").value = "";
-      const archived = hideFromAnalytics && archive.hiddenSnapshotIds.length
-        ? ` Скрыто в аналитике · ${archive.hiddenSnapshotIds.length}.` : "";
-      $("#localArchiveStatus").textContent = `Сохранён архив «${archive.name}» · снимков ${archive.snapshotCount}, записей ${archive.recordCount.toLocaleString("ru-RU")}.${archived}`;
+      $("#localArchiveStatus").textContent = `Сохранён архив «${archive.name}» · снимков ${archive.snapshotCount}, записей ${archive.recordCount.toLocaleString("ru-RU")}.`;
     } catch (error) {
-      $("#localArchiveStatus").textContent = "Не удалось завершить сохранение локального архива.";
+      $("#localArchiveStatus").textContent = "Не удалось завершить сохранение архива.";
       throw error;
     } finally { buttons.forEach((button) => { button.disabled = false; }); }
     await renderLocalArchiveList();

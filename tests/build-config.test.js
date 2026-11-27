@@ -816,7 +816,7 @@ test("directory archive sync serializes writes and retries when IndexedDB change
   assert.match(app, /runCoalescedTask\(state, synchronizeDataDirectoryArchiveOnce,\s*\{\s*runningKey: "dataDirectorySyncing",\s*pendingKey: "dataDirectorySyncRequested"/);
   assert.match(once, /await writeDirectoryArchive\(handle, portableDatabaseArchiveStream\(\)\)/);
   assert.match(app, /function portableDatabaseArchiveOptions\(\)\s*\{\s*return\s*\{\s*readLegacyTaskQueueFile:\s*\(source, observation\) => readLegacyTaskQueueFileFromSQLite\(source, observation\)/);
-  assert.match(app, /database\.createLocalArchive\(\$\("#localArchiveName"\)\.value, \{\s*\.\.\.portableDatabaseArchiveOptions\(\), hideFromAnalytics,/);
+  assert.match(app, /database\.createLocalArchive\(\$\("#localArchiveName"\)\.value, \{\s*\.\.\.portableDatabaseArchiveOptions\(\),/);
   assert.match(once, /if \(handle !== state\.dataDirectoryHandle\)\s*\{\s*state\.dataDirectorySyncRequested = true;/);
   assert.match(once, /state\.dataDirectoryWriteFailed = true/);
   assert.match(once, /снимок объединения сохранён в IndexedDB/);
@@ -3403,7 +3403,7 @@ test("portable archive import validates its header and streams events into remov
   assert.match(database, /async importArchiveEvents\(header, events, \{[\s\S]*?maxRecordsPerBatch = ARCHIVE_RECORD_STAGE_BATCH_SIZE,[\s\S]*?\} = \{\}\) \{\s*const recordBatchSize = boundedArchiveBatchSize\(maxRecordsPerBatch, ARCHIVE_RECORD_STAGE_MAX_BATCH_SIZE\)/);
   assert.match(sqliteImporter, /const SQLITE_ARCHIVE_STAGE_BATCH_SIZE = 10_000;/);
   assert.match(sqliteImporter, /database\.importArchiveEvents\([\s\S]*?maxRecordsPerBatch: SQLITE_ARCHIVE_STAGE_BATCH_SIZE/);
-  assert.match(database, /finally \{\s*await this\.deleteLocalArchive\(archiveId\)/);
+  assert.match(database, /finally \{\s*if \(!retainedForAnalytics\) await this\.deleteLocalArchive\(archiveId\)/);
 });
 
 test("SQLite import status shows why tables or views were skipped", () => {
